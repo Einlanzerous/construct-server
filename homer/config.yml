@@ -1,0 +1,63 @@
+---
+# Homepage configuration
+# See https://github.com/bastienwirtz/homer/blob/main/docs/configuration.md
+
+title: "Imperial Construct"
+subtitle: "Construct @ Dodson Home"
+# icon: "fas fa-server" # FontAwesome icon
+header: true
+footer: false
+
+# Setup the theme (Dark mode is best mode)
+theme: default
+colors:
+  dark:
+    highlight-primary: "#3367d6"
+    highlight-secondary: "#4285f4"
+    highlight-hover: "#5a95f5"
+    background: "#131313"
+    card-background: "#2b2b2b"
+    text: "#eaeaea"
+
+# The Services Links
+services:
+  - name: "Artificial Intelligence"
+    icon: "fas fa-brain"
+    items:
+      - name: "Open WebUI"
+        logo: "assets/tools/ollama.png"
+        icon: "fas fa-comments"
+        subtitle: "Gemma & Llama"
+        tag: "Local"
+        url: "http://localhost:3000"
+        target: "_blank" 
+
+  - name: "Observability"
+    icon: "fas fa-eye"
+    items:
+      - name: "Dozzle"
+        icon: "fas fa-bug"
+        subtitle: "Live Container Logs"
+        url: "http://localhost:8080"
+        target: "_blank"
+      - name: "Datadog"
+        icon: "fas fa-dog"
+        subtitle: "Cloud Metrics"
+        url: "https://us5.datadoghq.com/dashboard/lists"
+        target: "_blank"
+
+  - name: "Storage"
+    icon: "fas fa-hdd"
+    items:
+      - name: "Copyparty"
+        icon: "fas fa-file-upload"
+        subtitle: "File Server"
+        url: "http://localhost:3923"
+        target: "_blank"
+
+# Optional: Shortcuts in the top right
+links:
+  - name: "GitHub Repo"
+    icon: "fab fa-github"
+    url: "https://github.com/Einlanzerous/construct-server"
+    target: "_blank"
