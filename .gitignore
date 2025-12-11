@@ -3,3 +3,13 @@ ollama/
 webui/
 
 copyparty/
+
+# Ansible
+*.retry
+*.log
+
+# System
+.DS_Store
+
+# Python
+__pycache__/

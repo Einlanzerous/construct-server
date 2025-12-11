@@ -1,0 +1,143 @@
+---
+- name: Initialize Imperial Construct
+  hosts: construct
+  become: true
+  vars:
+    user_name: "magos"
+    repo_url: "https://github.com/Einlanzerous/construct-server.git" 
+    zsh_plugins:
+      - docker
+      - git
+      - zsh-autosuggestions
+      - zsh-syntax-highlighting
+
+  tasks:
+    # --- 1. CORE SYSTEM & USER ---
+    - name: Update apt cache and upgrade system
+      apt:
+        update_cache: yes
+        upgrade: dist
+      register: system_update
+
+    - name: Install System Basics
+      apt:
+        name: [git, curl, zsh, htop, bat, fzf, fonts-powerline, software-properties-common, fail2ban]
+        state: present
+
+    - name: Create the Magos user
+      user:
+        name: "{{ user_name }}"
+        shell: /usr/bin/zsh
+        groups: sudo,docker
+        append: yes
+        create_home: yes
+
+    # --- 2. OH-MY-ZSH & POWERLEVEL10K ---
+    - name: Check for Oh-My-Zsh installation
+      stat:
+        path: "/home/{{ user_name }}/.oh-my-zsh"
+      register: omz_folder
+
+    - name: Install Oh-My-Zsh (Unattended)
+      become_user: "{{ user_name }}"
+      shell: sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+      when: not omz_folder.stat.exists
+
+    - name: Install Powerlevel10k Theme
+      become_user: "{{ user_name }}"
+      git:
+        repo: 'https://github.com/romkatv/powerlevel10k.git'
+        dest: "/home/{{ user_name }}/.oh-my-zsh/custom/themes/powerlevel10k"
+        depth: 1
+
+    # --- 3. ZSH PLUGINS & CONFIG ---
+    - name: Install Zsh Autosuggestions
+      become_user: "{{ user_name }}"
+      git:
+        repo: 'https://github.com/zsh-users/zsh-autosuggestions'
+        dest: "/home/{{ user_name }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+
+    - name: Install Zsh Syntax Highlighting
+      become_user: "{{ user_name }}"
+      git:
+        repo: 'https://github.com/zsh-users/zsh-syntax-highlighting.git'
+        dest: "/home/{{ user_name }}/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"
+
+    - name: Deploy .p10k.zsh (Visual Match)
+      copy:
+        src: templates/.p10k.zsh.j2
+        dest: "/home/{{ user_name }}/.p10k.zsh"
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+
+    - name: Deploy .zshrc
+      template:
+        src: templates/zshrc.j2
+        dest: "/home/{{ user_name }}/.zshrc"
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+
+    # --- 4. DOCKER SETUP ---
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        state: present
+
+    - name: Install Docker Components
+      apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+        state: present
+
+    # --- 5. NVIDIA DRIVERS (The 3080 Pass-Through) ---
+    - name: Install Nvidia Headless Server Drivers
+      apt:
+        name: nvidia-driver-535-server
+        state: present
+      register: nvidia_driver
+
+    - name: Add Nvidia GPG Key
+      get_url:
+        url: https://nvidia.github.io/libnvidia-container/gpgkey
+        dest: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        mode: '0644'
+
+    - name: Add Nvidia Toolkit Repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /"
+        state: present
+        filename: nvidia-container-toolkit
+
+    - name: Install Nvidia Container Toolkit
+      apt:
+        name: nvidia-container-toolkit
+        state: present
+
+    - name: Configure Docker to use Nvidia Runtime
+      shell: nvidia-ctk runtime configure --runtime=docker
+      notify: Restart Docker
+
+    # --- 6. DEPLOYMENT (Clone the Repo) ---
+    - name: Clone Construct Monorepo
+      become_user: "{{ user_name }}"
+      git:
+        repo: "{{ repo_url }}"
+        dest: "/home/{{ user_name }}/construct"
+        version: main
+        force: yes
+
+  handlers:
+    - name: Restart Docker
+      service:
+        name: docker
+        state: restarted
+
+    # Optional: Reboot if drivers or kernel changed
+    - name: Reboot Server
+      reboot:
+        msg: "Rebooting to load Nvidia Drivers"
+      listen: "Restart Docker"
