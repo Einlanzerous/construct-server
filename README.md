@@ -76,7 +76,7 @@ To manage **Imperial Construct** from another machine (like **Imperial Raven**):
 2.  **Setup SSH Keys (Passwordless Access):**
     Ansible works best with SSH keys. If you haven't already, copy your laptop's public key to the server:
     ```bash
-    ssh-copy-id magos@<server-ip>
+    ssh-copy-id {{ username }}@<server-ip>
     ```
 
 3.  **Run Ansible Remotely:**
