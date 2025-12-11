@@ -3,7 +3,6 @@
   hosts: construct
   become: true
   vars:
-    user_name: "magos"
     repo_url: "https://github.com/Einlanzerous/construct-server.git" 
     zsh_plugins:
       - docker
@@ -24,7 +23,7 @@
         name: [git, curl, zsh, htop, bat, fzf, fonts-powerline, software-properties-common, fail2ban]
         state: present
 
-    - name: Create the Magos user
+    - name: "Create the {{ user_name }} user"
       user:
         name: "{{ user_name }}"
         shell: /usr/bin/zsh
@@ -139,5 +138,5 @@
     # Optional: Reboot if drivers or kernel changed
     - name: Reboot Server
       reboot:
-        msg: "Rebooting to load Nvidia Drivers"
+        msg: "Rebooting {{ user_name }}'s server to load Nvidia Drivers"
       listen: "Restart Docker"

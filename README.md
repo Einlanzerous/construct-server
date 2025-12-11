@@ -83,6 +83,8 @@ To manage **Imperial Construct** from another machine (like **Imperial Raven**):
     From your laptop (assuming you have this repo cloned):
     ```bash
     # Update inventory.ini to match the server's specific IP address first!
+    # Copy the example if you haven't already
+    cp ansible/inventory.example.ini ansible/inventory.ini
     nano ansible/inventory.ini
     
     # Run the playbook

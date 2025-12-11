@@ -5,6 +5,7 @@ webui/
 copyparty/
 
 # Ansible
+ansible/inventory.ini
 *.retry
 *.log
 
