@@ -54,6 +54,15 @@ services:
         url: "http://imperial-construct:3923"
         target: "_blank"
 
+  - name: "File Sharing"
+    icon: "fas fa-hdd"
+    items:
+      - name: "Copyparty"
+        icon: "fas fa-folder-open"
+        subtitle: "File Server"
+        url: "http://imperial-construct:3923"
+        target: "_blank"
+
   - name: "Automation"
     icon: "fas fa-robot"
     items:

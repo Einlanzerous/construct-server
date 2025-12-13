@@ -17,9 +17,12 @@ The following services are currently active:
 ### 🏠 Dashboard
 -   **[Homer](https://github.com/bastienwirtz/homer)**: A static homepage to access all services from a single dashboard.
 
+### 📂 Storage & File Sharing
+-   **[Copyparty](https://github.com/9001/copyparty)**: Lightweight file server serving files from the 1TB NVMe drive (`/data`).
+
 ## 🗺️ Roadmap
 
--   [ ] **File Sharing**: Implementation of **Copyparty** for lightweight file server capabilities (drag-and-drop uploads, media streaming).
+-   [x] **[Copyparty](https://github.com/9001/copyparty)**: File server capabilities (drag-and-drop uploads, media streaming).
 -   [ ] **[Panox](https://panox.io)**: Library Management System for books/games.
 -   [ ] **[Strapi](https://strapi.io)**: Headless CMS for the urbanist blog.
 -   [ ] **[Plane](https://plane.so)**: Project management for political dashboard.

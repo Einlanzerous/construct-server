@@ -48,18 +48,18 @@ services:
     restart: unless-stopped
 
   # --- FILE SHARING ---
-  # copyparty:
-  #   image: ucartz/copyparty
-  #   container_name: copyparty
-  #   restart: unless-stopped
-  #   ports:
-  #     - "3923:3923"
-  #   volumes:
-  #     - ./copyparty:/w
-  #     # Map your massive storage drive here if you have one
-  #     # - /mnt/hdd:/w/hdd 
-  #   environment:
-  #     - E=idk  # Enable basic drag-and-drop upload
+  # --- FILE SHARING ---
+  copyparty:
+    image: ucartz/copyparty
+    container_name: copyparty
+    restart: unless-stopped
+    ports:
+      - "3923:3923"
+    volumes:
+      - ./copyparty:/w
+      - /data:/w/hdd 
+    environment:
+      - E=idk  # Enable basic drag-and-drop upload
 
   # --- OBSERVABILITY (Datadog + Dozzle) ---
   datadog:

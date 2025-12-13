@@ -110,6 +110,14 @@
     groups: docker
     append: yes
 
+- name: Ensure /data directory is owned by user (for Copyparty)
+  file:
+    path: /data
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0755'
+
 # --- 3. DEPLOYMENT (Clone the Repo) ---
 - name: Clone Construct Monorepo
   become_user: "{{ user_name }}"
