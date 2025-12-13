@@ -29,7 +29,7 @@ services:
         icon: "fas fa-comments"
         subtitle: "Gemma & Llama"
         tag: "Local"
-        url: "http://construct-server:3000"
+        url: "http://imperial-construct:3000"
         target: "_blank" 
   - name: "Observability"
     icon: "fas fa-eye"
@@ -37,7 +37,7 @@ services:
       - name: "Dozzle"
         icon: "fas fa-bug"
         subtitle: "Live Container Logs"
-        url: "http://construct-server:8080"
+        url: "http://imperial-construct:8080"
         target: "_blank"
       - name: "Datadog"
         icon: "fas fa-dog"
@@ -51,7 +51,7 @@ services:
       - name: "Copyparty"
         icon: "fas fa-file-upload"
         subtitle: "File Server"
-        url: "http://construct-server:3923"
+        url: "http://imperial-construct:3923"
         target: "_blank"
 
 # Optional: Shortcuts in the top right
