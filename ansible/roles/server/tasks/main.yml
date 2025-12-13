@@ -32,12 +32,41 @@
     name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
     state: present
 
+- name: Install Kernel Headers and DKMS (Required for Nvidia Driver)
+  apt:
+    name: [linux-headers-generic, mokutil, dkms]
+    state: present
+
+- name: Check Secure Boot State
+  command: mokutil --sb-state
+  register: secure_boot_state
+  ignore_errors: yes
+  changed_when: false
+
+- name: Fail if Secure Boot is Enabled (Blocks Nvidia Drivers)
+  fail:
+    msg: "CRITICAL: Secure Boot is ENABLED. This prevents the Nvidia driver from loading. Please reboot into your BIOS and DISABLE Secure Boot, then re-run this playbook."
+  when: "'SecureBoot enabled' in secure_boot_state.stdout"
+
 # --- 2. NVIDIA DRIVERS (The 3080 Pass-Through) ---
 - name: Install Nvidia Headless Server Drivers
   apt:
     name: nvidia-driver-535-server
     state: present
   register: nvidia_driver
+  notify: Reboot Server
+
+# Verify driver state (will fail if not loaded, prompting investigation)
+- name: Verify Nvidia Driver connection (nvidia-smi)
+  command: nvidia-smi
+  register: nvidia_smi_check
+  ignore_errors: yes
+  changed_when: false
+
+- name: Warn if Nvidia Driver is not loaded
+  debug:
+    msg: "WARNING: nvidia-smi failed. Drivers may not be loaded. Ensure Secure Boot is disabled or MOK is enrolled. You may need to run 'sudo update-initramfs -u' and reboot."
+  when: nvidia_smi_check.rc != 0
 
 - name: Download Nvidia GPG Key
   get_url:
@@ -66,6 +95,10 @@
     name: nvidia-container-toolkit
     state: present
 
+- name: Generate CDI specification (Force modern mode)
+  shell: nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+  notify: Restart Docker
+
 - name: Configure Docker to use Nvidia Runtime
   shell: nvidia-ctk runtime configure --runtime=docker
   # In a real scenario we'd use a handler, but defining it here for simplicity or ensuring it runs
@@ -82,6 +115,16 @@
   become_user: "{{ user_name }}"
   git:
     repo: "{{ repo_url | default('https://github.com/Einlanzerous/construct-server.git') }}"
-    dest: "/home/{{ user_name }}/construct"
+    dest: "/home/{{ user_name }}/construct-server"
     version: main
     force: yes
+
+- name: Copy .env file to server
+  copy:
+    src: "{{ playbook_dir }}/../.env"
+    dest: "/home/{{ user_name }}/construct-server/.env"
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0600'
+    force: yes
+  notify: Restart Docker
