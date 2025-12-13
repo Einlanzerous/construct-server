@@ -1,14 +1,31 @@
 ---
 # --- 1. DOCKER SETUP ---
-- name: Add Docker GPG key
-  apt_key:
-    url: https://download.docker.com/linux/ubuntu/gpg
+- name: Install gnupg (required for key de-armoring)
+  apt:
+    name: gnupg
     state: present
+
+- name: Download Docker GPG key
+  get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /tmp/docker.gpg
+    mode: '0644'
+    force: yes
+
+- name: Dearmor Docker GPG key
+  shell: gpg --dearmor < /tmp/docker.gpg > /usr/share/keyrings/docker-archive-keyring.gpg
+  # Removed 'creates' to force update of key if it's broken or old
+
+- name: Remove existing Docker repository file to avoid conflicts
+  file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
 
 - name: Add Docker Repository
   apt_repository:
-    repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+    repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
     state: present
+    filename: docker
 
 - name: Install Docker Components
   apt:
@@ -22,11 +39,21 @@
     state: present
   register: nvidia_driver
 
-- name: Add Nvidia GPG Key
+- name: Download Nvidia GPG Key
   get_url:
     url: https://nvidia.github.io/libnvidia-container/gpgkey
-    dest: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    dest: /tmp/nvidia.pub
     mode: '0644'
+    force: yes
+
+- name: Dearmor Nvidia GPG Key
+  shell: gpg --dearmor < /tmp/nvidia.pub > /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  # Removed 'creates' to force update of key if it's broken or old
+
+- name: Remove existing Nvidia repository file to avoid conflicts
+  file:
+    path: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    state: absent
 
 - name: Add Nvidia Toolkit Repository
   apt_repository:
@@ -43,6 +70,12 @@
   shell: nvidia-ctk runtime configure --runtime=docker
   # In a real scenario we'd use a handler, but defining it here for simplicity or ensuring it runs
   notify: Restart Docker
+
+- name: Add user to Docker group
+  user:
+    name: "{{ user_name }}"
+    groups: docker
+    append: yes
 
 # --- 3. DEPLOYMENT (Clone the Repo) ---
 - name: Clone Construct Monorepo

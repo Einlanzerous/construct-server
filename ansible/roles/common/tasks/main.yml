@@ -15,7 +15,7 @@
   user:
     name: "{{ user_name }}"
     shell: /usr/bin/zsh
-    groups: sudo,docker
+    groups: sudo
     append: yes
     create_home: yes
 

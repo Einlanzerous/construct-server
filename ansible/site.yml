@@ -2,6 +2,44 @@
 - name: Apply Common Configuration
   hosts: all
   become: true
+  pre_tasks:
+    - name: Find conflicting Docker source files
+      shell: grep -l "download.docker.com" /etc/apt/sources.list.d/*
+      register: docker_conflicts
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Delete conflicting Docker source files
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items: "{{ docker_conflicts.stdout_lines }}"
+      when: docker_conflicts.rc == 0
+
+    - name: Remove Docker from main sources.list
+      replace:
+        path: /etc/apt/sources.list
+        regexp: '^deb.*download\.docker\.com.*'
+        replace: ''
+
+    - name: Find conflicting Nvidia source files
+      shell: grep -l "nvidia" /etc/apt/sources.list.d/*
+      register: nvidia_conflicts
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Delete conflicting Nvidia source files
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items: "{{ nvidia_conflicts.stdout_lines }}"
+      when: nvidia_conflicts.rc == 0
+
+    - name: Remove Nvidia from main sources.list
+      replace:
+        path: /etc/apt/sources.list
+        regexp: '^deb.*nvidia.*'
+        replace: ''
   roles:
     - common
 

@@ -1,0 +1,11 @@
+---
+- name: Restart Docker
+  service:
+    name: docker
+    state: restarted
+
+# Optional: Reboot if drivers or kernel changed
+- name: Reboot Server
+  reboot:
+    msg: "Rebooting {{ user_name }}'s server to load Nvidia Drivers"
+  listen: "Restart Docker"

@@ -20,7 +20,10 @@ The following services are currently active:
 ## 🗺️ Roadmap
 
 -   [ ] **File Sharing**: Implementation of **Copyparty** for lightweight file server capabilities (drag-and-drop uploads, media streaming).
--   [ ] **Server Migration**: Transitioning this stack from a local workstation to a dedicated Linux server.
+-   [ ] **[Panox](https://panox.io)**: Library Management System for books/games.
+-   [ ] **[Strapi](https://strapi.io)**: Headless CMS for the urbanist blog.
+-   [ ] **[Plane](https://plane.so)**: Project management for political dashboard.
+-   [ ] **[n8n](https://n8n.io)**: Workflow automation (The AI Secretary).
 
 ## 🛠️ Setup & Installation
 
