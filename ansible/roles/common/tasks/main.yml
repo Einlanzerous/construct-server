@@ -1,0 +1,94 @@
+---
+# --- 1. CORE SYSTEM & USER ---
+- name: Update apt cache and upgrade system
+  apt:
+    update_cache: yes
+    upgrade: dist
+  register: system_update
+
+- name: Install System Basics
+  apt:
+    name: [git, curl, zsh, htop, bat, fzf, fonts-powerline, software-properties-common, fail2ban]
+    state: present
+
+- name: "Create the {{ user_name }} user"
+  user:
+    name: "{{ user_name }}"
+    shell: /usr/bin/zsh
+    groups: sudo,docker
+    append: yes
+    create_home: yes
+
+# --- 2. OH-MY-ZSH & POWERLEVEL10K ---
+- name: Check for Oh-My-Zsh installation
+  stat:
+    path: "/home/{{ user_name }}/.oh-my-zsh"
+  register: omz_folder
+
+- name: Install Oh-My-Zsh (Unattended)
+  become_user: "{{ user_name }}"
+  shell: sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+  when: not omz_folder.stat.exists
+
+- name: Install Powerlevel10k Theme
+  become_user: "{{ user_name }}"
+  git:
+    repo: 'https://github.com/romkatv/powerlevel10k.git'
+    dest: "/home/{{ user_name }}/.oh-my-zsh/custom/themes/powerlevel10k"
+    depth: 1
+
+# --- 3. ZSH PLUGINS & CONFIG ---
+- name: Install Zsh Autosuggestions
+  become_user: "{{ user_name }}"
+  git:
+    repo: 'https://github.com/zsh-users/zsh-autosuggestions'
+    dest: "/home/{{ user_name }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+
+- name: Install Zsh Syntax Highlighting
+  become_user: "{{ user_name }}"
+  git:
+    repo: 'https://github.com/zsh-users/zsh-syntax-highlighting.git'
+    dest: "/home/{{ user_name }}/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"
+
+- name: Deploy .p10k.zsh (Visual Match)
+  copy:
+    src: ../templates/.p10k.zsh.j2
+    dest: "/home/{{ user_name }}/.p10k.zsh"
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+
+- name: Deploy .zshrc
+  template:
+    src: ../templates/zshrc.j2
+    dest: "/home/{{ user_name }}/.zshrc"
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+
+# --- 4. SSH KEYS ---
+- name: Ensure .ssh directory exists
+  file:
+    path: "/home/{{ user_name }}/.ssh"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0700'
+
+- name: Generate SSH key if not present
+  become_user: "{{ user_name }}"
+  openssh_keypair:
+    path: "/home/{{ user_name }}/.ssh/id_ed25519"
+    type: ed25519
+    state: present
+    force: no
+
+# --- 5. GEMINI CLI ---
+- name: Install Node.js and npm (Required for Gemini CLI)
+  apt:
+    name: [nodejs, npm]
+    state: present
+
+- name: Install Google Gemini CLI
+  npm:
+    name: "@google/gemini-cli"
+    global: yes
+    state: present

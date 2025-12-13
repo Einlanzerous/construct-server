@@ -1,0 +1,31 @@
+---
+# --- 1. LANGUAGES ---
+- name: Install Golang
+  apt:
+    name: golang-go
+    state: present
+
+- name: Install TypeScript globally
+  npm:
+    name: typescript
+    global: yes
+    state: present
+
+# --- 2. DESKTOP APPS ---
+- name: Install Snapd
+  apt:
+    name: snapd
+    state: present
+
+- name: Install VS Code
+  snap:
+    name: code
+    classic: yes
+    state: present
+
+# --- 3. VS CODE EXTENSIONS ---
+- name: Install Google Gemini Code Assist Extension
+  become_user: "{{ user_name }}"
+  shell: code --install-extension google.geminicodeassist
+  register: gemini_install
+  changed_when: "'already installed' not in gemini_install.stdout"

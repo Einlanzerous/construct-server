@@ -1,0 +1,54 @@
+---
+# --- 1. DOCKER SETUP ---
+- name: Add Docker GPG key
+  apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    state: present
+
+- name: Add Docker Repository
+  apt_repository:
+    repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+    state: present
+
+- name: Install Docker Components
+  apt:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+    state: present
+
+# --- 2. NVIDIA DRIVERS (The 3080 Pass-Through) ---
+- name: Install Nvidia Headless Server Drivers
+  apt:
+    name: nvidia-driver-535-server
+    state: present
+  register: nvidia_driver
+
+- name: Add Nvidia GPG Key
+  get_url:
+    url: https://nvidia.github.io/libnvidia-container/gpgkey
+    dest: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    mode: '0644'
+
+- name: Add Nvidia Toolkit Repository
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /"
+    state: present
+    filename: nvidia-container-toolkit
+
+- name: Install Nvidia Container Toolkit
+  apt:
+    name: nvidia-container-toolkit
+    state: present
+
+- name: Configure Docker to use Nvidia Runtime
+  shell: nvidia-ctk runtime configure --runtime=docker
+  # In a real scenario we'd use a handler, but defining it here for simplicity or ensuring it runs
+  notify: Restart Docker
+
+# --- 3. DEPLOYMENT (Clone the Repo) ---
+- name: Clone Construct Monorepo
+  become_user: "{{ user_name }}"
+  git:
+    repo: "{{ repo_url | default('https://github.com/Einlanzerous/construct-server.git') }}"
+    dest: "/home/{{ user_name }}/construct"
+    version: main
+    force: yes

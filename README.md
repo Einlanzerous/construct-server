@@ -46,9 +46,9 @@ The following services are currently active:
 4.  **Access the Dashboard:**
     Navigate to `http://localhost` in your browser.
 
-## 🖥️ Server Provisioning (Ansible)
+## 🖥️ System Provisioning (Ansible)
 
-To configure a fresh Ubuntu server with all necessary dependencies (Docker, Nvidia Drivers, Zsh upgrades):
+To configure a machine, whether it be a fresh Server or a new Desktop/Laptop:
 
 1.  **Install Ansible:**
     ```bash
@@ -56,40 +56,50 @@ To configure a fresh Ubuntu server with all necessary dependencies (Docker, Nvid
     sudo apt install ansible -y
     ```
 
-2.  **Run the Playbook:**
+2.  **Setup Inventory:**
+    Copy the example inventory and edit it.
+    ```bash
+    cp ansible/inventory.example.ini ansible/inventory.ini
+    nano ansible/inventory.ini
+    ```
+    *   For **Server**: Fill in the `[server]` group with IP and User.
+    *   For **Desktop**: Enable the `[desktop]` group (usually localhost).
+
+3.  **Run the Playbook:**
     ```bash
     # Run from the project root
-    ansible-playbook -i ansible/inventory.ini ansible/setup.yml --ask-become-pass
+    ansible-playbook -i ansible/inventory.ini ansible/site.yml --ask-become-pass
     ```
-    *Note: Ensure your `ansible/inventory.ini` points to the correct target IP and user.*
 
-### 📡 Remote Management (e.g., from Laptop)
+### 📡 Server Specifics
+The `[server]` role handles:
+-   **Docker & Nvidia Drivers**: For running local LLMs and containers.
+-   **Construct Repo**: Clones the main repo for the stack.
 
-To manage **Imperial Construct** from another machine (like **Imperial Raven**):
+### 💻 Desktop Specifics
+The `[desktop]` role handles:
+-   **Development Tools**: Golang, Node.js, TypeScript.
+-   **IDE**: Visual Studio Code with **Gemini Code Assist** extension.
+
+### 🔄 Shared Configuration
+Both roles receive:
+-   **Shell**: Zsh with Oh-My-Zsh, Powerlevel10k, and Plugins.
+-   **Dotfiles**: Deploys a standardized `.zshrc` and `.p10k.zsh` matching the primary layout.
+-   **SSH Keys**: Generates an Ed25519 key if missing.
+
+### 📡 Remote Management
+To manage the Server from your Laptop:
 
 1.  **Ensure Connectivity:**
-    Make sure you can SSH into the server from your laptop:
-    ```bash
-    ssh {{ username }}@<server-ip>
-    ```
-
-2.  **Setup SSH Keys (Passwordless Access):**
-    Ansible works best with SSH keys. If you haven't already, copy your laptop's public key to the server:
     ```bash
     ssh-copy-id {{ username }}@<server-ip>
     ```
 
-3.  **Run Ansible Remotely:**
-    From your laptop (assuming you have this repo cloned):
+2.  **Run Ansible Remotely:**
     ```bash
-    # Update inventory.ini to match the server's specific IP address first!
-    # Copy the example if you haven't already
-    cp ansible/inventory.example.ini ansible/inventory.ini
-    nano ansible/inventory.ini
-    
-    # Run the playbook
-    ansible-playbook -i ansible/inventory.ini ansible/setup.yml --ask-become-pass
+    ansible-playbook -i ansible/inventory.ini ansible/site.yml --ask-become-pass --limit server
     ```
+    *Use `--limit server` or `--limit desktop` to target specific groups if your inventory contains both.*
 
 ## 🔒 Security Note
 This project uses a `.env` file to manage sensitive keys. **Never commit your `.env` file to GitHub.** A `.gitignore` is included to prevent this.
