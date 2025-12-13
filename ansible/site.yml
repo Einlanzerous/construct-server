@@ -46,7 +46,11 @@
 - name: Configure Server
   hosts: server
   become: true
+  vars_files:
+    - secrets.yml
   roles:
+    - common
+    - tailscale
     - server
 
 - name: Configure Desktop

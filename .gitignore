@@ -6,6 +6,7 @@ copyparty/
 
 # Ansible
 ansible/inventory.ini
+ansible/secrets.yml
 *.retry
 *.log
 
