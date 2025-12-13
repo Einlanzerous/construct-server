@@ -128,3 +128,22 @@
     mode: '0600'
     force: yes
   notify: Restart Docker
+
+- name: Start Docker Stack
+  become_user: "{{ user_name }}"
+  shell: docker compose up -d
+  args:
+    chdir: "/home/{{ user_name }}/construct-server"
+  register: docker_stack_start
+  changed_when: "'Running' not in docker_stack_start.stdout"
+
+- name: Pull Ollama Models
+  become_user: "{{ user_name }}"
+  command: "docker exec ollama ollama pull {{ item }}"
+  loop:
+    - gemma3:4b
+    - gemma3:12b
+    - mistral-nemo
+  register: ollama_pull
+  changed_when: "'success' in ollama_pull.stdout"
+  ignore_errors: yes

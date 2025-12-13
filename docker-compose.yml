@@ -49,6 +49,7 @@ services:
   datadog:
     image: datadog/agent:7
     container_name: datadog
+    restart: unless-stopped
     pid: host
     environment:
       - DD_API_KEY=${DD_API_KEY}
