@@ -54,6 +54,15 @@ services:
         url: "http://imperial-construct:3923"
         target: "_blank"
 
+  - name: "Automation"
+    icon: "fas fa-robot"
+    items:
+      - name: "n8n"
+        icon: "fas fa-project-diagram"
+        subtitle: "Workflow Automation"
+        url: "http://imperial-construct:5678"
+        target: "_blank"
+
 # Optional: Shortcuts in the top right
 links:
   - name: "GitHub Repo"

@@ -1,0 +1,29 @@
+name: Deploy to Construct
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - 'docker-compose.yml'
+      - '.env.example'
+      - 'config/**'
+      - 'homer/**'
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Restore Secrets
+        # We reconstruct the .env file from GitHub Secrets
+        run: echo "${{ secrets.PROD_ENV_FILE }}" > .env
+
+      - name: Deploy Stack
+        # Pulls new images, recreates containers with config changes, removes old ones
+        run: docker compose up -d --remove-orphans
+
+      - name: Prune Images
+        # Clean up old docker images to save disk space
+        run: docker image prune -f

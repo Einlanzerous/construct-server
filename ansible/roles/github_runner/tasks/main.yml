@@ -1,0 +1,52 @@
+---
+- name: Check if runner is already configured
+  stat:
+    path: "/home/{{ user_name }}/actions-runner/.runner"
+  register: runner_configured
+
+- name: Create runner directory
+  file:
+    path: "/home/{{ user_name }}/actions-runner"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0755'
+
+- name: Download GitHub Actions Runner
+  get_url:
+    url: "https://github.com/actions/runner/releases/download/v2.321.0/actions-runner-linux-x64-2.321.0.tar.gz"
+    dest: "/home/{{ user_name }}/actions-runner/actions-runner.tar.gz"
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+  when: not runner_configured.stat.exists
+
+- name: Extract runner
+  unarchive:
+    src: "/home/{{ user_name }}/actions-runner/actions-runner.tar.gz"
+    dest: "/home/{{ user_name }}/actions-runner"
+    remote_src: yes
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+  when: not runner_configured.stat.exists
+
+- name: Configure runner
+  command:
+    cmd: "./config.sh --url {{ repo_url | regex_replace('\\.git$', '') }} --token {{ github_runner_token }} --unattended --replace"
+    chdir: "/home/{{ user_name }}/actions-runner"
+  become: yes
+  become_user: "{{ user_name }}"
+  when: not runner_configured.stat.exists and github_runner_token is defined
+
+- name: Install runner service
+  command:
+    cmd: "./svc.sh install"
+    chdir: "/home/{{ user_name }}/actions-runner"
+  become: yes
+  ignore_errors: yes
+
+- name: Start runner service
+  command:
+    cmd: "./svc.sh start"
+    chdir: "/home/{{ user_name }}/actions-runner"
+  become: yes
+  ignore_errors: yes

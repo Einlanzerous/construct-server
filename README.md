@@ -23,7 +23,9 @@ The following services are currently active:
 -   [ ] **[Panox](https://panox.io)**: Library Management System for books/games.
 -   [ ] **[Strapi](https://strapi.io)**: Headless CMS for the urbanist blog.
 -   [ ] **[Plane](https://plane.so)**: Project management for political dashboard.
--   [ ] **[n8n](https://n8n.io)**: Workflow automation (The AI Secretary).
+-   [x] **[n8n](https://n8n.io)**: Workflow automation (The AI Secretary).
+-   [ ] **[Betterstack](https://betterstack.com)**: Uptime monitoring and incident alerting.
+-   [ ] **[Kourier](https://github.com/Kourier/Kourier)**: Self-hosted modern email client.
 
 ## 🛠️ Setup & Installation
 
@@ -46,8 +48,12 @@ The following services are currently active:
     docker-compose up -d
     ```
 
-4.  **Access the Dashboard:**
-    Navigate to `http://localhost` in your browser.
+### 🔄 Automation & CI/CD
+-   **[Watchtower](https://containrrr.dev/watchtower/)**: Automatically updates running Docker containers (excludes AI stack).
+-   **[GitHub Actions Runner](https://github.com/actions/runner)**: Self-hosted runner for deploying changes to this server automatically.
+-   **[n8n](https://n8n.io)**: Workflow automation.
+
+## 🗺️ Roadmap
 
 ## 🖥️ System Provisioning (Ansible)
 
@@ -78,6 +84,8 @@ To configure a machine, whether it be a fresh Server or a new Desktop/Laptop:
 The `[server]` role handles:
 -   **Docker & Nvidia Drivers**: For running local LLMs and containers.
 -   **Construct Repo**: Clones the main repo for the stack.
+-   **GitHub Runner**: Installs and configures a self-hosted runner.
+    *   *Requires `github_runner_token` in `ansible/secrets.yml`.*
 
 ### 💻 Desktop Specifics
 The `[desktop]` role handles:

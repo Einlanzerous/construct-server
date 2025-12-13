@@ -16,7 +16,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
 
+  # --- WEB UI (Open WebUI) ---
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
@@ -24,12 +27,25 @@ services:
     ports:
       - "3000:8080"
     environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - DEFAULT_MODELS=gemma3:12b-it-qat
+      - OLLAMA_BASE_URL=http://ollama:11434
     volumes:
-      - ./webui:/app/backend/data
+      - open-webui:/app/backend/data
     depends_on:
       - ollama
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # --- WATCHTOWER (Auto-Update) ---
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_SCHEDULE=0 0 4 * * 1
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_ROLLING_RESTART=true
+    restart: unless-stopped
 
   # --- FILE SHARING ---
   # copyparty:
@@ -88,3 +104,15 @@ services:
       - "80:8080"
     volumes:
       - ./homer:/www/assets
+
+  # --- AUTOMATION (n8n) ---
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_SECURE_COOKIE=false
+    volumes:
+      - ./n8n:/home/node/.n8n

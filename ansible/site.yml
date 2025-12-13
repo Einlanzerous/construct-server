@@ -50,8 +50,9 @@
     - secrets.yml
   roles:
     - common
-    - tailscale
     - server
+    - tailscale
+    - github_runner
 
 - name: Configure Desktop
   hosts: desktop
