@@ -10,9 +10,10 @@ The following services are currently active:
 -   **[Ollama](https://ollama.com/)**: Backend for running large language models (LLMs) like Gemma 3 and Llama 3 locally.
 -   **[Open WebUI](https://docs.openwebui.com/)**: A beautiful, feature-rich interface for interacting with your local LLMs (similar to ChatGPT).
 
-### 📊 Observability (Monitoring)
--   **[Datadog Agent](https://www.datadoghq.com/)**: Cloud-based infrastructure monitoring for metrics, traces, and logs.
--   **[Dozzle](https://dozzle.dev/)**: Real-time log viewer for Docker containers.
+### 🛡️ Observability
+-   **[Uptime Kuma](https://github.com/louislam/uptime-kuma)**: Self-hosted monitoring tool for services.
+-   **[Datadog](https://datadoghq.com)**: Cloud-based monitoring and logging.
+-   **[Dozzle](https://dozzle.dev)**: Real-time log viewer for Docker containers.
 
 ### 🏠 Dashboard
 -   **[Homer](https://github.com/bastienwirtz/homer)**: A static homepage to access all services from a single dashboard.
