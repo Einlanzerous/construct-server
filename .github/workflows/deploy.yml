@@ -17,8 +17,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Restore Secrets
-        # We reconstruct the .env file from GitHub Secrets
-        run: echo "${{ secrets.PROD_ENV_FILE }}" > .env
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+        run: |
+          if [ -z "$PROD_ENV_FILE" ]; then
+            echo "Error: PROD_ENV_FILE secret is missing or empty!"
+            exit 1
+          fi
+          echo "$PROD_ENV_FILE" > .env
 
       - name: Deploy Stack
         # Pulls new images, recreates containers with config changes, removes old ones
