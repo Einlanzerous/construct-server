@@ -42,7 +42,9 @@
     cmd: "./svc.sh install"
     chdir: "/home/{{ user_name }}/actions-runner"
   become: yes
-  ignore_errors: yes
+  register: svc_install
+  failed_when: "svc_install.rc != 0 and 'exists' not in svc_install.stderr"
+  changed_when: "svc_install.rc == 0"
 
 - name: Start runner service
   command:
