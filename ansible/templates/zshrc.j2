@@ -9,7 +9,11 @@ export ZSH="/home/{{ user_name }}/.oh-my-zsh"
 ZSH_THEME="powerlevel10k/powerlevel10k"
 
 # Plugins
-plugins=(docker git zsh-autosuggestions zsh-syntax-highlighting)
+plugins=(docker git zsh-autosuggestions zsh-syntax-highlighting ssh-agent)
+
+# SSH Agent Plugin Settings
+zstyle :omz:plugins:ssh-agent identities id_ed25519
+zstyle :omz:plugins:ssh-agent lifetime 4h
 
 source $ZSH/oh-my-zsh.sh
 
