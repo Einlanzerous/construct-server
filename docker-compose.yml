@@ -50,7 +50,7 @@ services:
   # --- FILE SHARING ---
   # --- FILE SHARING ---
   copyparty:
-    image: ucartz/copyparty
+    image: copyparty/ac
     container_name: copyparty
     restart: unless-stopped
     ports:
