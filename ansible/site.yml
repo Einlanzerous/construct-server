@@ -8,6 +8,7 @@
       register: docker_conflicts
       ignore_errors: yes
       changed_when: false
+      failed_when: docker_conflicts.rc != 0 and docker_conflicts.rc != 1
 
     - name: Delete conflicting Docker source files
       file:
@@ -27,6 +28,7 @@
       register: nvidia_conflicts
       ignore_errors: yes
       changed_when: false
+      failed_when: nvidia_conflicts.rc != 0 and nvidia_conflicts.rc != 1
 
     - name: Delete conflicting Nvidia source files
       file:
