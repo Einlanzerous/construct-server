@@ -44,6 +44,11 @@ services:
         subtitle: "Cloud Metrics"
         url: "https://us5.datadoghq.com/dashboard/lists"
         target: "_blank"
+      - name: "Uptime Kuma"
+        icon: "fas fa-heartbeat"
+        subtitle: "Service Monitoring"
+        url: "http://imperial-construct:3001"
+        target: "_blank"
 
   - name: "File Sharing"
     icon: "fas fa-hdd"

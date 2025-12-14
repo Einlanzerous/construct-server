@@ -97,6 +97,17 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
+  # --- MONITORING (Uptime Kuma) ---
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: always
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime-kuma-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
   # --- DASHBOARD (Homer) ---
   homer:
     image: b4bz/homer
@@ -124,3 +135,4 @@ volumes:
   ollama_data:
   n8n_data:
   copyparty_data:
+  uptime-kuma-data:
