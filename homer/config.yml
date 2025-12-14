@@ -45,15 +45,6 @@ services:
         url: "https://us5.datadoghq.com/dashboard/lists"
         target: "_blank"
 
-  - name: "Storage"
-    icon: "fas fa-hdd"
-    items:
-      - name: "Copyparty"
-        icon: "fas fa-file-upload"
-        subtitle: "File Server"
-        url: "http://imperial-construct:3923"
-        target: "_blank"
-
   - name: "File Sharing"
     icon: "fas fa-hdd"
     items:

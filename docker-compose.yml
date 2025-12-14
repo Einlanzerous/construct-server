@@ -45,6 +45,7 @@ services:
       - WATCHTOWER_SCHEDULE=0 0 4 * * 1
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_ROLLING_RESTART=true
+      - DOCKER_API_VERSION=1.44
     restart: unless-stopped
 
   # --- FILE SHARING ---
