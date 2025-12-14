@@ -19,6 +19,34 @@
     append: yes
     create_home: yes
 
+# --- 2. FONTS ---
+- name: Ensure local fonts directory exists
+  file:
+    path: "/home/{{ user_name }}/.local/share/fonts"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0755'
+
+- name: Install MesloLGS NF fonts
+  get_url:
+    url: "https://github.com/romkatv/powerlevel10k-media/raw/master/{{ item | urlencode }}"
+    dest: "/home/{{ user_name }}/.local/share/fonts/{{ item }}"
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0644'
+  with_items:
+    - 'MesloLGS NF Regular.ttf'
+    - 'MesloLGS NF Bold.ttf'
+    - 'MesloLGS NF Italic.ttf'
+    - 'MesloLGS NF Bold Italic.ttf'
+  register: fonts_installed
+
+- name: Update font cache
+  become_user: "{{ user_name }}"
+  shell: fc-cache -fv
+  when: fonts_installed.changed
+
 # --- 2. OH-MY-ZSH & POWERLEVEL10K ---
 - name: Check for Oh-My-Zsh installation
   stat:

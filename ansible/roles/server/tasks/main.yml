@@ -146,6 +146,34 @@
     force: yes
   notify: Restart Docker
 
+- name: Ensure config directory exists
+  file:
+    path: "/home/{{ user_name }}/construct-server/config"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0755'
+
+- name: Create copyparty configuration
+  copy:
+    dest: "/home/{{ user_name }}/construct-server/config/copyparty.conf"
+    content: |
+      [global]
+        # e = idk
+
+      [/]
+        /w
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: '0644'
+
+- name: Patch docker-compose.yml to mount copyparty config
+  lineinfile:
+    path: "/home/{{ user_name }}/construct-server/docker-compose.yml"
+    insertafter: '      - /data:/w/hdd'
+    line: '      - ./config/copyparty.conf:/cfg/copyparty.conf'
+    state: present
+
 - name: Start Docker Stack
   become_user: "{{ user_name }}"
   shell: docker compose up -d
