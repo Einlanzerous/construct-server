@@ -56,7 +56,7 @@ services:
     ports:
       - "3923:3923"
     volumes:
-      - ./copyparty:/w
+      - copyparty_data:/w
       - /data:/w/hdd 
     environment:
       - E=idk  # Enable basic drag-and-drop upload
@@ -121,3 +121,4 @@ volumes:
   open-webui:
   ollama_data:
   n8n_data:
+  copyparty_data:
