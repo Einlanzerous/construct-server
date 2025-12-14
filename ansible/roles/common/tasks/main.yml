@@ -11,6 +11,10 @@
     name: [git, curl, zsh, htop, bat, fzf, fonts-powerline, software-properties-common, fail2ban]
     state: present
 
+- name: Set timezone to America/Chicago
+  timezone:
+    name: America/Chicago
+
 - name: "Create the {{ user_name }} user"
   user:
     name: "{{ user_name }}"
