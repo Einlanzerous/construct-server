@@ -49,7 +49,7 @@ services:
         subtitle: "Service Monitoring"
         url: "http://imperial-construct:3001"
         target: "_blank"
-        type: "Ping"
+
 
   - name: "File Sharing"
     icon: "fas fa-hdd"
