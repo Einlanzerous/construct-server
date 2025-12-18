@@ -49,7 +49,6 @@ services:
     restart: unless-stopped
 
   # --- FILE SHARING ---
-  # --- FILE SHARING ---
   copyparty:
     image: copyparty/ac
     container_name: copyparty
@@ -88,6 +87,7 @@ services:
               count: all
               capabilities: [gpu, utility]
 
+  # --- Container Logging (Dozzle) ---
   dozzle:
     image: amir20/dozzle:latest
     container_name: dozzle
