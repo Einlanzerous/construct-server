@@ -130,6 +130,22 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
 
+  # --- AUTOMATION (Semaphore UI) ---
+  semaphore:
+    image: semaphoreui/semaphore:latest
+    container_name: semaphore
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      - SEMAPHORE_DB_DIALECT=sqlite3
+      - SEMAPHORE_ADMIN_PASSWORD=${SEMAPHORE_ADMIN_PASSWORD}
+      - SEMAPHORE_ADMIN_NAME=${SEMAPHORE_ADMIN_NAME}
+      - SEMAPHORE_ADMIN_EMAIL=${SEMAPHORE_ADMIN_EMAIL}
+      - SEMAPHORE_ADMIN=${SEMAPHORE_ADMIN}
+    volumes:
+      - semaphore_data:/etc/semaphore
+
 volumes:
   open-webui:
   ollama_data:

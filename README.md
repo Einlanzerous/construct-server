@@ -34,6 +34,7 @@ The following services are currently active:
 -   [x] **[n8n](https://n8n.io)**: Workflow automation (The AI Secretary).
 -   [ ] **[Betterstack](https://betterstack.com)**: Uptime monitoring and incident alerting.
 -   [ ] **[Kourier](https://github.com/Kourier/Kourier)**: Self-hosted modern email client.
+-   [ ] **[Rundeck](https://www.rundeck.com)**: Enterprise job scheduler (Potential Semaphore replacement if needed).
 
 ## 🛠️ Setup & Installation
 
@@ -60,6 +61,7 @@ The following services are currently active:
 -   **[Watchtower](https://containrrr.dev/watchtower/)**: Automatically updates running Docker containers (excludes AI stack).
 -   **[GitHub Actions Runner](https://github.com/actions/runner)**: Self-hosted runner for deploying changes to this server automatically.
 -   **[n8n](https://n8n.io)**: Workflow automation.
+-   **[Semaphore UI](https://semaphoreui.com)**: Modern UI for running Ansible playbooks.
 
 ## 🗺️ Roadmap
 

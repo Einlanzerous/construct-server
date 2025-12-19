@@ -31,6 +31,39 @@ services:
         tag: "Local"
         url: "http://imperial-construct:3000"
         target: "_blank" 
+
+  - name: "Automation"
+    icon: "fas fa-robot"
+    items:
+      - name: "n8n"
+        icon: "fas fa-project-diagram"
+        subtitle: "Workflow Automation"
+        url: "http://imperial-construct:5678"
+        target: "_blank"
+      - name: "Semaphore UI"
+        icon: "fas fa-tasks"
+        subtitle: "Ansible Dashboard"
+        url: "http://imperial-construct:3002"
+        target: "_blank"
+
+  - name: "File Sharing"
+    icon: "fas fa-hdd"
+    items:
+      - name: "Copyparty"
+        icon: "fas fa-folder-open"
+        subtitle: "File Server"
+        url: "http://imperial-construct:3923"
+        target: "_blank"
+
+  - name: "Gaming"
+    icon: "fas fa-gamepad"
+    items:
+      - name: "Sunshine"
+        icon: "fas fa-sun"
+        subtitle: "Game Streaming Host"
+        url: "https://imperial-construct:47990"
+        target: "_blank"
+
   - name: "Observability"
     icon: "fas fa-eye"
     items:
@@ -48,25 +81,6 @@ services:
         icon: "fas fa-heartbeat"
         subtitle: "Service Monitoring"
         url: "http://imperial-construct:3001"
-        target: "_blank"
-
-
-  - name: "File Sharing"
-    icon: "fas fa-hdd"
-    items:
-      - name: "Copyparty"
-        icon: "fas fa-folder-open"
-        subtitle: "File Server"
-        url: "http://imperial-construct:3923"
-        target: "_blank"
-
-  - name: "Automation"
-    icon: "fas fa-robot"
-    items:
-      - name: "n8n"
-        icon: "fas fa-project-diagram"
-        subtitle: "Workflow Automation"
-        url: "http://imperial-construct:5678"
         target: "_blank"
 
   - name: "Gaming"
