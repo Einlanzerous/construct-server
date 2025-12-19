@@ -36,10 +36,8 @@
     append: yes
 
 - name: Set capabilities on Sunshine binary (KMS/NVENC)
-  capabilities:
-    path: /usr/bin/sunshine
-    capability: cap_sys_admin+p
-    state: present
+  command: setcap cap_sys_admin+p /usr/bin/sunshine
+  changed_when: false
 
 - name: Ensure .config/sunshine directory exists
   file:
