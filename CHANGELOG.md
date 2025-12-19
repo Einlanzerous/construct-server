@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/Einlanzerous/construct-server/compare/v1.1.0...v1.1.1) (2025-12-19)
+
+
+### Bug Fixes
+
+* Fix volume issue in docker-compose ([a50f2be](https://github.com/Einlanzerous/construct-server/commit/a50f2be7b502964467a15a50895976382f1e3683))
+
 ## [1.1.0](https://github.com/Einlanzerous/construct-server/compare/v1.0.1...v1.1.0) (2025-12-19)
 
 
