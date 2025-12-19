@@ -139,5 +139,35 @@ To manage the Server from your Laptop:
     ```
     *Use `--limit server` or `--limit desktop` to target specific groups if your inventory contains both.*
 
-## 🔒 Security Note
+### � Multi-Machine Setup (Laptop)
+To configure a second machine (like your Laptop) to work with this repo:
+
+1.  **Clone the Repo:**
+    ```bash
+    git clone https://github.com/Einlanzerous/construct-server.git
+    cd construct-server
+    ```
+
+2.  **Bootstrap Tools:**
+    Run the playbook against localhost to install `age` and `sops`.
+    ```bash
+    cp ansible/inventory.example.ini ansible/inventory.ini
+    # Ensure [desktop] section has localhost uncommented
+    ansible-playbook -i ansible/inventory.ini ansible/site.yml --tags common -K
+    ```
+
+3.  **Sync Secrets Key:**
+    Securely copy the `keys.txt` from your Desktop to your Laptop.
+    **On Laptop:**
+    ```bash
+    mkdir -p ~/.config/sops/age
+    # Paste the content of keys.txt from Desktop into:
+    nano ~/.config/sops/age/keys.txt
+    ```
+
+4.  **Verify:**
+    Try decrypting the secrets file:
+    ```bash
+    sops --decrypt ansible/secrets.sops.yml
+    ```
 This project uses a `.env` file to manage sensitive keys. **Never commit your `.env` file to GitHub.** A `.gitignore` is included to prevent this.
