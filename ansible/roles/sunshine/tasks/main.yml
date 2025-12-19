@@ -35,8 +35,13 @@
     groups: input,video
     append: yes
 
+- name: Resolve Sunshine binary path
+  shell: readlink -f $(which sunshine)
+  register: sunshine_path
+  changed_when: false
+
 - name: Set capabilities on Sunshine binary (KMS/NVENC)
-  command: setcap cap_sys_admin+p /usr/bin/sunshine
+  command: setcap cap_sys_admin+p "{{ sunshine_path.stdout }}"
   changed_when: false
 
 - name: Ensure .config/sunshine directory exists
