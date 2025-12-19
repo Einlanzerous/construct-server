@@ -1,18 +1,18 @@
 ---
+- name: Reload udev
+  command: udevadm control --reload-rules
+  
 - name: Restart Sunshine
-  systemd:
-    name: sunshine
-    state: restarted
-    scope: user
+  command: systemctl --user restart sunshine
   become: yes
   become_user: "{{ sunshine_user }}"
   environment:
-    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
 
 - name: Update Grub
   command: update-grub
-  become: yes
 
-- name: Reload udev
-  command: udevadm control --reload-rules && udevadm trigger
-  become: yes
+- name: Restart GDM
+  service:
+    name: gdm3
+    state: restarted

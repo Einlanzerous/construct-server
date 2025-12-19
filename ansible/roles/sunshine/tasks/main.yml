@@ -112,4 +112,43 @@
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="((?:(?!nvidia-drm\.modeset=1).)*?)"$'
     line: 'GRUB_CMDLINE_LINUX_DEFAULT="\1 nvidia-drm.modeset=1"'
     backrefs: yes
+    backrefs: yes
   notify: Update Grub
+
+# Headless Display Setup (EDID + Autologin)
+- name: Install Display Manager (GDM3) and XOrg
+  apt:
+    name:
+      - gdm3
+      - xserver-xorg
+    state: present
+
+- name: Create EDID directory
+  file:
+    path: /etc/X11/edid
+    state: directory
+    mode: '0755'
+
+- name: Copy 1080p EDID binary
+  copy:
+    src: 1080p-edid.bin
+    dest: /etc/X11/edid/1080p-edid.bin
+    mode: '0644'
+
+- name: Configure Xorg for fake monitor
+  template:
+    src: xorg.conf.j2
+    dest: /etc/X11/xorg.conf
+    backup: yes
+
+- name: Configure GDM3 Auto-login
+  lineinfile:
+    path: /etc/gdm3/custom.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^#?AutomaticLoginEnable=.*', line: 'AutomaticLoginEnable=True' }
+    - { regexp: '^#?AutomaticLogin=.*', line: 'AutomaticLogin={{ sunshine_user }}' }
+    - { regexp: '^#?WaylandEnable=.*', line: 'WaylandEnable=false' }
+  notify: Restart GDM
+
