@@ -67,7 +67,8 @@
     - server
     - tailscale
     - github_runner
-    - sunshine
+    - role: sunshine
+      tags: sunshine
 
 - name: Configure Desktop
   hosts: desktop
