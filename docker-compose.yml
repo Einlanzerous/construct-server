@@ -152,3 +152,4 @@ volumes:
   n8n_data:
   copyparty_data:
   uptime-kuma-data:
+  semaphore_data:
