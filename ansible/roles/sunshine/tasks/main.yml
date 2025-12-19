@@ -32,7 +32,7 @@
 - name: Add user to video and input groups
   user:
     name: "{{ sunshine_user }}"
-    groups: input,video
+    groups: input,video,render
     append: yes
 
 - name: Resolve Sunshine binary path
@@ -81,16 +81,19 @@
   args:
     creates: "/var/lib/systemd/linger/{{ sunshine_user }}"
 
-- name: Enable and start Sunshine user service
-  systemd:
-    name: sunshine
-    state: started
-    enabled: yes
-    scope: user
+- name: Get Sunshine user UID
+  command: "id -u {{ sunshine_user }}"
+  register: sunshine_uid
+  changed_when: false
+
+- name: Enable and start Sunshine user service (Force)
+  command: "systemctl --user enable --now sunshine"
   become: yes
   become_user: "{{ sunshine_user }}"
   environment:
-    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+  register: systemctl_result
+  changed_when: "'Created symlink' in systemctl_result.stderr or 'Created symlink' in systemctl_result.stdout"
 
 # Headless setup - GRUB
 - name: Check if nvidia-drm.modeset=1 is in GRUB
