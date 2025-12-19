@@ -48,13 +48,26 @@
 - name: Configure Server
   hosts: server
   become: true
-  vars_files:
-    - secrets.yml
+  # vars_files:
+  #   - secrets.yml
+  pre_tasks:
+    - name: Load encrypted secrets
+      community.sops.load_vars:
+        file: secrets.sops.yml
+      tags: [always]
+      ignore_errors: yes
+      register: sops_load
+    
+    - name: Fail if secrets were not loaded
+      fail:
+        msg: "Failed to load secrets.sops.yml. Ensure you have migrated secrets to SOPS."
+      when: sops_load.failed
   roles:
     - common
     - server
     - tailscale
     - github_runner
+    - sunshine
 
 - name: Configure Desktop
   hosts: desktop

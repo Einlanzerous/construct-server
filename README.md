@@ -22,6 +22,9 @@ The following services are currently active:
 ### 📂 Storage & File Sharing
 -   **[Copyparty](https://github.com/9001/copyparty)**: Lightweight file server serving files from the 1TB NVMe drive (`/data`).
 
+### 🎮 Gaming & Remote Play
+-   **[Sunshine](https://github.com/LizardByte/Sunshine)**: High-performance game streaming host for Moonlight.
+
 ## 🗺️ Roadmap
 
 -   [x] **[Copyparty](https://github.com/9001/copyparty)**: File server capabilities (drag-and-drop uploads, media streaming).
@@ -102,6 +105,25 @@ Both roles receive:
 -   **Shell**: Zsh with Oh-My-Zsh, Powerlevel10k, and Plugins.
 -   **Dotfiles**: Deploys a standardized `.zshrc` and `.p10k.zsh` matching the primary layout.
 -   **SSH Keys**: Generates an Ed25519 key if missing.
+
+### 🔐 Secrets Management (SOPS)
+We use [Mozilla SOPS](https://github.com/getsops/sops) with [Age](https://github.com/FiloSottile/age) encryption to manage secrets.
+
+1.  **Install Tools:**
+    The `common` role installs `sops` and `age` automatically.
+
+2.  **Generate Key:**
+    ```bash
+    age-keygen -o key.txt
+    mkdir -p ~/.config/sops/age
+    mv key.txt ~/.config/sops/age/keys.txt
+    ```
+
+3.  **Edit Secrets:**
+    ```bash
+    sops ansible/secrets.sops.yml
+    ```
+    *This opens the file in your default editor, decrypts it for editing, and re-encrypts it on save.*
 
 ### 📡 Remote Management
 To manage the Server from your Laptop:

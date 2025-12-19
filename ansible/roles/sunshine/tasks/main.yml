@@ -1,0 +1,104 @@
+---
+- name: Install dependencies
+  apt:
+    name:
+      - libssl-dev
+      - libavahi-client3
+      - libcurl4
+      - libopus0
+      - libboost-locale-dev
+      - wakeonlan
+    state: present
+    update_cache: yes
+
+- name: Download Sunshine .deb
+  get_url:
+    url: "{{ sunshine_deb_url }}"
+    dest: "/tmp/sunshine.deb"
+    mode: '0644'
+
+- name: Install Sunshine
+  apt:
+    deb: "/tmp/sunshine.deb"
+    state: present
+
+- name: Enable functionality for headless streaming (uinput)
+  copy:
+    src: 85-sunshine-input.rules
+    dest: /etc/udev/rules.d/85-sunshine-input.rules
+    mode: '0660'
+  notify: Reload udev
+
+- name: Add user to video and input groups
+  user:
+    name: "{{ sunshine_user }}"
+    groups: input,video
+    append: yes
+
+- name: Set capabilities on Sunshine binary (KMS/NVENC)
+  capabilities:
+    path: /usr/bin/sunshine
+    capability: cap_sys_admin+p
+    state: present
+
+- name: Ensure .config/sunshine directory exists
+  file:
+    path: "{{ sunshine_config_dir }}"
+    state: directory
+    owner: "{{ sunshine_user }}"
+    group: "{{ sunshine_user }}"
+    mode: '0755'
+
+- name: Configure sunshine.conf
+  template:
+    src: sunshine.conf.j2
+    dest: "{{ sunshine_config_dir }}/sunshine.conf"
+    owner: "{{ sunshine_user }}"
+    group: "{{ sunshine_user }}"
+    mode: '0644'
+  notify: Restart Sunshine
+
+- name: Configure apps.json
+  template:
+    src: apps.json.j2
+    dest: "{{ sunshine_config_dir }}/apps.json"
+    owner: "{{ sunshine_user }}"
+    group: "{{ sunshine_user }}"
+    mode: '0644'
+  notify: Restart Sunshine
+
+- name: Install wake-desktop script
+  template:
+    src: wake-desktop.sh.j2
+    dest: /usr/local/bin/wake-desktop
+    mode: '0755'
+
+- name: Enable and start Sunshine user service
+  systemd:
+    name: sunshine
+    state: started
+    enabled: yes
+    scope: user
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+
+# Headless setup - GRUB
+- name: Check if nvidia-drm.modeset=1 is in GRUB
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="(.*)nvidia-drm.modeset=1(.*)"'
+    state: absent
+  check_mode: yes
+  register: grub_check
+  failed_when: false
+  changed_when: false
+
+- name: Enable nvidia-drm.modeset=1 in GRUB
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="((?:(?!nvidia-drm\.modeset=1).)*?)"$'
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="\1 nvidia-drm.modeset=1"'
+    backrefs: yes
+  notify: Update Grub

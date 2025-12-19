@@ -1,0 +1,8 @@
+#!/bin/bash
+# wake-desktop.sh
+# Target: Desktop
+# MAC Address injected from Ansible secrets
+DESKTOP_MAC="{{ desktop_mac_address }}"
+
+echo "Sending Magic Packet to wake the Desktop ($DESKTOP_MAC)..."
+wakeonlan $DESKTOP_MAC

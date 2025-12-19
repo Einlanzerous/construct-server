@@ -1,0 +1,7 @@
+---
+sunshine_version: "v2025.924.154138"
+# Adjust ubuntu version if needed (22.04 or 24.04)
+sunshine_distro_version: "ubuntu-24.04"
+sunshine_deb_url: "https://github.com/LizardByte/Sunshine/releases/download/{{ sunshine_version }}/sunshine-{{ sunshine_distro_version }}-amd64.deb"
+sunshine_user: "{{ ansible_user_id }}"
+sunshine_config_dir: "/home/{{ sunshine_user }}/.config/sunshine"
