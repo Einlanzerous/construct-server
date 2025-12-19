@@ -76,6 +76,11 @@
     dest: /usr/local/bin/wake-desktop
     mode: '0755'
 
+- name: Enable linger for Sunshine user
+  command: "loginctl enable-linger {{ sunshine_user }}"
+  args:
+    creates: "/var/lib/systemd/linger/{{ sunshine_user }}"
+
 - name: Enable and start Sunshine user service
   systemd:
     name: sunshine
