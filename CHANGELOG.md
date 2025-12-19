@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.2](https://github.com/Einlanzerous/construct-server/compare/v1.1.1...v1.1.2) (2025-12-19)
+
+
+### Bug Fixes
+
+* Add ansible task for semaphore commands ([8ddc7ef](https://github.com/Einlanzerous/construct-server/commit/8ddc7efab2dddf8b715d5a167a54e74b19b52b5d))
+* Address typo in config around DB for semaphore ([73e8b06](https://github.com/Einlanzerous/construct-server/commit/73e8b065043f924c5060fb53f4a4f6fbf14df4e3))
+
 ## [1.1.1](https://github.com/Einlanzerous/construct-server/compare/v1.1.0...v1.1.1) (2025-12-19)
 
 
