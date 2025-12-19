@@ -139,7 +139,7 @@ To manage the Server from your Laptop:
     ```
     *Use `--limit server` or `--limit desktop` to target specific groups if your inventory contains both.*
 
-### � Multi-Machine Setup (Laptop)
+### 💻 Multi-Machine Setup (Laptop)
 To configure a second machine (like your Laptop) to work with this repo:
 
 1.  **Clone the Repo:**
@@ -170,4 +170,6 @@ To configure a second machine (like your Laptop) to work with this repo:
     ```bash
     sops --decrypt ansible/secrets.sops.yml
     ```
+
+## 🔒 Security Note
 This project uses a `.env` file to manage sensitive keys. **Never commit your `.env` file to GitHub.** A `.gitignore` is included to prevent this.
