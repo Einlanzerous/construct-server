@@ -83,15 +83,6 @@ services:
         url: "http://imperial-construct:3001"
         target: "_blank"
 
-  - name: "Gaming"
-    icon: "fas fa-gamepad"
-    items:
-      - name: "Sunshine"
-        icon: "fas fa-sun"
-        subtitle: "Game Streaming Host"
-        url: "https://imperial-construct:47990"
-        target: "_blank"
-
 # Optional: Shortcuts in the top right
 links:
   - name: "GitHub Repo"
