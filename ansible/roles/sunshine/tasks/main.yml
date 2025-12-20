@@ -42,7 +42,6 @@
 
 - name: Set capabilities on Sunshine binary (KMS/NVENC)
   command: setcap cap_sys_admin+p "{{ sunshine_path.stdout }}"
-  command: setcap cap_sys_admin+p "{{ sunshine_path.stdout }}"
   changed_when: false
 
 - name: DEBUG - Check Sunshine User Groups

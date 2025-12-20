@@ -1,6 +1,5 @@
 ---
 - name: Reload udev
-- name: Reload udev
   shell: udevadm control --reload-rules && udevadm trigger
   
 - name: Restart Sunshine
