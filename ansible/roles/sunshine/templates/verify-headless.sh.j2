@@ -1,0 +1,39 @@
+#!/bin/bash
+# verify-headless.sh
+# Verifies Sunshine headless setup
+
+echo "--- Verifying Headless Display Setup ---"
+
+# 1. Check/Install Scrot
+if ! command -v scrot &> /dev/null; then
+    echo "WARN: 'scrot' not found. Installing..."
+    sudo apt-get update && sudo apt-get install -y scrot
+else
+    echo "OK: 'scrot' is installed."
+fi
+
+# 2. Capture Screenshot
+echo "Capturing screenshot of :0..."
+export DISPLAY=:0
+# Need to source XAUTHORITY from running process if possible, or try standard location
+SUNSHINE_PID=$(pgrep -u {{ sunshine_user }} sunshine | head -n 1)
+if [ -n "$SUNSHINE_PID" ]; then
+    echo "Found Running Sunshine PID: $SUNSHINE_PID"
+else
+    echo "WARN: Sunshine process not found!"
+fi
+
+# Try capturing
+if scrot -o /tmp/sunshine_debug.png; then
+    echo "SUCCESS: Screenshot saved to /tmp/sunshine_debug.png"
+    ls -lh /tmp/sunshine_debug.png
+else
+    echo "FAIL: Could not capture screenshot."
+    echo "Diagnostics:"
+    echo "DISPLAY=$DISPLAY"
+    ls -l /tmp/.X11-unix/
+fi
+
+# 3. Check Logs
+echo "--- Recent Sunshine Logs ---"
+journalctl --user -u sunshine -n 10 --no-pager

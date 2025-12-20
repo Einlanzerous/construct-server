@@ -10,6 +10,7 @@
       - wakeonlan
       - dconf-cli
       - python3-psutil
+      - scrot
     state: present
     update_cache: yes
 
@@ -23,6 +24,10 @@
   apt:
     deb: "/tmp/sunshine.deb"
     state: present
+
+- name: Install Steam
+  include_tasks: steam.yml
+  tags: ['sunshine', 'steam']
 
 
 
@@ -148,7 +153,11 @@
     owner: "{{ sunshine_user }}"
     group: "{{ sunshine_user }}"
 
-    group: "{{ sunshine_user }}"
+- name: Deploy Verification Script
+  template:
+    src: verify-headless.sh.j2
+    dest: /usr/local/bin/verify-headless.sh
+    mode: '0755'
 
 - name: Remove Old Sunshine systemd override directory
   file:
@@ -217,7 +226,6 @@
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="((?:(?!nvidia-drm\.modeset=1).)*?)"$'
     line: 'GRUB_CMDLINE_LINUX_DEFAULT="\1 nvidia-drm.modeset=1"'
-    backrefs: yes
     backrefs: yes
   notify: Update Grub
 
