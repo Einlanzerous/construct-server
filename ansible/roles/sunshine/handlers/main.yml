@@ -1,6 +1,7 @@
 ---
 - name: Reload udev
-  command: udevadm control --reload-rules
+- name: Reload udev
+  shell: udevadm control --reload-rules && udevadm trigger
   
 - name: Restart Sunshine
   command: systemctl --user restart sunshine

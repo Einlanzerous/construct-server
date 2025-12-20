@@ -42,7 +42,24 @@
 
 - name: Set capabilities on Sunshine binary (KMS/NVENC)
   command: setcap cap_sys_admin+p "{{ sunshine_path.stdout }}"
+  command: setcap cap_sys_admin+p "{{ sunshine_path.stdout }}"
   changed_when: false
+
+- name: DEBUG - Check Sunshine User Groups
+  command: "id {{ sunshine_user }}"
+  register: debug_id
+  changed_when: false
+
+- name: DEBUG - Check Device Permissions
+  shell: "ls -l /dev/dri /dev/uinput || true"
+  register: debug_ls
+  changed_when: false
+
+- name: Print Debug Info
+  debug:
+    msg: 
+      - "User ID info: {{ debug_id.stdout }}"
+      - "Device Permissions: {{ debug_ls.stdout_lines }}"
 
 - name: Ensure .config/sunshine directory exists
   file:
@@ -94,12 +111,15 @@
     group: "{{ sunshine_user }}"
     mode: '0755'
 
-- name: Configure Sunshine service environment (DISPLAY)
+- name: Configure Sunshine service environment (DISPLAY and Restart)
   copy:
     dest: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d/override.conf"
     content: |
       [Service]
       Environment=DISPLAY=:0
+      Environment=XAUTHORITY=/run/user/%U/gdm/Xauthority
+      Restart=on-failure
+      RestartSec=10s
     owner: "{{ sunshine_user }}"
     group: "{{ sunshine_user }}"
     mode: '0644'
