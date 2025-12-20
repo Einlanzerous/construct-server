@@ -8,6 +8,8 @@
       - libopus0
       - libboost-locale-dev
       - wakeonlan
+      - dconf-cli
+      - python3-psutil
     state: present
     update_cache: yes
 
@@ -56,11 +58,7 @@
   register: debug_ls
   changed_when: false
 
-- name: Print Debug Info
-  debug:
-    msg: 
-      - "User ID info: {{ debug_id.stdout }}"
-      - "Device Permissions: {{ debug_ls.stdout_lines }}"
+
 
 - name: Ensure .config/sunshine directory exists
   file:
@@ -201,9 +199,7 @@
   register: systemd_dir_list
   changed_when: false
 
-- name: Print Systemd Directory List
-  debug:
-    var: systemd_dir_list.stdout_lines
+
 
 # Headless setup - GRUB
 - name: Check if nvidia-drm.modeset=1 is in GRUB
@@ -261,4 +257,41 @@
     - { regexp: '^#?AutomaticLogin=.*', line: 'AutomaticLogin={{ sunshine_user }}' }
     - { regexp: '^#?WaylandEnable=.*', line: 'WaylandEnable=false' }
   notify: Restart GDM
+
+# Power Management (Disable Sleep)
+- name: Mask systemd sleep targets
+  systemd:
+    name: "{{ item }}"
+    enabled: no
+    masked: yes
+  loop:
+    - sleep.target
+    - suspend.target
+    - hibernate.target
+    - hybrid-sleep.target
+
+- name: Disable GNOME Auto-suspend (AC)
+  dconf:
+    key: "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-type"
+    value: "'nothing'"
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
+- name: Disable GNOME Session Idle Delay
+  dconf:
+    key: "/org/gnome/desktop/session/idle-delay"
+    value: "uint32 0"
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
+- name: Ignore Lid Switch
+  lineinfile:
+    path: /etc/systemd/logind.conf
+    regexp: '^#?HandleLidSwitch='
+    line: 'HandleLidSwitch=ignore'
+  notify: Reload systemd user daemon
 
