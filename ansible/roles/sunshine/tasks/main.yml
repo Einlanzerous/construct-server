@@ -22,6 +22,8 @@
     deb: "/tmp/sunshine.deb"
     state: present
 
+
+
 - name: Enable functionality for headless streaming (uinput)
   copy:
     src: 85-sunshine-input.rules
@@ -102,6 +104,11 @@
   register: sunshine_uid
   changed_when: false
 
+- name: Reload Udev Rules (Immediate)
+  shell: udevadm control --reload-rules && udevadm trigger
+  become: yes
+  changed_when: false
+
 - name: Ensure systemd user directory exists
   file:
     path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d"
@@ -134,6 +141,69 @@
     XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
   register: systemctl_result
   changed_when: "'Created symlink' in systemctl_result.stderr or 'Created symlink' in systemctl_result.stdout"
+
+- name: Deploy Sunshine wrapper script
+  template:
+    src: start-sunshine.sh.j2
+    dest: /usr/local/bin/start-sunshine.sh
+    mode: '0755'
+    owner: "{{ sunshine_user }}"
+    group: "{{ sunshine_user }}"
+
+    group: "{{ sunshine_user }}"
+
+- name: Remove Old Sunshine systemd override directory
+  file:
+    path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d"
+    state: absent
+
+
+
+- name: Create Systemd User Global Directory
+  file:
+    path: "/etc/systemd/user/sunshine.service.d"
+    state: directory
+    mode: '0755'
+
+- name: Create Sunshine systemd override file (Global Wrapper Script)
+  copy:
+    dest: "/etc/systemd/user/sunshine.service.d/override.conf"
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/local/bin/start-sunshine.sh
+    mode: '0644'
+  notify: Restart Sunshine
+
+- name: Remove Local Systemd Override (Cleanup)
+  file:
+    path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d/override.conf"
+    state: absent
+
+- name: Force Systemd User Daemon Reload
+  command: systemctl --user daemon-reload
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
+
+
+- name: Force Systemd User Daemon Reload
+  command: systemctl --user daemon-reload
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
+- name: Debug - List Systemd Config Directory
+  command: "ls -laR /home/{{ sunshine_user }}/.config/systemd"
+  register: systemd_dir_list
+  changed_when: false
+
+- name: Print Systemd Directory List
+  debug:
+    var: systemd_dir_list.stdout_lines
 
 # Headless setup - GRUB
 - name: Check if nvidia-drm.modeset=1 is in GRUB
