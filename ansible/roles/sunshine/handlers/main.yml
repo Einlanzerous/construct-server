@@ -9,6 +9,13 @@
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
 
+- name: Reload systemd user daemon
+  command: systemctl --user daemon-reload
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
 - name: Update Grub
   command: update-grub
 

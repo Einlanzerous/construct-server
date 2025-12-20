@@ -86,6 +86,27 @@
   register: sunshine_uid
   changed_when: false
 
+- name: Ensure systemd user directory exists
+  file:
+    path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d"
+    state: directory
+    owner: "{{ sunshine_user }}"
+    group: "{{ sunshine_user }}"
+    mode: '0755'
+
+- name: Configure Sunshine service environment (DISPLAY)
+  copy:
+    dest: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d/override.conf"
+    content: |
+      [Service]
+      Environment=DISPLAY=:0
+    owner: "{{ sunshine_user }}"
+    group: "{{ sunshine_user }}"
+    mode: '0644'
+  notify: 
+    - Reload systemd user daemon
+    - Restart Sunshine
+
 - name: Enable and start Sunshine user service (Force)
   command: "systemctl --user enable --now sunshine"
   become: yes
