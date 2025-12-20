@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/Einlanzerous/construct-server/compare/v1.1.3...v1.2.0) (2025-12-20)
+
+
+### Features
+
+* Add steam big picture mode to server ([16c9bbd](https://github.com/Einlanzerous/construct-server/commit/16c9bbdf4c0eeb7bc553cf6086d5ffe7dd469930))
+
+
+### Bug Fixes
+
+* Server should not have power saving when it has a fake monitor connected ([15bf0d7](https://github.com/Einlanzerous/construct-server/commit/15bf0d7de32a3300988d70e4e40c01e2b5f0a1a2))
+
 ## [1.1.3](https://github.com/Einlanzerous/construct-server/compare/v1.1.2...v1.1.3) (2025-12-20)
 
 
