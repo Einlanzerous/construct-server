@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.3](https://github.com/Einlanzerous/construct-server/compare/v1.1.2...v1.1.3) (2025-12-20)
+
+
+### Bug Fixes
+
+* Add render group ([866b5d3](https://github.com/Einlanzerous/construct-server/commit/866b5d31759d5f40573627d5fe7ca60062dad192))
+* Add Xorg to run on nvidia with customEDID, ensure neccessary components are installed ([e169cc0](https://github.com/Einlanzerous/construct-server/commit/e169cc0362dc783fba944f07f0d45a9861adaca6))
+* Address ansible script ability to generate edid ([04b5a83](https://github.com/Einlanzerous/construct-server/commit/04b5a83a80bff44dcc182bd95b53c6f788b1e478))
+* Address permissions errors, set wayland var, and have systemd user daemon reload ([6112358](https://github.com/Einlanzerous/construct-server/commit/6112358569af8ac29730f37df3971184795d4b0d))
+* small errors need to be fixed ([b826280](https://github.com/Einlanzerous/construct-server/commit/b826280b68816b1546cee582605497f6c9fcb448))
+* Verified sunshine boots up and appears to work correctly ([41a517b](https://github.com/Einlanzerous/construct-server/commit/41a517be129d3a6d9e15f4c38bfb3ce11ad91c14))
+
 ## [1.1.2](https://github.com/Einlanzerous/construct-server/compare/v1.1.1...v1.1.2) (2025-12-19)
 
 
