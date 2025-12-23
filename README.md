@@ -63,8 +63,6 @@ The following services are currently active:
 -   **[n8n](https://n8n.io)**: Workflow automation.
 -   **[Semaphore UI](https://semaphoreui.com)**: Modern UI for running Ansible playbooks.
 
-## 🗺️ Roadmap
-
 ## 🖥️ System Provisioning (Ansible)
 
 To configure a machine, whether it be a fresh Server or a new Desktop/Laptop:
