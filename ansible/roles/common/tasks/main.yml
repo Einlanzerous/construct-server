@@ -25,6 +25,12 @@
     state: present
   tags: [common, sops]
 
+- name: Cleanup SOPS .deb
+  file:
+    path: "/tmp/sops.deb"
+    state: absent
+  tags: [common, sops]
+
 - name: Install community.sops collection (Local)
   command: ansible-galaxy collection install community.sops
   delegate_to: localhost
@@ -141,10 +147,26 @@
     force: no
 
 # --- 5. GEMINI CLI ---
-- name: Install Node.js and npm (Required for Gemini CLI)
+- name: Download NodeSource setup script
+  get_url:
+    url: https://deb.nodesource.com/setup_24.x
+    dest: /tmp/nodesource_setup.sh
+    mode: '0755'
+
+- name: Run NodeSource setup script
+  command: /tmp/nodesource_setup.sh
+  become: yes
+
+- name: Install Node.js (v24)
   apt:
-    name: [nodejs, npm]
+    name: nodejs
     state: present
+    update_cache: yes
+
+- name: Cleanup NodeSource setup script
+  file:
+    path: /tmp/nodesource_setup.sh
+    state: absent
 
 - name: Install Google Gemini CLI
   npm:
