@@ -8,6 +8,9 @@
       - libopus0
       - libboost-locale-dev
       - wakeonlan
+      - dconf-cli
+      - python3-psutil
+      - scrot
     state: present
     update_cache: yes
 
@@ -21,6 +24,12 @@
   apt:
     deb: "/tmp/sunshine.deb"
     state: present
+
+- name: Install Steam
+  include_tasks: steam.yml
+  tags: ['sunshine', 'steam']
+
+
 
 - name: Enable functionality for headless streaming (uinput)
   copy:
@@ -54,11 +63,7 @@
   register: debug_ls
   changed_when: false
 
-- name: Print Debug Info
-  debug:
-    msg: 
-      - "User ID info: {{ debug_id.stdout }}"
-      - "Device Permissions: {{ debug_ls.stdout_lines }}"
+
 
 - name: Ensure .config/sunshine directory exists
   file:
@@ -102,6 +107,11 @@
   register: sunshine_uid
   changed_when: false
 
+- name: Reload Udev Rules (Immediate)
+  shell: udevadm control --reload-rules && udevadm trigger
+  become: yes
+  changed_when: false
+
 - name: Ensure systemd user directory exists
   file:
     path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d"
@@ -135,6 +145,71 @@
   register: systemctl_result
   changed_when: "'Created symlink' in systemctl_result.stderr or 'Created symlink' in systemctl_result.stdout"
 
+- name: Deploy Sunshine wrapper script
+  template:
+    src: start-sunshine.sh.j2
+    dest: /usr/local/bin/start-sunshine.sh
+    mode: '0755'
+    owner: "{{ sunshine_user }}"
+    group: "{{ sunshine_user }}"
+
+- name: Deploy Verification Script
+  template:
+    src: verify-headless.sh.j2
+    dest: /usr/local/bin/verify-headless.sh
+    mode: '0755'
+
+- name: Remove Old Sunshine systemd override directory
+  file:
+    path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d"
+    state: absent
+
+
+
+- name: Create Systemd User Global Directory
+  file:
+    path: "/etc/systemd/user/sunshine.service.d"
+    state: directory
+    mode: '0755'
+
+- name: Create Sunshine systemd override file (Global Wrapper Script)
+  copy:
+    dest: "/etc/systemd/user/sunshine.service.d/override.conf"
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/local/bin/start-sunshine.sh
+    mode: '0644'
+  notify: Restart Sunshine
+
+- name: Remove Local Systemd Override (Cleanup)
+  file:
+    path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d/override.conf"
+    state: absent
+
+- name: Force Systemd User Daemon Reload
+  command: systemctl --user daemon-reload
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
+
+
+- name: Force Systemd User Daemon Reload
+  command: systemctl --user daemon-reload
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
+- name: Debug - List Systemd Config Directory
+  command: "ls -laR /home/{{ sunshine_user }}/.config/systemd"
+  register: systemd_dir_list
+  changed_when: false
+
+
+
 # Headless setup - GRUB
 - name: Check if nvidia-drm.modeset=1 is in GRUB
   lineinfile:
@@ -151,7 +226,6 @@
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="((?:(?!nvidia-drm\.modeset=1).)*?)"$'
     line: 'GRUB_CMDLINE_LINUX_DEFAULT="\1 nvidia-drm.modeset=1"'
-    backrefs: yes
     backrefs: yes
   notify: Update Grub
 
@@ -191,4 +265,41 @@
     - { regexp: '^#?AutomaticLogin=.*', line: 'AutomaticLogin={{ sunshine_user }}' }
     - { regexp: '^#?WaylandEnable=.*', line: 'WaylandEnable=false' }
   notify: Restart GDM
+
+# Power Management (Disable Sleep)
+- name: Mask systemd sleep targets
+  systemd:
+    name: "{{ item }}"
+    enabled: no
+    masked: yes
+  loop:
+    - sleep.target
+    - suspend.target
+    - hibernate.target
+    - hybrid-sleep.target
+
+- name: Disable GNOME Auto-suspend (AC)
+  dconf:
+    key: "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-type"
+    value: "'nothing'"
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
+- name: Disable GNOME Session Idle Delay
+  dconf:
+    key: "/org/gnome/desktop/session/idle-delay"
+    value: "uint32 0"
+  become: yes
+  become_user: "{{ sunshine_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
+
+- name: Ignore Lid Switch
+  lineinfile:
+    path: /etc/systemd/logind.conf
+    regexp: '^#?HandleLidSwitch='
+    line: 'HandleLidSwitch=ignore'
+  notify: Reload systemd user daemon
 

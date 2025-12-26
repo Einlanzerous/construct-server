@@ -1,0 +1,39 @@
+---
+- name: Check enabled architectures
+  command: dpkg --print-foreign-architectures
+  register: foreign_arch
+  changed_when: false
+
+- name: Add i386 architecture
+  command: dpkg --add-architecture i386
+  when: "'i386' not in foreign_arch.stdout"
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+  when: foreign_arch.changed or ('i386' not in foreign_arch.stdout)
+
+- name: Accept Steam EULA
+  debconf:
+    name: steam
+    question: steam/question
+    value: 'I AGREE'
+    vtype: select
+
+- name: Accept Steam EULA (License Note)
+  debconf:
+    name: steam
+    question: steam/license
+    value: ''
+    vtype: note
+
+- name: Install Steam
+  apt:
+    name:
+      - steam-installer
+      - steam-devices
+      - mesa-vulkan-drivers:i386
+      - libgl1-mesa-dri:i386
+      - libgl1:i386
+      - libglx-mesa0:i386
+    state: present

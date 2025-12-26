@@ -1,0 +1,67 @@
+#!/bin/bash
+# start-sunshine.sh
+# Wrapper script to set up environment for Sunshine in headless GDM environment
+
+exec 1> >(logger -s -t $(basename $0)) 2>&1
+
+echo "--- Sunshine Wrapper Starting at $(date) ---"
+echo "UserId: $(id)"
+echo "Groups: $(groups)"
+
+# 1. Set Display
+export DISPLAY=:0
+echo "Setting DISPLAY=$DISPLAY"
+
+# 2. Find XAUTHORITY
+# Try standard locations for GDM
+GDM_AUTH_DIR="/run/user/$(id -u)/gdm"
+if [ -d "$GDM_AUTH_DIR" ]; then
+    AUTH_FILE=$(find "$GDM_AUTH_DIR" -name "Xauthority" | head -n 1)
+    if [ -n "$AUTH_FILE" ]; then
+        export XAUTHORITY="$AUTH_FILE"
+        echo "Found XAUTHORITY via dir: $XAUTHORITY"
+    fi
+fi
+
+# Fallback: Try to find from running Xorg process
+if [ -z "$XAUTHORITY" ]; then
+    echo "Attempting to find XAUTHORITY from process list..."
+    AUTH_FROM_PROC=$(ps aux | grep Xorg | grep -v grep | grep -o '\-auth [^ ]*' | awk '{print $2}' | head -n 1)
+    if [ -n "$AUTH_FROM_PROC" ]; then
+        export XAUTHORITY="$AUTH_FROM_PROC"
+         echo "Found XAUTHORITY via proc: $XAUTHORITY"
+    fi
+fi
+
+if [ -z "$XAUTHORITY" ]; then
+    echo "WARNING: Could not determine XAUTHORITY. Sunshine might fail to capture screen."
+else
+    echo "Final XAUTHORITY: $XAUTHORITY"
+    # Check if we can read it
+    if [ -r "$XAUTHORITY" ]; then
+        echo "XAUTHORITY is readable."
+    else
+        echo "ERROR: XAUTHORITY is NOT readable by $(whoami)."
+        ls -l "$XAUTHORITY"
+    fi
+fi
+
+# 3. Debug Device Permissions
+echo "--- Device Permissions Debug ---"
+echo "/dev/uinput:"
+ls -l /dev/uinput
+echo "/dev/dri:"
+ls -l /dev/dri
+echo "Systemctl User Environment:"
+env
+
+# 4. Start Sunshine
+echo "Starting Sunshine..."
+# Use absolute path and ensure no silent failures
+if [ -x "/usr/bin/sunshine" ]; then
+    exec /usr/bin/sunshine
+else
+    echo "ERROR: /usr/bin/sunshine not found or not executable"
+    which sunshine
+    exit 1
+fi
