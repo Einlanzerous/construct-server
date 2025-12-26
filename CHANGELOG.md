@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/Einlanzerous/construct-server/compare/v1.2.0...v1.2.1) (2025-12-26)
+
+
+### Bug Fixes
+
+* Ensure node is at least version 24 ([754138b](https://github.com/Einlanzerous/construct-server/commit/754138b85ed9de91ebe8c0d2b706b569ed996b19))
+
 ## [1.2.0](https://github.com/Einlanzerous/construct-server/compare/v1.1.3...v1.2.0) (2025-12-20)
 
 
