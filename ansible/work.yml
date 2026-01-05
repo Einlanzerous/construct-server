@@ -81,7 +81,8 @@
 
     - name: Install DevOps CLI
       shell: |
-        git archive --remote=git@bitbucket.org:inindca/devops_cli_installer.git main install_devops_cli.sh | tail -n 3 +3 > install.sh && bash install
+        git archive --remote=git@bitbucket.org:inindca/devops_cli_installer.git main install_devops_cli.sh \
+          | tar -xO > install.sh && bash install.sh
       args:
         chdir: "/home/{{ user_name }}/genesys" # arbitrary temp location for install script
         creates: "/usr/local/bin/devops" # Assuming it installs here; preventing re-run if present
