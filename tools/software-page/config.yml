@@ -1,0 +1,22 @@
+software:
+  - name: Cursor
+    icon: "🖱️"
+    link: "https://cursor.sh/"
+  - name: VS Code
+    icon: "📝"
+    link: "https://code.visualstudio.com/"
+  - name: AntigravitySlack
+    icon: "💬"
+    link: "https://slack.com/" # Assuming standard slack since antigravityslack implies internal naming
+  - name: Firefox
+    icon: "🦊"
+    link: "https://www.mozilla.org/en-US/firefox/new/"
+  - name: Brave
+    icon: "🦁"
+    link: "https://brave.com/"
+  - name: Obsidian
+    icon: "📓"
+    link: "https://obsidian.md/"
+  - name: DevToys
+    icon: "🛠️"
+    link: "https://apps.microsoft.com/detail/9pgcv4v3bk4w?hl=en-us&gl=US"

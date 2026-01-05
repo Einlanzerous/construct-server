@@ -1,0 +1,89 @@
+---
+- name: Configure Work Laptop
+  hosts: work
+  become: true
+  vars:
+    work_env: genesys
+    # Placeholder; user should verify this variable or pass it in inventory/extra-vars if dynamic
+    work_email: changeme@genesys.com
+
+  roles:
+    - common
+    - desktop
+
+  tasks:
+    # --- 1. WORK DIRECTORY & GIT CONFIG ---
+    - name: Ensure ~/genesys directory exists
+      file:
+        path: "/home/{{ user_name }}/genesys"
+        state: directory
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+        mode: '0755'
+
+    - name: Create .gitconfig-work
+      copy:
+        dest: "/home/{{ user_name }}/.gitconfig-work"
+        content: |
+          [user]
+              email = {{ work_email }}
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+        mode: '0644'
+        force: no 
+
+    - name: Configure Global Git to include work config
+      community.general.git_config:
+        scope: global
+        name: "includeIf.gitdir:~/genesys/.path"
+        value: "~/.gitconfig-work"
+      become_user: "{{ user_name }}"
+
+    # --- 2. LANGUAGE SUPPORT ---
+    - name: Install Additional Languages (Python 3, Java)
+      apt:
+        name: 
+          - python3
+          - python3-pip
+          - default-jdk
+        state: present
+
+    # --- 3. REPOSITORIES ---
+    # Attempting to clone. Note: This requires SSH keys to be present and authorized on Bitbucket.
+    - name: Clone PureScale Node Utilities
+      git:
+        repo: 'git@bitbucket.org:inindca/purescale-node-utilities.git'
+        dest: "/home/{{ user_name }}/genesys/purescale-node-utilities"
+        accept_hostkey: yes
+      become_user: "{{ user_name }}"
+      ignore_errors: yes 
+
+    # --- 4. DEVOPS CLI ---
+    - name: Install DevOps CLI Dependencies
+      apt:
+        name:
+          - build-essential
+          - libssl-dev
+          - zlib1g-dev
+          - libbz2-dev
+          - libreadline-dev
+          - libsqlite3-dev
+          - curl
+          - git
+          - libncursesw5-dev
+          - xz-utils
+          - tk-dev
+          - libxml2-dev
+          - libxmlsec1-dev
+          - libffi-dev
+          - liblzma-dev
+        state: present
+
+    - name: Install DevOps CLI
+      shell: |
+        git archive --remote=git@bitbucket.org:inindca/devops_cli_installer.git main install_devops_cli.sh | tail -n 3 +3 > install.sh && bash install
+      args:
+        chdir: "/home/{{ user_name }}/genesys" # arbitrary temp location for install script
+        creates: "/usr/local/bin/devops" # Assuming it installs here; preventing re-run if present
+      become_user: "{{ user_name }}"
+      ignore_errors: yes # Might fail if SSH keys aren't set up yet
