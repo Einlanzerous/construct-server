@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/Einlanzerous/construct-server/compare/v1.2.1...v1.3.0) (2026-02-02)
+
+
+### Features
+
+* support work laptop ([749a373](https://github.com/Einlanzerous/construct-server/commit/749a373a44d75a0d6c7f5dbd95c5bd1e9b0fc0ef))
+
+
+### Bug Fixes
+
+* address error on archive command ([f8bc55e](https://github.com/Einlanzerous/construct-server/commit/f8bc55ef9768d3eb735f8943e26120839639dcc1))
+* Better handle errors on cli install ([5b68cfa](https://github.com/Einlanzerous/construct-server/commit/5b68cfa6678134609ee6a9318776e92e8ea26516))
+
 ## [1.2.1](https://github.com/Einlanzerous/construct-server/compare/v1.2.0...v1.2.1) (2025-12-26)
 
 
