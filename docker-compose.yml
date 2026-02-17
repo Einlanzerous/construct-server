@@ -167,8 +167,9 @@ services:
     container_name: vox-loop
     restart: unless-stopped
     ports:
-      - "4000:4000"
+      - "${VOX_LOOP_PORT}:${VOX_LOOP_PORT}"
     environment:
+      - PORT=${VOX_LOOP_PORT}
       - DATABASE_URL=postgres://vox_loop_user:${VOX_LOOP_DB_PASSWORD}@postgres:5432/vox_loop?sslmode=disable
     networks:
       - construct_net
@@ -180,9 +181,9 @@ services:
     container_name: cook_book
     restart: unless-stopped
     ports:
-      - "4001:4001"
+      - "${COOK_BOOK_PORT}:${COOK_BOOK_PORT}"
     environment:
-      - PORT=4001
+      - PORT=${COOK_BOOK_PORT}
       - DATABASE_URL=postgres://cook_book_user:${COOK_BOOK_DB_PASSWORD}@postgres:5432/cook_book?sslmode=disable
     networks:
       - construct_net
