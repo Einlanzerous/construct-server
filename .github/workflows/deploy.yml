@@ -8,6 +8,7 @@ on:
       - '.env.example'
       - 'config/**'
       - 'homer/**'
+      - 'db/**'
 
 jobs:
   deploy:
@@ -25,6 +26,12 @@ jobs:
             exit 1
           fi
           echo "$PROD_ENV_FILE" > .env
+
+      - name: Ensure construct_net network exists
+        run: docker network create construct_net 2>/dev/null || true
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_PAT }}" | docker login ghcr.io -u "${{ secrets.GITHUB_USER }}" --password-stdin
 
       - name: Deploy Stack
         # Pulls new images, recreates containers with config changes, removes old ones
