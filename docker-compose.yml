@@ -158,16 +158,15 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - VOX_LOOP_DB_PASSWORD=${VOX_LOOP_DB_PASSWORD}
       - COOK_BOOK_DB_PASSWORD=${COOK_BOOK_DB_PASSWORD}
+      - SYNCV3_DB_PASSWORD=${SYNCV3_DB_PASSWORD}
     networks:
       - construct_net
 
-  # --- APP SERVICES (separate repos, images TBD) ---
+  # --- MATRIX STACK (vox-loop) ---
   vox-loop:
     image: ghcr.io/einlanzerous/vox-loop:latest
     container_name: vox-loop
     restart: unless-stopped
-    ports:
-      - "${VOX_LOOP_PORT}:8008"
     environment:
       - DATABASE_URL=postgres://vox_loop_user:${VOX_LOOP_DB_PASSWORD}@postgres:5432/vox_loop?sslmode=disable
       - POSTGRES_USER=vox_loop_user
@@ -182,6 +181,36 @@ services:
     depends_on:
       - postgres
 
+  sliding-sync:
+    image: ghcr.io/matrix-org/sliding-sync:latest
+    container_name: sliding-sync
+    restart: unless-stopped
+    environment:
+      - SYNCV3_SERVER=http://vox-loop:8008
+      - SYNCV3_DB=postgres://syncv3_user:${SYNCV3_DB_PASSWORD}@postgres:5432/syncv3?sslmode=disable
+      - SYNCV3_SECRET=${SYNCV3_SECRET}
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+      - vox-loop
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "${VOX_LOOP_PORT}:8080"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks:
+      - construct_net
+    depends_on:
+      - vox-loop
+      - sliding-sync
+
+  # --- APP SERVICES ---
   cook_book:
     image: ghcr.io/einlanzerous/cook_book:latest
     container_name: cook_book
@@ -206,6 +235,7 @@ volumes:
   postgres_data:
   vox_loop_config:
   vox_loop_media:
+  caddy_data:
 
 networks:
   construct_net:

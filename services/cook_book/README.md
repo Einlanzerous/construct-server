@@ -1,12 +1,19 @@
 # cook_book
 
-TypeScript service with its own `cook_book` database on the shared PostgreSQL instance. The application code lives in its own repo — this directory is a reference for how it connects to the construct-server stack.
+TypeScript recipe service with its own `cook_book` database on the shared PostgreSQL instance. The application code lives in its [own repo](https://github.com/Einlanzerous/cook_book) — this directory is a reference for how it connects to the construct-server stack.
 
 ## Database
 
 - **Database:** `cook_book`
 - **User:** `cook_book_user`
 - **Connection:** `DATABASE_URL` is injected by docker-compose
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `COOK_BOOK_PORT` | Host port for the service (default: 4001) |
+| `COOK_BOOK_DB_PASSWORD` | Password for `cook_book_user` |
 
 ## Migration Strategy
 

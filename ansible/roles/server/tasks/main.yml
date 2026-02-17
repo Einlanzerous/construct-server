@@ -160,6 +160,8 @@
     - POSTGRES_PASSWORD
     - VOX_LOOP_DB_PASSWORD
     - COOK_BOOK_DB_PASSWORD
+    - SYNCV3_DB_PASSWORD
+    - SYNCV3_SECRET
 
 - name: Copy .env file to server
   copy:

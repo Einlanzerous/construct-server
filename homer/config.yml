@@ -50,8 +50,8 @@ services:
     icon: "fas fa-cube"
     items:
       - name: "vox-loop"
-        icon: "fas fa-microphone"
-        subtitle: "Voice Service"
+        icon: "fas fa-comments"
+        subtitle: "Matrix Homeserver (Dendrite)"
         url: "http://imperial-construct:4000"
         target: "_blank"
       - name: "cook_book"

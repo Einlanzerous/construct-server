@@ -9,4 +9,8 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     CREATE USER cook_book_user WITH PASSWORD '$COOK_BOOK_DB_PASSWORD';
     CREATE DATABASE cook_book OWNER cook_book_user;
     GRANT ALL PRIVILEGES ON DATABASE cook_book TO cook_book_user;
+
+    CREATE USER syncv3_user WITH PASSWORD '$SYNCV3_DB_PASSWORD';
+    CREATE DATABASE syncv3 OWNER syncv3_user;
+    GRANT ALL PRIVILEGES ON DATABASE syncv3 TO syncv3_user;
 EOSQL

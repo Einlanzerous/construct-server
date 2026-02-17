@@ -12,6 +12,7 @@ on:
       - 'config/**'
       - 'homer/**'
       - 'db/**'
+      - 'caddy/**'
 
 jobs:
   deploy:
@@ -42,7 +43,7 @@ jobs:
 
       - name: Deploy Stack
         # Pulls new images, recreates containers with config changes, removes old ones
-        run: docker compose pull postgres vox-loop cook_book && docker compose up -d --remove-orphans
+        run: docker compose pull postgres vox-loop sliding-sync caddy cook_book && docker compose up -d --remove-orphans
 
       - name: Prune Images
         # Clean up old docker images to save disk space

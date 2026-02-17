@@ -25,9 +25,13 @@ The following services are currently active:
 ### 🗄️ Database
 -   **[PostgreSQL 16](https://www.postgresql.org/)**: Shared instance providing isolated databases for application services. Each service gets its own database and user — see [Architecture](#-database-architecture) below.
 
+### 💬 Matrix Stack (vox-loop)
+-   **[vox-loop (Dendrite)](services/vox-loop/)**: Self-hosted Matrix homeserver backed by the `vox_loop` database.
+-   **[Sliding Sync](https://github.com/matrix-org/sliding-sync)**: Matrix sliding sync proxy for modern clients (Element X). Uses its own `syncv3` database.
+-   **[Caddy](https://caddyserver.com/)**: Reverse proxy routing `.well-known`, sliding sync, and `_matrix/*` traffic to the appropriate service.
+
 ### 🔧 Application Services
--   **[vox-loop](services/vox-loop/)** *(placeholder)*: Go service with its own `vox_loop` database.
--   **[cook_book](services/cook_book/)** *(placeholder)*: TypeScript/Prisma service with its own `cook_book` database.
+-   **[cook_book](services/cook_book/)**: TypeScript/Prisma recipe service with its own `cook_book` database.
 
 ### 🎮 Gaming & Remote Play
 -   **[Sunshine](https://github.com/LizardByte/Sunshine)**: High-performance game streaming host for Moonlight.
@@ -87,10 +91,11 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 
 | Service | Database | User | Migrations |
 |---------|----------|------|------------|
-| vox-loop | `vox_loop` | `vox_loop_user` | [golang-migrate](https://github.com/golang-migrate/migrate) — run on startup |
+| vox-loop (Dendrite) | `vox_loop` | `vox_loop_user` | Dendrite auto-migrates on startup |
+| sliding-sync | `syncv3` | `syncv3_user` | Auto-migrates on startup |
 | cook_book | `cook_book` | `cook_book_user` | [Prisma Migrate](https://www.prisma.io/docs/concepts/components/prisma-migrate) — `prisma migrate deploy` at entrypoint |
 
-- Databases and users are created automatically by `db/init-db.sql` on first volume initialization.
+- Databases and users are created automatically by `db/init-db.sh` on first volume initialization.
 - Each service owns its own migrations and runs them independently at startup — no init-container needed.
 - Postgres is internal-only on the `construct_net` bridge network (no exposed port).
 - Existing services (Ollama, Open WebUI, etc.) are **not** on `construct_net` yet — migration is incremental.

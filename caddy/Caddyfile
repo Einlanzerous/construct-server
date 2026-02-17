@@ -1,0 +1,27 @@
+:8080 {
+	# Well-known delegation for Matrix clients
+	handle /.well-known/matrix/client {
+		header Content-Type application/json
+		respond `{"m.homeserver":{"base_url":"http://imperial-construct:4000"},"org.matrix.msc3575.proxy":{"url":"http://imperial-construct:4000"}}`
+	}
+
+	# Well-known delegation for Matrix federation
+	handle /.well-known/matrix/server {
+		header Content-Type application/json
+		respond `{"m.server":"imperial-construct:4000"}`
+	}
+
+	# Sliding sync proxy
+	handle /_matrix/client/unstable/org.matrix.msc3575/sync {
+		reverse_proxy sliding-sync:8008
+	}
+
+	# All other Matrix traffic to Dendrite
+	handle /_matrix/* {
+		reverse_proxy vox-loop:8008
+	}
+
+	handle /* {
+		respond "vox-loop Matrix server" 200
+	}
+}
