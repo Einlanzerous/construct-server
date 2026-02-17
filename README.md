@@ -100,6 +100,8 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 - Postgres is internal-only on the `construct_net` bridge network (no exposed port).
 - Existing services (Ollama, Open WebUI, etc.) are **not** on `construct_net` yet — migration is incremental.
 
+> **TODO — Uptime Kuma monitoring:** Add Uptime Kuma to `construct_net` so it can monitor services internally (e.g. `http://vox-loop:8008`, `http://cook_book:4001`), then add HTTP monitors via the Kuma UI. Currently deferred because Kuma also monitors AI stack services that aren't on `construct_net` yet.
+
 ### Makefile Targets
 
 | Target | Description |
