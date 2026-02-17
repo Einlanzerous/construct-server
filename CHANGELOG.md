@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/Einlanzerous/construct-server/compare/v1.5.1...v1.6.0) (2026-02-17)
+
+
+### Features
+
+* Use env secrets instead of repo ([873f5e1](https://github.com/Einlanzerous/construct-server/commit/873f5e16ea486e1cd41cbac1646242c66e90bd77))
+
+
+### Bug Fixes
+
+* Have service cook_book get correct port number ([0ee708d](https://github.com/Einlanzerous/construct-server/commit/0ee708d345a687d94e071be8526534ab103559c2))
+* Have service cook_book get correct port number ([fe4f387](https://github.com/Einlanzerous/construct-server/commit/fe4f387c7f2a986a520c6dded86ee578024e5286))
+
 ## [1.5.1](https://github.com/Einlanzerous/construct-server/compare/v1.5.0...v1.5.1) (2026-02-17)
 
 
