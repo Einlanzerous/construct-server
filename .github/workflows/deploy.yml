@@ -16,6 +16,7 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+    environment: home-server
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
