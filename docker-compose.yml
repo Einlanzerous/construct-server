@@ -153,7 +153,7 @@ services:
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./db/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - ./db/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     environment:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - VOX_LOOP_DB_PASSWORD=${VOX_LOOP_DB_PASSWORD}
@@ -171,7 +171,10 @@ services:
     environment:
       - PORT=${VOX_LOOP_PORT}
       - DATABASE_URL=postgres://vox_loop_user:${VOX_LOOP_DB_PASSWORD}@postgres:5432/vox_loop?sslmode=disable
+      - POSTGRES_USER=vox_loop_user
       - POSTGRES_PASSWORD=${VOX_LOOP_DB_PASSWORD}
+      - POSTGRES_DB=vox_loop
+      - POSTGRES_HOST=postgres
     volumes:
       - vox_loop_config:/etc/dendrite
       - vox_loop_media:/var/dendrite/media
