@@ -136,6 +136,29 @@
     version: main
     force: yes
 
+- name: Read .env file contents
+  set_fact:
+    env_file_content: "{{ lookup('file', playbook_dir + '/../.env') }}"
+
+- name: Validate required .env keys are present
+  assert:
+    that:
+      - "env_file_content is search(item)"
+    fail_msg: "Missing required key '{{ item }}' in .env file"
+  loop:
+    - DD_API_KEY
+    - DD_SITE
+    - DD_TAGS
+    - SEMAPHORE_ADMIN_PASSWORD
+    - SEMAPHORE_ADMIN_NAME
+    - SEMAPHORE_ADMIN_EMAIL
+    - SEMAPHORE_ADMIN
+    - GITHUB_USER
+    - GITHUB_PAT
+    - POSTGRES_PASSWORD
+    - VOX_LOOP_DB_PASSWORD
+    - COOK_BOOK_DB_PASSWORD
+
 - name: Copy .env file to server
   copy:
     src: "{{ playbook_dir }}/../.env"
@@ -179,6 +202,21 @@
     name: construct_net
     driver: bridge
     state: present
+
+- name: Load .env variables
+  slurp:
+    src: "/home/{{ user_name }}/construct-server/.env"
+  register: env_file_raw
+
+- name: Parse .env into facts
+  set_fact:
+    dotenv: "{{ dict(env_file_raw.content | b64decode | regex_findall('(?m)^([A-Z_]+)=(.*)$')) }}"
+
+- name: Log in to GitHub Container Registry
+  become_user: "{{ user_name }}"
+  shell: echo "{{ dotenv.GITHUB_PAT }}" | docker login ghcr.io -u "{{ dotenv.GITHUB_USER }}" --password-stdin
+  no_log: true
+  changed_when: false
 
 - name: Start Docker Stack
   become_user: "{{ user_name }}"

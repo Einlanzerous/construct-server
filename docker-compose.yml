@@ -173,9 +173,9 @@ services:
     depends_on:
       - postgres
 
-  cook-book:
-    image: ghcr.io/einlanzerous/cook-book:latest
-    container_name: cook-book
+  cook_book:
+    image: ghcr.io/einlanzerous/cook_book:latest
+    container_name: cook_book
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgres://cook_book_user:${COOK_BOOK_DB_PASSWORD}@postgres:5432/cook_book?sslmode=disable
