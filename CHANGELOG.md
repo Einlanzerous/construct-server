@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/Einlanzerous/construct-server/compare/v1.7.1...v1.7.2) (2026-02-17)
+
+
+### Bug Fixes
+
+* pipe correctly ([3858a71](https://github.com/Einlanzerous/construct-server/commit/3858a719223ee21a13d2f2244baa52fd4d7d4e6d))
+
 ## [1.7.1](https://github.com/Einlanzerous/construct-server/compare/v1.7.0...v1.7.1) (2026-02-17)
 
 
