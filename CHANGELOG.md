@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.1](https://github.com/Einlanzerous/construct-server/compare/v1.6.0...v1.6.1) (2026-02-17)
+
+
+### Bug Fixes
+
+* Resolve connection issue with postgres for vox-loop ([c2f2481](https://github.com/Einlanzerous/construct-server/commit/c2f2481a7865208ab748b549c5d311ae76329d3a))
+
 ## [1.6.0](https://github.com/Einlanzerous/construct-server/compare/v1.5.1...v1.6.0) (2026-02-17)
 
 
