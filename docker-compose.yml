@@ -167,9 +167,8 @@ services:
     container_name: vox-loop
     restart: unless-stopped
     ports:
-      - "${VOX_LOOP_PORT}:${VOX_LOOP_PORT}"
+      - "${VOX_LOOP_PORT}:8008"
     environment:
-      - PORT=${VOX_LOOP_PORT}
       - DATABASE_URL=postgres://vox_loop_user:${VOX_LOOP_DB_PASSWORD}@postgres:5432/vox_loop?sslmode=disable
       - POSTGRES_USER=vox_loop_user
       - POSTGRES_PASSWORD=${VOX_LOOP_DB_PASSWORD}
