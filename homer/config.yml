@@ -46,6 +46,20 @@ services:
         url: "http://imperial-construct:3002"
         target: "_blank"
 
+  - name: "Applications"
+    icon: "fas fa-cube"
+    items:
+      - name: "vox-loop"
+        icon: "fas fa-microphone"
+        subtitle: "Voice Service"
+        url: "http://imperial-construct:4000"
+        target: "_blank"
+      - name: "cook_book"
+        icon: "fas fa-utensils"
+        subtitle: "Recipe Service"
+        url: "http://imperial-construct:4001"
+        target: "_blank"
+
   - name: "File Sharing"
     icon: "fas fa-hdd"
     items:

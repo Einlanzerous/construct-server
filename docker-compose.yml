@@ -166,6 +166,8 @@ services:
     image: ghcr.io/einlanzerous/vox-loop:latest
     container_name: vox-loop
     restart: unless-stopped
+    ports:
+      - "4000:4000"
     environment:
       - DATABASE_URL=postgres://vox_loop_user:${VOX_LOOP_DB_PASSWORD}@postgres:5432/vox_loop?sslmode=disable
     networks:
@@ -177,6 +179,8 @@ services:
     image: ghcr.io/einlanzerous/cook_book:latest
     container_name: cook_book
     restart: unless-stopped
+    ports:
+      - "4001:4001"
     environment:
       - DATABASE_URL=postgres://cook_book_user:${COOK_BOOK_DB_PASSWORD}@postgres:5432/cook_book?sslmode=disable
     networks:
