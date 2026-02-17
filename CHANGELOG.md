@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.1](https://github.com/Einlanzerous/construct-server/compare/v1.7.0...v1.7.1) (2026-02-17)
+
+
+### Bug Fixes
+
+* better support db init conditions ([a1f909e](https://github.com/Einlanzerous/construct-server/commit/a1f909e4068ac7b43ea55b6570fd00b299a9c4fe))
+* Missed some conditionals ([1d6f20e](https://github.com/Einlanzerous/construct-server/commit/1d6f20e2ff86fd3fc8dc24fc2aacdcdaff6318a5))
+
 ## [1.7.0](https://github.com/Einlanzerous/construct-server/compare/v1.6.4...v1.7.0) (2026-02-17)
 
 
