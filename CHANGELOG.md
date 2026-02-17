@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.7.0](https://github.com/Einlanzerous/construct-server/compare/v1.6.4...v1.7.0) (2026-02-17)
+
+
+### Features
+
+* Implement sliding-sync and caddy to support Element X ([75f20c4](https://github.com/Einlanzerous/construct-server/commit/75f20c42d2941172381321481f36d3dff64bda73))
+
+
+### Bug Fixes
+
+* Make db init idempotent ([710b7d5](https://github.com/Einlanzerous/construct-server/commit/710b7d585b170fbde9a2fa15ac21c8ad19dfe863))
+* Small user change ([3e193dd](https://github.com/Einlanzerous/construct-server/commit/3e193dd435b0ab23c6f26afdd49cabaf93b00803))
+
 ## [1.6.4](https://github.com/Einlanzerous/construct-server/compare/v1.6.3...v1.6.4) (2026-02-17)
 
 
