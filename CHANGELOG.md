@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.0](https://github.com/Einlanzerous/construct-server/compare/v1.3.0...v1.4.0) (2026-02-17)
+
+
+### Features
+
+* Actually expose services and show links via homer ([822a844](https://github.com/Einlanzerous/construct-server/commit/822a8442f2b2be7c5da94fa98bd8ebbb924a3cfa))
+* New services added (vox-loop, cook-book), docker network, postgres, and some text updates ([db1f8a7](https://github.com/Einlanzerous/construct-server/commit/db1f8a703d45600c5a0ba42daa58691e00f434e6))
+* Support signing into ghcr via ansible ([94787dd](https://github.com/Einlanzerous/construct-server/commit/94787dd8d5c20af58447cf6f5ed0032aa6a3128b))
+
+
+### Bug Fixes
+
+* Ensure docker network created before docker up ([4b6870d](https://github.com/Einlanzerous/construct-server/commit/4b6870d52a03411aabad4855135afde2ca4be1d5))
+* Use github variable single file for secrets ([d69824f](https://github.com/Einlanzerous/construct-server/commit/d69824fea4f2a0137e06f2dcb37c804da31caf02))
+
 ## [1.3.0](https://github.com/Einlanzerous/construct-server/compare/v1.2.1...v1.3.0) (2026-02-02)
 
 
