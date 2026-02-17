@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/Einlanzerous/construct-server/compare/v1.4.0...v1.4.1) (2026-02-17)
+
+
+### Bug Fixes
+
+* workflow updates should trigger deploys to construct ([f325570](https://github.com/Einlanzerous/construct-server/commit/f325570e9b7dba94c843246f46e5b5601251673a))
+
 ## [1.4.0](https://github.com/Einlanzerous/construct-server/compare/v1.3.0...v1.4.0) (2026-02-17)
 
 
