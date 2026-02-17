@@ -5,27 +5,21 @@ set -e
 # Usage: ensure_db <user> <password> <database>
 ensure_db() {
     local user=$1 pass=$2 db=$3
+    local psql_cmd="psql --username $POSTGRES_USER --dbname $POSTGRES_DB"
 
-    psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
-        DO \$\$
-        BEGIN
-            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '$user') THEN
-                CREATE ROLE $user WITH LOGIN PASSWORD '$pass';
-            ELSE
-                ALTER ROLE $user WITH PASSWORD '$pass';
-            END IF;
-        END
-        \$\$;
-EOSQL
-
-    # CREATE DATABASE cannot run inside a DO block, so check separately
-    local db_exists
-    db_exists=$(psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" -tAc "SELECT 1 FROM pg_database WHERE datname = '$db'")
-    if [ "$db_exists" != "1" ]; then
-        psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" -c "CREATE DATABASE $db OWNER $user;"
+    # Create or update role
+    if $psql_cmd -tAc "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '$user'" | grep -q 1; then
+        $psql_cmd -c "ALTER ROLE $user WITH PASSWORD '$pass';"
+    else
+        $psql_cmd -c "CREATE ROLE $user WITH LOGIN PASSWORD '$pass';"
     fi
 
-    psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" -c "GRANT ALL PRIVILEGES ON DATABASE $db TO $user;"
+    # Create database if missing
+    if ! $psql_cmd -tAc "SELECT 1 FROM pg_database WHERE datname = '$db'" | grep -q 1; then
+        $psql_cmd -c "CREATE DATABASE $db OWNER $user;"
+    fi
+
+    $psql_cmd -c "GRANT ALL PRIVILEGES ON DATABASE $db TO $user;"
 }
 
 ensure_db vox_loop_user "$VOX_LOOP_DB_PASSWORD" vox_loop
