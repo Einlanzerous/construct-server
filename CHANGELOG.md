@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.3](https://github.com/Einlanzerous/construct-server/compare/v1.7.2...v1.7.3) (2026-02-17)
+
+
+### Bug Fixes
+
+* update caddy to match vox-loop ([228066e](https://github.com/Einlanzerous/construct-server/commit/228066e7b9b284e89c237793f5a59f39bd6f39ac))
+
 ## [1.7.2](https://github.com/Einlanzerous/construct-server/compare/v1.7.1...v1.7.2) (2026-02-17)
 
 
