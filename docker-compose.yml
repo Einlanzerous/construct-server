@@ -146,6 +146,44 @@ services:
     volumes:
       - semaphore_data:/etc/semaphore
 
+  # --- DATABASE (Shared PostgreSQL) ---
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - VOX_LOOP_DB_PASSWORD=${VOX_LOOP_DB_PASSWORD}
+      - COOK_BOOK_DB_PASSWORD=${COOK_BOOK_DB_PASSWORD}
+    networks:
+      - construct_net
+
+  # --- APP SERVICES (separate repos, images TBD) ---
+  vox-loop:
+    image: ghcr.io/einlanzerous/vox-loop:latest
+    container_name: vox-loop
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgres://vox_loop_user:${VOX_LOOP_DB_PASSWORD}@postgres:5432/vox_loop?sslmode=disable
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+
+  cook-book:
+    image: ghcr.io/einlanzerous/cook-book:latest
+    container_name: cook-book
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgres://cook_book_user:${COOK_BOOK_DB_PASSWORD}@postgres:5432/cook_book?sslmode=disable
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+
 volumes:
   open-webui:
   ollama_data:
@@ -153,3 +191,8 @@ volumes:
   copyparty_data:
   uptime-kuma-data:
   semaphore_data:
+  postgres_data:
+
+networks:
+  construct_net:
+    external: true

@@ -22,6 +22,13 @@ The following services are currently active:
 ### 📂 Storage & File Sharing
 -   **[Copyparty](https://github.com/9001/copyparty)**: Lightweight file server serving files from the 1TB NVMe drive (`/data`).
 
+### 🗄️ Database
+-   **[PostgreSQL 16](https://www.postgresql.org/)**: Shared instance providing isolated databases for application services. Each service gets its own database and user — see [Architecture](#-database-architecture) below.
+
+### 🔧 Application Services
+-   **[vox-loop](services/vox-loop/)** *(placeholder)*: Go service with its own `vox_loop` database.
+-   **[cook_book](services/cook_book/)** *(placeholder)*: TypeScript/Prisma service with its own `cook_book` database.
+
 ### 🎮 Gaming & Remote Play
 -   **[Sunshine](https://github.com/LizardByte/Sunshine)**: High-performance game streaming host for Moonlight.
 
@@ -45,16 +52,27 @@ The following services are currently active:
     ```
 
 2.  **Configure Environment Variables:**
-    Copy the example file and update it with your secrets (specifically your Datadog API Key).
+    Copy the example file and update it with your secrets (Datadog API Key, Postgres passwords, etc.).
     ```bash
     cp .env.example .env
-    # Edit .env with your favorite text editor
     nano .env
     ```
 
-3.  **Start the Stack:**
+3.  **Create the Docker network:**
+    The postgres and application services communicate over an external bridge network.
     ```bash
-    docker-compose up -d
+    make network
+    ```
+
+4.  **Start the Stack:**
+    ```bash
+    make up
+    # or: docker compose up -d
+    ```
+
+5.  **Verify the database** *(optional)*:
+    ```bash
+    make db-check
     ```
 
 ### 🔄 Automation & CI/CD
@@ -62,6 +80,31 @@ The following services are currently active:
 -   **[GitHub Actions Runner](https://github.com/actions/runner)**: Self-hosted runner for deploying changes to this server automatically.
 -   **[n8n](https://n8n.io)**: Workflow automation.
 -   **[Semaphore UI](https://semaphoreui.com)**: Modern UI for running Ansible playbooks.
+
+## 🗄️ Database Architecture
+
+A single PostgreSQL 16 instance provides logically isolated databases for application services:
+
+| Service | Database | User | Migrations |
+|---------|----------|------|------------|
+| vox-loop | `vox_loop` | `vox_loop_user` | [golang-migrate](https://github.com/golang-migrate/migrate) — run on startup |
+| cook_book | `cook_book` | `cook_book_user` | [Prisma Migrate](https://www.prisma.io/docs/concepts/components/prisma-migrate) — `prisma migrate deploy` at entrypoint |
+
+- Databases and users are created automatically by `db/init-db.sql` on first volume initialization.
+- Each service owns its own migrations and runs them independently at startup — no init-container needed.
+- Postgres is internal-only on the `construct_net` bridge network (no exposed port).
+- Existing services (Ollama, Open WebUI, etc.) are **not** on `construct_net` yet — migration is incremental.
+
+### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `make network` | Create the `construct_net` Docker bridge network |
+| `make up` | Create network + start full stack |
+| `make down` | Stop full stack |
+| `make db-up` | Start only the postgres service |
+| `make db-shell` | Open a psql shell to postgres |
+| `make db-check` | Verify databases and user access |
 
 ## 🧰 Helper Tools
 - **[Software Page Generator](tools/software-page/README.md)**: Creates a static HTML page with links to essential software downloads.
