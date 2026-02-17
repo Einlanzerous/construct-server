@@ -173,8 +173,8 @@ services:
       - DATABASE_URL=postgres://vox_loop_user:${VOX_LOOP_DB_PASSWORD}@postgres:5432/vox_loop?sslmode=disable
       - POSTGRES_PASSWORD=${VOX_LOOP_DB_PASSWORD}
     volumes:
-      - ./vox-loop/config:/etc/dendrite
-      - ./vox-loop/media:/var/dendrite/media
+      - vox_loop_config:/etc/dendrite
+      - vox_loop_media:/var/dendrite/media
     networks:
       - construct_net
     depends_on:
@@ -202,6 +202,8 @@ volumes:
   uptime-kuma-data:
   semaphore_data:
   postgres_data:
+  vox_loop_config:
+  vox_loop_media:
 
 networks:
   construct_net:
