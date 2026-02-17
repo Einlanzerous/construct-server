@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.2](https://github.com/Einlanzerous/construct-server/compare/v1.6.1...v1.6.2) (2026-02-17)
+
+
+### Bug Fixes
+
+* Need to use named volumes ([02286f8](https://github.com/Einlanzerous/construct-server/commit/02286f826caf2dfeac525eeefd290166b3a0f15d))
+
 ## [1.6.1](https://github.com/Einlanzerous/construct-server/compare/v1.6.0...v1.6.1) (2026-02-17)
 
 
