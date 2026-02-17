@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/Einlanzerous/construct-server/compare/v1.4.1...v1.5.0) (2026-02-17)
+
+
+### Features
+
+* Accept trigger jobs from other repos ([408f466](https://github.com/Einlanzerous/construct-server/commit/408f466ebba889294af5ec501a1ef0e57a1765b2))
+
 ## [1.4.1](https://github.com/Einlanzerous/construct-server/compare/v1.4.0...v1.4.1) (2026-02-17)
 
 
