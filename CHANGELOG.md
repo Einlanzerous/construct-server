@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.3](https://github.com/Einlanzerous/construct-server/compare/v1.6.2...v1.6.3) (2026-02-17)
+
+
+### Bug Fixes
+
+* Better handle talking to postgres ([78780ee](https://github.com/Einlanzerous/construct-server/commit/78780ee0346094c5ae0f1521b315f579622ef462))
+
 ## [1.6.2](https://github.com/Einlanzerous/construct-server/compare/v1.6.1...v1.6.2) (2026-02-17)
 
 
