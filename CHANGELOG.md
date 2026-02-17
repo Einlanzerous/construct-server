@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/Einlanzerous/construct-server/compare/v1.5.0...v1.5.1) (2026-02-17)
+
+
+### Bug Fixes
+
+* Properly grab new images for managed services only ([5a5a26e](https://github.com/Einlanzerous/construct-server/commit/5a5a26ec7954e60034df634cbedc7009f8f8b0e2))
+
 ## [1.5.0](https://github.com/Einlanzerous/construct-server/compare/v1.4.1...v1.5.0) (2026-02-17)
 
 
