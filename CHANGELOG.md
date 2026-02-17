@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.4](https://github.com/Einlanzerous/construct-server/compare/v1.6.3...v1.6.4) (2026-02-17)
+
+
+### Bug Fixes
+
+* correct port for vox-loop ([36bb577](https://github.com/Einlanzerous/construct-server/commit/36bb577f61ccb87bd38c60092396292fe5860670))
+* formatting issues ([9214c65](https://github.com/Einlanzerous/construct-server/commit/9214c65a60e6a40e7aaad2a91dd45e7489ba975a))
+
 ## [1.6.3](https://github.com/Einlanzerous/construct-server/compare/v1.6.2...v1.6.3) (2026-02-17)
 
 
