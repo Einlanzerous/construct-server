@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.6](https://github.com/Einlanzerous/construct-server/compare/v1.7.5...v1.7.6) (2026-02-18)
+
+
+### Bug Fixes
+
+* forever caddy, move port to 8008 ([e2c74cf](https://github.com/Einlanzerous/construct-server/commit/e2c74cfae0efbedf25a0437e1b1965395bb017fb))
+
 ## [1.7.5](https://github.com/Einlanzerous/construct-server/compare/v1.7.4...v1.7.5) (2026-02-18)
 
 
