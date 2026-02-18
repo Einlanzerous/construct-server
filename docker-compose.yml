@@ -167,6 +167,12 @@ services:
     image: ghcr.io/einlanzerous/vox-loop:latest
     container_name: vox-loop
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8008/_matrix/client/versions || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     environment:
       - DATABASE_URL=postgres://vox_loop_user:${VOX_LOOP_DB_PASSWORD}@postgres:5432/vox_loop?sslmode=disable
       - POSTGRES_USER=vox_loop_user
@@ -192,8 +198,10 @@ services:
     networks:
       - construct_net
     depends_on:
-      - postgres
-      - vox-loop
+      vox-loop:
+        condition: service_healthy
+      postgres:
+        condition: service_started
 
   caddy:
     image: caddy:2-alpine
@@ -207,8 +215,10 @@ services:
     networks:
       - construct_net
     depends_on:
-      - vox-loop
-      - sliding-sync
+      vox-loop:
+        condition: service_healthy
+      sliding-sync:
+        condition: service_started
 
   # --- APP SERVICES ---
   cook_book:
