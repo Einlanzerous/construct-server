@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.4](https://github.com/Einlanzerous/construct-server/compare/v1.7.3...v1.7.4) (2026-02-18)
+
+
+### Bug Fixes
+
+* Order of operations for matrix syn paths ([c07bb86](https://github.com/Einlanzerous/construct-server/commit/c07bb868a4af581d3425655f93289b026e9a168e))
+* still missing order, fixed in compose ([bee8add](https://github.com/Einlanzerous/construct-server/commit/bee8addae6115442640570804d207cf3df3d6576))
+
 ## [1.7.3](https://github.com/Einlanzerous/construct-server/compare/v1.7.2...v1.7.3) (2026-02-17)
 
 
