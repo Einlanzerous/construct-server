@@ -15,15 +15,15 @@
 	}
 
 	handle /_matrix/client/unstable/org.matrix.msc3575/sync {
-		reverse_proxy sliding-sync:8009
+		reverse_proxy sliding-sync:8008
 	}
 
 	handle /_matrix/client/unstable/org.matrix.simplified_msc3575/sync {
-		reverse_proxy sliding-sync:8009
+		reverse_proxy sliding-sync:8008
 	}
 
 	handle /_synapse/client/sliding-sync/* {
-		reverse_proxy sliding-sync:8009
+		reverse_proxy sliding-sync:8008
 	}
 
 	handle /_matrix/* {
