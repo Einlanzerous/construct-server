@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.5](https://github.com/Einlanzerous/construct-server/compare/v1.7.4...v1.7.5) (2026-02-18)
+
+
+### Bug Fixes
+
+* more caddy fixes ([de7902a](https://github.com/Einlanzerous/construct-server/commit/de7902a5380a5d6efeefba10264045d7ed02f586))
+* more caddy fixes ([4c68f6c](https://github.com/Einlanzerous/construct-server/commit/4c68f6ce015d96fe99c85d84bbd48a00cf00b819))
+
 ## [1.7.4](https://github.com/Einlanzerous/construct-server/compare/v1.7.3...v1.7.4) (2026-02-18)
 
 
