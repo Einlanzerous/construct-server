@@ -18,8 +18,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Install ansible-lint
+        run: pip install ansible-lint
+
       - name: Install Ansible Collections
         run: ansible-galaxy collection install -r ansible/requirements.yml
 
       - name: Run ansible-lint
-        uses: ansible/ansible-lint@v26
+        run: ansible-lint
