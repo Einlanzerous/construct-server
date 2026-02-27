@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.8.0](https://github.com/Einlanzerous/construct-server/compare/v1.7.6...v1.8.0) (2026-02-27)
+
+
+### Features
+
+* DRY up roles, add ansible-lint CI, fix p10k templating, and parameterize github runner version ([1818cba](https://github.com/Einlanzerous/construct-server/commit/1818cbac26ff6c10af57a5c54339d0ec891029c2))
+
+
+### Bug Fixes
+
+* CI fixes ([5846bdd](https://github.com/Einlanzerous/construct-server/commit/5846bdd0e4577b9b6bbc04d8da589d58242b286e))
+* CI fixes ([9127dfe](https://github.com/Einlanzerous/construct-server/commit/9127dfe15e4b967a1e38d7bf3a242cc8a13b93de))
+
 ## [1.7.6](https://github.com/Einlanzerous/construct-server/compare/v1.7.5...v1.7.6) (2026-02-18)
 
 
