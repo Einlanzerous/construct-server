@@ -10,21 +10,21 @@
 
 - name: Update apt cache
   apt:
-    update_cache: yes
+    update_cache: true
   when: foreign_arch.changed or ('i386' not in foreign_arch.stdout)
 
 - name: Accept Steam EULA
   debconf:
     name: steam
     question: steam/question
-    value: 'I AGREE'
+    value: "I AGREE"
     vtype: select
 
 - name: Accept Steam EULA (License Note)
   debconf:
     name: steam
     question: steam/license
-    value: ''
+    value: ""
     vtype: note
 
 - name: Install Steam

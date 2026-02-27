@@ -19,7 +19,7 @@
         state: directory
         owner: "{{ user_name }}"
         group: "{{ user_name }}"
-        mode: '0755'
+        mode: "0755"
 
     - name: Create .gitconfig-work
       copy:
@@ -29,8 +29,8 @@
               email = {{ work_email }}
         owner: "{{ user_name }}"
         group: "{{ user_name }}"
-        mode: '0644'
-        force: no 
+        mode: "0644"
+        force: false
 
     - name: Configure Global Git to include work config
       community.general.git_config:
@@ -42,7 +42,7 @@
     # --- 2. LANGUAGE SUPPORT ---
     - name: Install Additional Languages (Python 3, Java)
       apt:
-        name: 
+        name:
           - python3
           - python3-pip
           - default-jdk
@@ -52,11 +52,11 @@
     # Attempting to clone. Note: This requires SSH keys to be present and authorized on Bitbucket.
     - name: Clone PureScale Node Utilities
       git:
-        repo: 'git@bitbucket.org:inindca/purescale-node-utilities.git'
+        repo: "git@bitbucket.org:inindca/purescale-node-utilities.git"
         dest: "/home/{{ user_name }}/genesys/purescale-node-utilities"
-        accept_hostkey: yes
+        accept_hostkey: true
       become_user: "{{ user_name }}"
-      ignore_errors: yes 
+      ignore_errors: true
 
     # --- 4. DEVOPS CLI ---
     - name: Install DevOps CLI Dependencies
@@ -84,7 +84,7 @@
         path: /usr/local/bin/devops
       register: devops_cli_stat
 
-    - name: Download DevOps CLI Installer
+    - name: Download DevOps CLI Installer  # noqa: command-instead-of-module
       shell: |
         git archive --remote=git@bitbucket.org:inindca/devops_cli_installer.git main install_devops_cli.sh \
           | tar -xO > install.sh
@@ -94,9 +94,9 @@
       when: not devops_cli_stat.stat.exists
 
     - name: Run DevOps CLI Installer
-      shell: bash install.sh
+      ansible.builtin.command: bash install.sh
       args:
         chdir: "/home/{{ user_name }}/genesys"
       become: true
       when: not devops_cli_stat.stat.exists
-      ignore_errors: yes
+      ignore_errors: true

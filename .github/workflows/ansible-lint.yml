@@ -1,0 +1,22 @@
+name: Ansible Lint
+
+on:
+  push:
+    paths:
+      - 'ansible/**'
+      - '.ansible-lint'
+  pull_request:
+    paths:
+      - 'ansible/**'
+      - '.ansible-lint'
+
+jobs:
+  lint:
+    name: Lint Ansible
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run ansible-lint
+        uses: ansible/ansible-lint@v26

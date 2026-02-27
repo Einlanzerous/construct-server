@@ -1,0 +1,26 @@
+---
+# Reusable task file for adding a signed APT repository.
+# Required variables: apt_repo_name, apt_repo_key_url, apt_repo_keyring_path,
+#                     apt_repo_list_name, apt_repo_string
+
+- name: "Download GPG key: {{ apt_repo_name }}"
+  get_url:
+    url: "{{ apt_repo_key_url }}"
+    dest: "/tmp/{{ apt_repo_list_name }}.gpg"
+    mode: "0644"
+    force: true
+
+- name: "Dearmor GPG key: {{ apt_repo_name }}"
+  shell: "gpg --dearmor < /tmp/{{ apt_repo_list_name }}.gpg > {{ apt_repo_keyring_path }}"
+  changed_when: true
+
+- name: "Remove existing APT repository list: {{ apt_repo_name }}"
+  file:
+    path: "/etc/apt/sources.list.d/{{ apt_repo_list_name }}.list"
+    state: absent
+
+- name: "Add APT repository: {{ apt_repo_name }}"
+  apt_repository:
+    repo: "{{ apt_repo_string }}"
+    state: present
+    filename: "{{ apt_repo_list_name }}"

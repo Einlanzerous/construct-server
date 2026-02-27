@@ -6,7 +6,7 @@
     - name: Find conflicting Docker source files
       shell: grep -l "download.docker.com" /etc/apt/sources.list.d/*
       register: docker_conflicts
-      ignore_errors: yes
+      ignore_errors: true
       changed_when: false
       failed_when: docker_conflicts.rc != 0 and docker_conflicts.rc != 1
 
@@ -20,13 +20,13 @@
     - name: Remove Docker from main sources.list
       replace:
         path: /etc/apt/sources.list
-        regexp: '^deb.*download\.docker\.com.*'
-        replace: ''
+        regexp: "^deb.*download\\.docker\\.com.*"
+        replace: ""
 
     - name: Find conflicting Nvidia source files
       shell: grep -l "nvidia" /etc/apt/sources.list.d/*
       register: nvidia_conflicts
-      ignore_errors: yes
+      ignore_errors: true
       changed_when: false
       failed_when: nvidia_conflicts.rc != 0 and nvidia_conflicts.rc != 1
 
@@ -40,8 +40,8 @@
     - name: Remove Nvidia from main sources.list
       replace:
         path: /etc/apt/sources.list
-        regexp: '^deb.*nvidia.*'
-        replace: ''
+        regexp: "^deb.*nvidia.*"
+        replace: ""
   roles:
     - common
 
@@ -55,9 +55,9 @@
       community.sops.load_vars:
         file: secrets.sops.yml
       tags: [always]
-      ignore_errors: yes
+      ignore_errors: true
       register: sops_load
-    
+
     - name: Fail if secrets were not loaded
       fail:
         msg: "Failed to load secrets.sops.yml. Ensure you have migrated secrets to SOPS."
@@ -75,8 +75,8 @@
   become: true
   roles:
     - desktop
-  
-  # Handlers must be reachable by the play that notifies them. 
+
+  # Handlers must be reachable by the play that notifies them.
   # Since server role notifies 'Restart Docker', we should ensure handlers are available.
-  # The simple way is to define them in the roles, which we did. 
+  # The simple way is to define them in the roles, which we did.
   # Ansible handles role dependencies naturally.

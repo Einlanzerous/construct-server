@@ -12,13 +12,13 @@
       - python3-psutil
       - scrot
     state: present
-    update_cache: yes
+    update_cache: true
 
 - name: Download Sunshine .deb
   get_url:
     url: "{{ sunshine_deb_url }}"
     dest: "/tmp/sunshine.deb"
-    mode: '0644'
+    mode: "0644"
 
 - name: Install Sunshine
   apt:
@@ -27,22 +27,19 @@
 
 - name: Install Steam
   include_tasks: steam.yml
-  tags: ['sunshine', 'steam']
-
-
-
+  tags: ["sunshine", "steam"]
 - name: Enable functionality for headless streaming (uinput)
   copy:
     src: 85-sunshine-input.rules
     dest: /etc/udev/rules.d/85-sunshine-input.rules
-    mode: '0660'
+    mode: "0660"
   notify: Reload udev
 
 - name: Add user to video and input groups
   user:
     name: "{{ sunshine_user }}"
     groups: input,video,render
-    append: yes
+    append: true
 
 - name: Resolve Sunshine binary path
   shell: readlink -f $(which sunshine)
@@ -57,21 +54,20 @@
   command: "id {{ sunshine_user }}"
   register: debug_id
   changed_when: false
+  tags: [debug]
 
 - name: DEBUG - Check Device Permissions
   shell: "ls -l /dev/dri /dev/uinput || true"
   register: debug_ls
   changed_when: false
-
-
-
+  tags: [debug]
 - name: Ensure .config/sunshine directory exists
   file:
     path: "{{ sunshine_config_dir }}"
     state: directory
     owner: "{{ sunshine_user }}"
     group: "{{ sunshine_user }}"
-    mode: '0755'
+    mode: "0755"
 
 - name: Configure sunshine.conf
   template:
@@ -79,7 +75,7 @@
     dest: "{{ sunshine_config_dir }}/sunshine.conf"
     owner: "{{ sunshine_user }}"
     group: "{{ sunshine_user }}"
-    mode: '0644'
+    mode: "0644"
   notify: Restart Sunshine
 
 - name: Configure apps.json
@@ -88,14 +84,14 @@
     dest: "{{ sunshine_config_dir }}/apps.json"
     owner: "{{ sunshine_user }}"
     group: "{{ sunshine_user }}"
-    mode: '0644'
+    mode: "0644"
   notify: Restart Sunshine
 
 - name: Install wake-desktop script
   template:
     src: wake-desktop.sh.j2
     dest: /usr/local/bin/wake-desktop
-    mode: '0755'
+    mode: "0755"
 
 - name: Enable linger for Sunshine user
   command: "loginctl enable-linger {{ sunshine_user }}"
@@ -109,7 +105,7 @@
 
 - name: Reload Udev Rules (Immediate)
   shell: udevadm control --reload-rules && udevadm trigger
-  become: yes
+  become: true
   changed_when: false
 
 - name: Ensure systemd user directory exists
@@ -118,7 +114,7 @@
     state: directory
     owner: "{{ sunshine_user }}"
     group: "{{ sunshine_user }}"
-    mode: '0755'
+    mode: "0755"
 
 - name: Configure Sunshine service environment (DISPLAY and Restart)
   copy:
@@ -131,14 +127,14 @@
       RestartSec=10s
     owner: "{{ sunshine_user }}"
     group: "{{ sunshine_user }}"
-    mode: '0644'
-  notify: 
+    mode: "0644"
+  notify:
     - Reload systemd user daemon
     - Restart Sunshine
 
-- name: Enable and start Sunshine user service (Force)
+- name: Enable and start Sunshine user service (Force)  # noqa: command-instead-of-module
   command: "systemctl --user enable --now sunshine"
-  become: yes
+  become: true
   become_user: "{{ sunshine_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
@@ -149,7 +145,7 @@
   template:
     src: start-sunshine.sh.j2
     dest: /usr/local/bin/start-sunshine.sh
-    mode: '0755'
+    mode: "0755"
     owner: "{{ sunshine_user }}"
     group: "{{ sunshine_user }}"
 
@@ -157,20 +153,18 @@
   template:
     src: verify-headless.sh.j2
     dest: /usr/local/bin/verify-headless.sh
-    mode: '0755'
+    mode: "0755"
 
 - name: Remove Old Sunshine systemd override directory
   file:
     path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d"
     state: absent
 
-
-
 - name: Create Systemd User Global Directory
   file:
     path: "/etc/systemd/user/sunshine.service.d"
     state: directory
-    mode: '0755'
+    mode: "0755"
 
 - name: Create Sunshine systemd override file (Global Wrapper Script)
   copy:
@@ -179,7 +173,7 @@
       [Service]
       ExecStart=
       ExecStart=/usr/local/bin/start-sunshine.sh
-    mode: '0644'
+    mode: "0644"
   notify: Restart Sunshine
 
 - name: Remove Local Systemd Override (Cleanup)
@@ -187,36 +181,25 @@
     path: "/home/{{ sunshine_user }}/.config/systemd/user/sunshine.service.d/override.conf"
     state: absent
 
-- name: Force Systemd User Daemon Reload
+- name: Force Systemd User Daemon Reload  # noqa: command-instead-of-module
   command: systemctl --user daemon-reload
-  become: yes
+  become: true
   become_user: "{{ sunshine_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
 
-
-
-- name: Force Systemd User Daemon Reload
-  command: systemctl --user daemon-reload
-  become: yes
-  become_user: "{{ sunshine_user }}"
-  environment:
-    XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
-
-- name: Debug - List Systemd Config Directory
+- name: DEBUG - List Systemd Config Directory
   command: "ls -laR /home/{{ sunshine_user }}/.config/systemd"
   register: systemd_dir_list
   changed_when: false
-
-
-
+  tags: [debug]
 # Headless setup - GRUB
 - name: Check if nvidia-drm.modeset=1 is in GRUB
   lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="(.*)nvidia-drm.modeset=1(.*)"'
     state: absent
-  check_mode: yes
+  check_mode: true
   register: grub_check
   failed_when: false
   changed_when: false
@@ -226,7 +209,7 @@
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="((?:(?!nvidia-drm\.modeset=1).)*?)"$'
     line: 'GRUB_CMDLINE_LINUX_DEFAULT="\1 nvidia-drm.modeset=1"'
-    backrefs: yes
+    backrefs: true
   notify: Update Grub
 
 # Headless Display Setup (EDID + Autologin)
@@ -241,19 +224,19 @@
   file:
     path: /etc/X11/edid
     state: directory
-    mode: '0755'
+    mode: "0755"
 
 - name: Copy 1080p EDID binary
   copy:
     src: 1080p-edid.bin
     dest: /etc/X11/edid/1080p-edid.bin
-    mode: '0644'
+    mode: "0644"
 
 - name: Configure Xorg for fake monitor
   template:
     src: xorg.conf.j2
     dest: /etc/X11/xorg.conf
-    backup: yes
+    backup: true
 
 - name: Configure GDM3 Auto-login
   lineinfile:
@@ -261,17 +244,17 @@
     regexp: "{{ item.regexp }}"
     line: "{{ item.line }}"
   loop:
-    - { regexp: '^#?AutomaticLoginEnable=.*', line: 'AutomaticLoginEnable=True' }
-    - { regexp: '^#?AutomaticLogin=.*', line: 'AutomaticLogin={{ sunshine_user }}' }
-    - { regexp: '^#?WaylandEnable=.*', line: 'WaylandEnable=false' }
+    - { regexp: "^#?AutomaticLoginEnable=.*", line: "AutomaticLoginEnable=True" }
+    - { regexp: "^#?AutomaticLogin=.*", line: "AutomaticLogin={{ sunshine_user }}" }
+    - { regexp: "^#?WaylandEnable=.*", line: "WaylandEnable=false" }
   notify: Restart GDM
 
 # Power Management (Disable Sleep)
 - name: Mask systemd sleep targets
   systemd:
     name: "{{ item }}"
-    enabled: no
-    masked: yes
+    enabled: false
+    masked: true
   loop:
     - sleep.target
     - suspend.target
@@ -282,7 +265,7 @@
   dconf:
     key: "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-type"
     value: "'nothing'"
-  become: yes
+  become: true
   become_user: "{{ sunshine_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
@@ -291,7 +274,7 @@
   dconf:
     key: "/org/gnome/desktop/session/idle-delay"
     value: "uint32 0"
-  become: yes
+  become: true
   become_user: "{{ sunshine_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
@@ -299,7 +282,6 @@
 - name: Ignore Lid Switch
   lineinfile:
     path: /etc/systemd/logind.conf
-    regexp: '^#?HandleLidSwitch='
-    line: 'HandleLidSwitch=ignore'
+    regexp: "^#?HandleLidSwitch="
+    line: "HandleLidSwitch=ignore"
   notify: Reload systemd user daemon
-

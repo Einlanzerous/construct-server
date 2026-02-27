@@ -1,17 +1,17 @@
 ---
 - name: Reload udev
   shell: udevadm control --reload-rules && udevadm trigger
-  
-- name: Restart Sunshine
+
+- name: Restart Sunshine  # noqa: command-instead-of-module
   command: systemctl --user restart sunshine
-  become: yes
+  become: true
   become_user: "{{ sunshine_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"
 
-- name: Reload systemd user daemon
+- name: Reload systemd user daemon  # noqa: command-instead-of-module
   command: systemctl --user daemon-reload
-  become: yes
+  become: true
   become_user: "{{ sunshine_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ sunshine_uid.stdout }}"

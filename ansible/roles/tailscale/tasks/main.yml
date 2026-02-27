@@ -8,14 +8,14 @@
   file:
     path: /usr/share/keyrings
     state: directory
-    mode: '0755'
+    mode: "0755"
 
 - name: Download Tailscale GPG Key
   get_url:
     url: https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
     dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
-    mode: '0644'
-    force: yes
+    mode: "0644"
+    force: true
 
 - name: Add Tailscale Repository
   apt_repository:
@@ -29,6 +29,6 @@
     state: present
 
 - name: Authenticate Tailscale (if key provided)
-  shell: tailscale up --authkey={{ tailscale_auth_key }}
+  ansible.builtin.command: tailscale up --authkey={{ tailscale_auth_key }}
   when: tailscale_auth_key is defined
-  ignore_errors: yes
+  ignore_errors: true

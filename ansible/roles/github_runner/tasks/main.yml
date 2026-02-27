@@ -10,11 +10,11 @@
     state: directory
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
-    mode: '0755'
+    mode: "0755"
 
 - name: Download GitHub Actions Runner
   get_url:
-    url: "https://github.com/actions/runner/releases/download/v2.321.0/actions-runner-linux-x64-2.321.0.tar.gz"
+    url: "https://github.com/actions/runner/releases/download/v{{ github_runner_version }}/actions-runner-linux-x64-{{ github_runner_version }}.tar.gz"
     dest: "/home/{{ user_name }}/actions-runner/actions-runner.tar.gz"
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
@@ -24,7 +24,7 @@
   unarchive:
     src: "/home/{{ user_name }}/actions-runner/actions-runner.tar.gz"
     dest: "/home/{{ user_name }}/actions-runner"
-    remote_src: yes
+    remote_src: true
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
   when: not runner_configured.stat.exists
@@ -33,7 +33,7 @@
   command:
     cmd: "./config.sh --url {{ repo_url | regex_replace('\\.git$', '') }} --token {{ github_runner_token }} --unattended --replace"
     chdir: "/home/{{ user_name }}/actions-runner"
-  become: yes
+  become: true
   become_user: "{{ user_name }}"
   when: not runner_configured.stat.exists and github_runner_token is defined
 
@@ -41,7 +41,7 @@
   command:
     cmd: "./svc.sh install"
     chdir: "/home/{{ user_name }}/actions-runner"
-  become: yes
+  become: true
   register: svc_install
   failed_when: "svc_install.rc != 0 and 'exists' not in svc_install.stderr"
   changed_when: "svc_install.rc == 0"
@@ -50,5 +50,5 @@
   command:
     cmd: "./svc.sh start"
     chdir: "/home/{{ user_name }}/actions-runner"
-  become: yes
-  ignore_errors: yes
+  become: true
+  ignore_errors: true

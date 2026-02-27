@@ -5,27 +5,15 @@
     name: gnupg
     state: present
 
-- name: Download Docker GPG key
-  get_url:
-    url: https://download.docker.com/linux/ubuntu/gpg
-    dest: /tmp/docker.gpg
-    mode: '0644'
-    force: yes
-
-- name: Dearmor Docker GPG key
-  shell: gpg --dearmor < /tmp/docker.gpg > /usr/share/keyrings/docker-archive-keyring.gpg
-  # Removed 'creates' to force update of key if it's broken or old
-
-- name: Remove existing Docker repository file to avoid conflicts
-  file:
-    path: /etc/apt/sources.list.d/docker.list
-    state: absent
-
-- name: Add Docker Repository
-  apt_repository:
-    repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
-    state: present
-    filename: docker
+- name: Set up Docker APT repository
+  include_tasks: setup_apt_repo.yml
+  vars:
+    apt_repo_name: Docker
+    apt_repo_key_url: https://download.docker.com/linux/ubuntu/gpg
+    apt_repo_keyring_path: /usr/share/keyrings/docker-archive-keyring.gpg
+    apt_repo_list_name: docker
+    apt_repo_string: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release
+      }} stable"
 
 - name: Install Docker Components
   apt:
@@ -40,7 +28,7 @@
 - name: Check Secure Boot State
   command: mokutil --sb-state
   register: secure_boot_state
-  ignore_errors: yes
+  ignore_errors: true
   changed_when: false
 
 - name: Fail if Secure Boot is Enabled (Blocks Nvidia Drivers)
@@ -60,35 +48,23 @@
 - name: Verify Nvidia Driver connection (nvidia-smi)
   command: nvidia-smi
   register: nvidia_smi_check
-  ignore_errors: yes
+  ignore_errors: true
   changed_when: false
 
 - name: Warn if Nvidia Driver is not loaded
   debug:
-    msg: "WARNING: nvidia-smi failed. Drivers may not be loaded. Ensure Secure Boot is disabled or MOK is enrolled. You may need to run 'sudo update-initramfs -u' and reboot."
+    msg: "WARNING: nvidia-smi failed. Drivers may not be loaded. Ensure Secure Boot is disabled or MOK is enrolled. You may need to run 'sudo update-initramfs -u'
+      and reboot."
   when: nvidia_smi_check.rc != 0
 
-- name: Download Nvidia GPG Key
-  get_url:
-    url: https://nvidia.github.io/libnvidia-container/gpgkey
-    dest: /tmp/nvidia.pub
-    mode: '0644'
-    force: yes
-
-- name: Dearmor Nvidia GPG Key
-  shell: gpg --dearmor < /tmp/nvidia.pub > /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-  # Removed 'creates' to force update of key if it's broken or old
-
-- name: Remove existing Nvidia repository file to avoid conflicts
-  file:
-    path: /etc/apt/sources.list.d/nvidia-container-toolkit.list
-    state: absent
-
-- name: Add Nvidia Toolkit Repository
-  apt_repository:
-    repo: "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /"
-    state: present
-    filename: nvidia-container-toolkit
+- name: Set up Nvidia Container Toolkit APT repository
+  include_tasks: setup_apt_repo.yml
+  vars:
+    apt_repo_name: "Nvidia Container Toolkit"
+    apt_repo_key_url: https://nvidia.github.io/libnvidia-container/gpgkey
+    apt_repo_keyring_path: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    apt_repo_list_name: nvidia-container-toolkit
+    apt_repo_string: "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /"
 
 - name: Install Nvidia Container Toolkit
   apt:
@@ -96,19 +72,18 @@
     state: present
 
 - name: Generate CDI specification (Force modern mode)
-  shell: nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+  ansible.builtin.command: nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
   notify: Restart Docker
 
 - name: Configure Docker to use Nvidia Runtime
-  shell: nvidia-ctk runtime configure --runtime=docker
-  # In a real scenario we'd use a handler, but defining it here for simplicity or ensuring it runs
+  ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
   notify: Restart Docker
 
 - name: Add user to Docker group
   user:
     name: "{{ user_name }}"
     groups: docker
-    append: yes
+    append: true
 
 - name: Ensure /data directory is owned by user (for Copyparty)
   file:
@@ -116,16 +91,16 @@
     state: directory
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
-    mode: '0755'
+    mode: "0755"
 
 - name: Ensure homer directory is owned by user
   file:
     path: "/home/{{ user_name }}/construct-server/homer"
     state: directory
-    recurse: yes
+    recurse: true
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
-    mode: '0755'
+    mode: "0755"
 
 # --- 3. DEPLOYMENT (Clone the Repo) ---
 - name: Clone Construct Monorepo
@@ -134,7 +109,7 @@
     repo: "{{ repo_url | default('https://github.com/Einlanzerous/construct-server.git') }}"
     dest: "/home/{{ user_name }}/construct-server"
     version: main
-    force: yes
+    force: true
 
 - name: Read .env file contents
   set_fact:
@@ -169,8 +144,8 @@
     dest: "/home/{{ user_name }}/construct-server/.env"
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
-    mode: '0600'
-    force: yes
+    mode: "0600"
+    force: true
   notify: Restart Docker
 
 - name: Ensure config directory exists
@@ -179,7 +154,7 @@
     state: directory
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
-    mode: '0755'
+    mode: "0755"
 
 - name: Create copyparty configuration
   copy:
@@ -192,13 +167,13 @@
         /w
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
-    mode: '0644'
+    mode: "0644"
 
 - name: Patch docker-compose.yml to mount copyparty config
   lineinfile:
     path: "/home/{{ user_name }}/construct-server/docker-compose.yml"
-    insertafter: '      - /data:/w/hdd'
-    line: '      - ./config/copyparty.conf:/cfg/copyparty.conf'
+    insertafter: "      - /data:/w/hdd"
+    line: "      - ./config/copyparty.conf:/cfg/copyparty.conf"
     state: present
 
 - name: Ensure construct_net Docker network exists
@@ -224,7 +199,7 @@
 
 - name: Start Docker Stack
   become_user: "{{ user_name }}"
-  shell: docker compose up -d
+  ansible.builtin.command: docker compose up -d
   args:
     chdir: "/home/{{ user_name }}/construct-server"
   register: docker_stack_start
@@ -233,11 +208,7 @@
 - name: Pull Ollama Models
   become_user: "{{ user_name }}"
   command: "docker exec ollama ollama pull {{ item }}"
-  loop:
-    - gemma3:4b
-    - gemma3:12b
-    - mistral-nemo
-    - qwen2.5-coder:7b
+  loop: "{{ ollama_models }}"
   register: ollama_pull
   changed_when: "'success' in ollama_pull.stdout"
-  ignore_errors: yes
+  ignore_errors: true

@@ -1,0 +1,6 @@
+---
+ollama_models:
+  - gemma3:4b
+  - gemma3:12b
+  - mistral-nemo
+  - qwen2.5-coder:7b

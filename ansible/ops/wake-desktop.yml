@@ -7,7 +7,7 @@
       command: /usr/local/bin/wake-desktop
       register: result
       changed_when: result.rc == 0
-    
+
     - name: Show output
       debug:
         msg: "{{ result.stdout }}"

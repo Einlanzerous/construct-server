@@ -1,7 +1,7 @@
 ---
 - name: Redirect to new Site Playbook
   hosts: all
-  gather_facts: no
+  gather_facts: false
   tasks:
     - name: Fail with instruction
       fail:

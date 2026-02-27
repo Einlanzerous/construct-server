@@ -1,0 +1,24 @@
+---
+profile: moderate
+
+skip_list:
+  # FQCN for builtin modules is verbose and not universally adopted; short names are unambiguous
+  - fqcn[action-core]
+  - fqcn[action]
+  # Variables shared across roles via inventory (user_name, repo_url, etc.) cannot be prefixed
+  - var-naming[no-role-prefix]
+  # become escalation is defined at the play level in site.yml; task-level become_user is correct
+  - partial-become[task]
+  # curl|bash is intentional for fnm and oh-my-zsh upstream installers
+  - risky-shell-pipe
+  # Zsh plugins and themes are intentionally pulled from HEAD (upstream best practice)
+  - latest[git]
+  # Stack startup ordering is managed via docker compose directly, not Ansible handlers
+  - no-handler
+
+warn_list:
+  - yaml[line-length]
+
+exclude_paths:
+  - ansible/secrets.yml
+  - ansible/secrets.sops.yml
