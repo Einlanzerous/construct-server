@@ -1,4 +1,3 @@
-
 services:
   # --- AI & LLM STACK ---
   ollama:
@@ -58,7 +57,7 @@ services:
     volumes:
       - copyparty_data:/w
       - /data:/w/hdd
-      - ./config/copyparty.conf:/cfg/copyparty.conf 
+      - ./config/copyparty.conf:/cfg/copyparty.conf
     environment:
       - E=idk  # Enable basic drag-and-drop upload
 

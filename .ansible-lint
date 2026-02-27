@@ -22,3 +22,5 @@ warn_list:
 exclude_paths:
   - ansible/secrets.yml
   - ansible/secrets.sops.yml
+  - docker-compose.yml
+  - homer/

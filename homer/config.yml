@@ -30,7 +30,7 @@ services:
         subtitle: "Gemma & Llama"
         tag: "Local"
         url: "http://imperial-construct:3000"
-        target: "_blank" 
+        target: "_blank"
 
   - name: "Automation"
     icon: "fas fa-robot"
