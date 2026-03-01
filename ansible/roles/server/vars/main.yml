@@ -1,6 +1,5 @@
 ---
 ollama_models:
-  - gemma3:4b
-  - gemma3:12b
-  - mistral-nemo
-  - qwen2.5-coder:7b
+  - phi4-reasoning:14b   # Your heavy logic and system design thinker
+  - gemma3:12b           # Your primary coding and daily driver
+  - gemma3:4b            # Your fast, low-VRAM utility model

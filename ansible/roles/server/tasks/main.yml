@@ -212,3 +212,16 @@
   register: ollama_pull
   changed_when: "'success' in ollama_pull.stdout"
   ignore_errors: true
+
+- name: Get installed Ollama models
+  become_user: "{{ user_name }}"
+  command: docker exec ollama ollama list
+  register: ollama_list
+  changed_when: false
+
+- name: Remove unlisted Ollama models
+  become_user: "{{ user_name }}"
+  command: "docker exec ollama ollama rm {{ item }}"
+  loop: "{{ ollama_list.stdout_lines[1:] | map('split') | map('first') | list }}"
+  when: item not in ollama_models
+  changed_when: true
