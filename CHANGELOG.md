@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.0](https://github.com/Einlanzerous/construct-server/compare/v1.8.0...v1.9.0) (2026-03-02)
+
+
+### Features
+
+* model updates for ansible, include pruning ([507427f](https://github.com/Einlanzerous/construct-server/commit/507427f00c894260a4b9c2d4b14fb5eada932548))
+
+
+### Bug Fixes
+
+* address ansible-lint errors ([ee2cad0](https://github.com/Einlanzerous/construct-server/commit/ee2cad08213fdb050c93c830e8f58f7ec7117131))
+
 ## [1.8.0](https://github.com/Einlanzerous/construct-server/compare/v1.7.6...v1.8.0) (2026-02-27)
 
 
