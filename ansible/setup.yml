@@ -5,4 +5,6 @@
   tasks:
     - name: Fail with instruction
       fail:
-        msg: "The 'setup.yml' playbook is deprecated. Please run 'ansible-playbook -i ansible/inventory.ini ansible/site.yml' instead to use the new role-based setup."
+        msg: >-
+          The 'setup.yml' playbook is deprecated.
+          Please run 'ansible-playbook -i ansible/inventory.ini ansible/site.yml' instead to use the new role-based setup.

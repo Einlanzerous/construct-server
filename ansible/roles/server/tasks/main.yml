@@ -12,8 +12,9 @@
     apt_repo_key_url: https://download.docker.com/linux/ubuntu/gpg
     apt_repo_keyring_path: /usr/share/keyrings/docker-archive-keyring.gpg
     apt_repo_list_name: docker
-    apt_repo_string: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release
-      }} stable"
+    apt_repo_string: >-
+      deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+      https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
 
 - name: Install Docker Components
   apt:
@@ -33,7 +34,9 @@
 
 - name: Fail if Secure Boot is Enabled (Blocks Nvidia Drivers)
   fail:
-    msg: "CRITICAL: Secure Boot is ENABLED. This prevents the Nvidia driver from loading. Please reboot into your BIOS and DISABLE Secure Boot, then re-run this playbook."
+    msg: >-
+      CRITICAL: Secure Boot is ENABLED. This prevents the Nvidia driver from loading.
+      Please reboot into your BIOS and DISABLE Secure Boot, then re-run this playbook.
   when: "'SecureBoot enabled' in secure_boot_state.stdout"
 
 # --- 2. NVIDIA DRIVERS (The 3080 Pass-Through) ---
@@ -53,8 +56,9 @@
 
 - name: Warn if Nvidia Driver is not loaded
   debug:
-    msg: "WARNING: nvidia-smi failed. Drivers may not be loaded. Ensure Secure Boot is disabled or MOK is enrolled. You may need to run 'sudo update-initramfs -u'
-      and reboot."
+    msg: >-
+      WARNING: nvidia-smi failed. Drivers may not be loaded. Ensure Secure Boot is disabled or MOK is enrolled.
+      You may need to run 'sudo update-initramfs -u' and reboot.
   when: nvidia_smi_check.rc != 0
 
 - name: Set up Nvidia Container Toolkit APT repository

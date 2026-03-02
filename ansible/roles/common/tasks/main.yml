@@ -132,7 +132,7 @@
 
 - name: Generate SSH key if not present
   become_user: "{{ user_name }}"
-  openssh_keypair:
+  community.crypto.openssh_keypair:
     path: "/home/{{ user_name }}/.ssh/id_ed25519"
     type: ed25519
     state: present

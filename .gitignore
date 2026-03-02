@@ -10,6 +10,10 @@ ansible/secrets.yml
 *.retry
 *.log
 
+# Vox-loop (Dendrite) secrets
+vox-loop/config/dendrite.yaml
+vox-loop/config/matrix_key.pem
+
 # System
 .DS_Store
 
