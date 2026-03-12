@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/Einlanzerous/construct-server/compare/v1.10.1...v1.11.0) (2026-03-12)
+
+
+### Features
+
+* Support new aperture hrefs ([c9c09f3](https://github.com/Einlanzerous/construct-server/commit/c9c09f3bfb15164105843627121183f0052994e1))
+
 ## [1.10.1](https://github.com/Einlanzerous/construct-server/compare/v1.10.0...v1.10.1) (2026-03-12)
 
 
