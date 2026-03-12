@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/Einlanzerous/construct-server/compare/v1.9.0...v1.10.0) (2026-03-12)
+
+
+### Features
+
+* Add Aperture support ([b3e9c13](https://github.com/Einlanzerous/construct-server/commit/b3e9c131d47ee284cb5d88c09e069bc6ecdcd94b))
+
 ## [1.9.0](https://github.com/Einlanzerous/construct-server/compare/v1.8.0...v1.9.0) (2026-03-02)
 
 
