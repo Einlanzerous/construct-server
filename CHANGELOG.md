@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.1](https://github.com/Einlanzerous/construct-server/compare/v1.10.0...v1.10.1) (2026-03-12)
+
+
+### Bug Fixes
+
+* address container errors ([ff49521](https://github.com/Einlanzerous/construct-server/commit/ff4952123b807a85c8dc177d1d4a82cdac2e1e4c))
+* address container errors the other direction ([abaca17](https://github.com/Einlanzerous/construct-server/commit/abaca173f0d9de614a5decf08c2384a49627baa6))
+
 ## [1.10.0](https://github.com/Einlanzerous/construct-server/compare/v1.9.0...v1.10.0) (2026-03-12)
 
 
