@@ -115,7 +115,7 @@ services:
     ports:
       - "8888:8888"
     volumes:
-      - ./aperture/config.yaml:/config.yaml:ro
+      - ./aperture/config.yaml:/app/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
