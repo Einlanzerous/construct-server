@@ -115,10 +115,14 @@ services:
     ports:
       - "8888:8888"
     volumes:
-      - ./aperture/config.yaml:/app/config.yaml:ro
+      - ./aperture/config.yaml:/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        aliases:
+          - backend
 
   aperture-frontend:
     image: ghcr.io/einlanzerous/aperture/frontend:latest
