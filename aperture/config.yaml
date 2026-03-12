@@ -1,0 +1,79 @@
+title: "Imperial Construct"
+port: 8888
+check_interval: 30
+
+services:
+  # AI
+  - name: "Open WebUI"
+    type: http
+    url: "http://host.docker.internal:3000"
+    category: "Artificial Intelligence"
+    size: s
+
+  # Automation
+  - name: "n8n"
+    type: http
+    url: "http://host.docker.internal:5678"
+    category: "Automation"
+    size: s
+  - name: "Semaphore UI"
+    type: http
+    url: "http://host.docker.internal:3002"
+    category: "Automation"
+    size: s
+
+  # Applications
+  - name: "vox-loop"
+    type: docker
+    container: "vox-loop"
+    category: "Applications"
+    size: s
+  - name: "cook_book"
+    type: docker
+    container: "cook_book"
+    category: "Applications"
+    size: s
+
+  # File Sharing
+  - name: "Copyparty"
+    type: http
+    url: "http://host.docker.internal:3923"
+    category: "File Sharing"
+    size: s
+
+  # Gaming
+  - name: "Sunshine"
+    type: http
+    url: "https://host.docker.internal:47990"
+    category: "Gaming"
+    size: s
+
+  # Observability
+  - name: "Dozzle"
+    type: http
+    url: "http://host.docker.internal:8080"
+    category: "Observability"
+    size: s
+  - name: "Uptime Kuma"
+    type: http
+    url: "http://host.docker.internal:3001"
+    category: "Observability"
+    size: s
+
+  # Infrastructure
+  - name: "Watchtower"
+    type: docker
+    container: "watchtower"
+    category: "Infrastructure"
+    size: s
+  - name: "PostgreSQL"
+    type: docker
+    container: "postgres"
+    category: "Infrastructure"
+    size: s
+
+ollama:
+  url: "http://host.docker.internal:11434"
+
+system:
+  enabled: true

@@ -106,6 +106,15 @@
     group: "{{ user_name }}"
     mode: "0755"
 
+- name: Ensure aperture directory is owned by user
+  file:
+    path: "/home/{{ user_name }}/construct-server/aperture"
+    state: directory
+    recurse: true
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: "0755"
+
 # --- 3. DEPLOYMENT (Clone the Repo) ---
 - name: Clone Construct Monorepo
   become_user: "{{ user_name }}"

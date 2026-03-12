@@ -107,13 +107,35 @@ services:
       - uptime-kuma-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
 
-  # --- DASHBOARD (Homer) ---
+  # --- DASHBOARD (Aperture) ---
+  aperture-backend:
+    image: ghcr.io/einlanzerous/aperture/backend:latest
+    container_name: aperture-backend
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./aperture/config.yaml:/app/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  aperture-frontend:
+    image: ghcr.io/einlanzerous/aperture/frontend:latest
+    container_name: aperture-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - aperture-backend
+
+  # --- DASHBOARD (Homer) — DEPRECATED, temporary on :8081 ---
   homer:
     image: b4bz/homer
     container_name: homer
     restart: unless-stopped
     ports:
-      - "80:8080"
+      - "8081:8080"
     volumes:
       - ./homer:/www/assets
 
