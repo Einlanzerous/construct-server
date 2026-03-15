@@ -97,15 +97,6 @@
     group: "{{ user_name }}"
     mode: "0755"
 
-- name: Ensure homer directory is owned by user
-  file:
-    path: "/home/{{ user_name }}/construct-server/homer"
-    state: directory
-    recurse: true
-    owner: "{{ user_name }}"
-    group: "{{ user_name }}"
-    mode: "0755"
-
 - name: Ensure aperture directory is owned by user
   file:
     path: "/home/{{ user_name }}/construct-server/aperture"

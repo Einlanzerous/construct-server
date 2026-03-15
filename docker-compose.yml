@@ -133,16 +133,6 @@ services:
     depends_on:
       - aperture-backend
 
-  # --- DASHBOARD (Homer) — DEPRECATED, temporary on :8081 ---
-  homer:
-    image: b4bz/homer
-    container_name: homer
-    restart: unless-stopped
-    ports:
-      - "8081:8080"
-    volumes:
-      - ./homer:/www/assets
-
   # --- AUTOMATION (n8n) ---
   n8n:
     image: n8nio/n8n:latest

@@ -17,7 +17,7 @@ The following services are currently active:
 -   **[Dozzle](https://dozzle.dev)**: Real-time log viewer for Docker containers.
 
 ### 🏠 Dashboard
--   **[Homer](https://github.com/bastienwirtz/homer)**: A static homepage to access all services from a single dashboard.
+-   **[Aperture](https://github.com/Einlanzerous/aperture)**: A custom dashboard to access all services from a single page, with live Docker container status.
 
 ### 📂 Storage & File Sharing
 -   **[Copyparty](https://github.com/9001/copyparty)**: Lightweight file server serving files from the 1TB NVMe drive (`/data`).

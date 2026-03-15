@@ -10,7 +10,6 @@ on:
       - 'docker-compose.yml'
       - '.env.example'
       - 'config/**'
-      - 'homer/**'
       - 'aperture/**'
       - 'db/**'
       - 'caddy/**'
