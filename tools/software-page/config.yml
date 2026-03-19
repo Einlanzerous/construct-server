@@ -5,9 +5,18 @@ software:
   - name: VS Code
     icon: "📝"
     link: "https://code.visualstudio.com/"
-  - name: AntigravitySlack
+  - name: Antigravity IDE
+    icon: "🌊"
+    link: "https://antigravity.google/"
+  - name: Claude Code
+    icon: "🤖"
+    link: "https://claude.ai/download"
+  - name: Slack
     icon: "💬"
-    link: "https://slack.com/" # Assuming standard slack since antigravityslack implies internal naming
+    link: "https://slack.com/downloads"
+  - name: Viscosity
+    icon: "🔒"
+    link: "https://www.sparklabs.com/viscosity/download/"
   - name: Firefox
     icon: "🦊"
     link: "https://www.mozilla.org/en-US/firefox/new/"
