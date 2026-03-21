@@ -218,7 +218,7 @@
   environment:
     HOME: "/home/{{ user_name }}"
 
-- name: "Install Go {{ go_version }} via g"
+- name: "Install Go via g - {{ go_version }}"
   become_user: "{{ user_name }}"
   shell: |
     export GOROOT="/home/{{ user_name }}/.go"

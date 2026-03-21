@@ -36,7 +36,7 @@
       become_user: "{{ user_name }}"
       changed_when: false
 
-    - name: Recreate {{ service_name }} if image changed
+    - name: "Recreate container if image changed - {{ service_name }}"
       ansible.builtin.command:
         cmd: "docker compose up -d {{ service_name }}"
         chdir: "/home/{{ user_name }}/construct-server"
@@ -44,7 +44,7 @@
       changed_when: false
 
     - name: Get new container image ID
-      ansible.builtin.shell:
+      ansible.builtin.command:
         cmd: "docker inspect {{ service_name }} --format '{%raw%}{{.Image}}{%endraw%}'"
       become_user: "{{ user_name }}"
       register: image_after
