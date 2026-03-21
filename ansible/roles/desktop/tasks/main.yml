@@ -1,10 +1,5 @@
 ---
 # --- 1. LANGUAGES ---
-- name: Install Golang
-  apt:
-    name: golang-go
-    state: present
-
 - name: Install TypeScript globally
   npm:
     name: typescript

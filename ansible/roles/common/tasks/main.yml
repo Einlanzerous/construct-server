@@ -175,3 +175,56 @@
   environment:
     HOME: "/home/{{ user_name }}"
   changed_when: false
+
+# --- 6. GO VIA G (VERSION MANAGER) ---
+- name: Remove apt-installed Go
+  apt:
+    name: golang-go
+    state: absent
+    autoremove: true
+
+- name: Remove legacy /usr/local/go directory
+  file:
+    path: /usr/local/go
+    state: absent
+
+- name: Ensure GOPATH bin directory exists
+  file:
+    path: "/home/{{ user_name }}/go/bin"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: "0755"
+
+- name: Install g (Go version manager)
+  become_user: "{{ user_name }}"
+  get_url:
+    url: "https://raw.githubusercontent.com/stefanmaric/g/master/bin/g"
+    dest: "/home/{{ user_name }}/go/bin/g"
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: "0755"
+
+- name: Check if Go is installed via g
+  become_user: "{{ user_name }}"
+  shell: |
+    export GOROOT="/home/{{ user_name }}/.go"
+    export GOPATH="/home/{{ user_name }}/go"
+    export PATH="$GOPATH/bin:$GOROOT/bin:$PATH"
+    go version
+  register: go_installed
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "/home/{{ user_name }}"
+
+- name: "Install Go {{ go_version }} via g"
+  become_user: "{{ user_name }}"
+  shell: |
+    export GOROOT="/home/{{ user_name }}/.go"
+    export GOPATH="/home/{{ user_name }}/go"
+    export PATH="$GOPATH/bin:$GOROOT/bin:$PATH"
+    g install {{ go_version }}
+  environment:
+    HOME: "/home/{{ user_name }}"
+  when: go_installed.rc != 0

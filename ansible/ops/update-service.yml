@@ -1,0 +1,58 @@
+---
+# Usage:
+#   ansible-playbook ansible/ops/update-service.yml -e service_name=open-webui
+#
+# Semaphore: Create a task template with survey variable "service_name"
+#
+# Pulls the latest image and recreates the container only if the image changed.
+# If already up to date, succeeds with no changes.
+
+- name: "Update Docker Service"
+  hosts: server
+  become: true
+  pre_tasks:
+    - name: Load encrypted secrets
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets.sops.yml"
+      tags: [always]
+
+  tasks:
+    - name: Validate service_name is provided
+      ansible.builtin.assert:
+        that: service_name is defined and service_name | length > 0
+        fail_msg: "service_name variable is required (e.g. -e service_name=open-webui)"
+
+    - name: Get current container image ID
+      ansible.builtin.shell:
+        cmd: "docker inspect {{ service_name }} --format '{%raw%}{{.Image}}{%endraw%}' 2>/dev/null || echo 'none'"
+      become_user: "{{ user_name }}"
+      register: image_before
+      changed_when: false
+
+    - name: Pull latest image for {{ service_name }}
+      ansible.builtin.command:
+        cmd: "docker compose pull {{ service_name }}"
+        chdir: "/home/{{ user_name }}/construct-server"
+      become_user: "{{ user_name }}"
+      changed_when: false
+
+    - name: Recreate {{ service_name }} if image changed
+      ansible.builtin.command:
+        cmd: "docker compose up -d {{ service_name }}"
+        chdir: "/home/{{ user_name }}/construct-server"
+      become_user: "{{ user_name }}"
+      changed_when: false
+
+    - name: Get new container image ID
+      ansible.builtin.shell:
+        cmd: "docker inspect {{ service_name }} --format '{%raw%}{{.Image}}{%endraw%}'"
+      become_user: "{{ user_name }}"
+      register: image_after
+      changed_when: false
+
+    - name: Report update status
+      ansible.builtin.debug:
+        msg: >-
+          {{ service_name }}
+          {{ 'was updated to a new image.' if image_before.stdout != image_after.stdout
+             else 'is already running the latest image. No changes made.' }}

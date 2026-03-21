@@ -87,7 +87,11 @@ plugins=(
 source $ZSH/oh-my-zsh.sh
 
 # PATH settings
-export PATH=$PATH:/usr/local/go/bin
+
+# Go (g version manager)
+export GOROOT="$HOME/.go"
+export GOPATH="$HOME/go"
+export PATH="$GOPATH/bin:$GOROOT/bin:$PATH"
 
 # fnm (Fast Node Manager)
 export PATH="$HOME/.local/share/fnm:$PATH"
