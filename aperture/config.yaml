@@ -54,6 +54,7 @@ services:
     href: "https://imperial-construct:47990"
     category: "Gaming"
     size: s
+    skip_verify: true
 
   # Observability
   - name: "Dozzle"
