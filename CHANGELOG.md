@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/Einlanzerous/construct-server/compare/v1.11.0...v1.11.1) (2026-03-21)
+
+
+### Bug Fixes
+
+* linter fixes ([da1927c](https://github.com/Einlanzerous/construct-server/commit/da1927c1d9bd549f4581cd576e61eddd04e8d135))
+
 ## [1.11.0](https://github.com/Einlanzerous/construct-server/compare/v1.10.1...v1.11.0) (2026-03-15)
 
 
