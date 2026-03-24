@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/Einlanzerous/construct-server/compare/v1.11.1...v1.11.2) (2026-03-24)
+
+
+### Bug Fixes
+
+* Skip verify on sunshine ([7f0c3b5](https://github.com/Einlanzerous/construct-server/commit/7f0c3b5a051c6684c1765b4e0229365a85de4228))
+
 ## [1.11.1](https://github.com/Einlanzerous/construct-server/compare/v1.11.0...v1.11.1) (2026-03-21)
 
 
