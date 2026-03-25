@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.3](https://github.com/Einlanzerous/construct-server/compare/v1.11.2...v1.11.3) (2026-03-25)
+
+
+### Bug Fixes
+
+* Add new check connection base line check for sunshine ([54072d3](https://github.com/Einlanzerous/construct-server/commit/54072d315c2a7fec6f1bd5ea8e97a84cd19e15b7))
+
 ## [1.11.2](https://github.com/Einlanzerous/construct-server/compare/v1.11.1...v1.11.2) (2026-03-24)
 
 
