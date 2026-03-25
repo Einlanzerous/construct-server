@@ -55,6 +55,7 @@ services:
     category: "Gaming"
     size: s
     skip_verify: true
+    check_connection_only: true
 
   # Observability
   - name: "Dozzle"
