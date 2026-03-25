@@ -1,5 +1,80 @@
 # Changelog
 
+## [2.0.0](https://github.com/Einlanzerous/construct-server/compare/v1.11.3...v2.0.0) (2026-03-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* migrate secrets to sops and add sunshine streaming support
+
+### Features
+
+* Accept trigger jobs from other repos ([408f466](https://github.com/Einlanzerous/construct-server/commit/408f466ebba889294af5ec501a1ef0e57a1765b2))
+* Actually expose services and show links via homer ([822a844](https://github.com/Einlanzerous/construct-server/commit/822a8442f2b2be7c5da94fa98bd8ebbb924a3cfa))
+* Add Aperture support ([b3e9c13](https://github.com/Einlanzerous/construct-server/commit/b3e9c131d47ee284cb5d88c09e069bc6ecdcd94b))
+* Add Semaphore UI, and clean up some of the homer dashboard view ([28762c0](https://github.com/Einlanzerous/construct-server/commit/28762c052f563c2d452bb326676519e360e6cf10))
+* Add steam big picture mode to server ([16c9bbd](https://github.com/Einlanzerous/construct-server/commit/16c9bbdf4c0eeb7bc553cf6086d5ffe7dd469930))
+* DRY up roles, add ansible-lint CI, fix p10k templating, and parameterize github runner version ([1818cba](https://github.com/Einlanzerous/construct-server/commit/1818cbac26ff6c10af57a5c54339d0ec891029c2))
+* Implement sliding-sync and caddy to support Element X ([75f20c4](https://github.com/Einlanzerous/construct-server/commit/75f20c42d2941172381321481f36d3dff64bda73))
+* migrate secrets to sops and add sunshine streaming support ([934f462](https://github.com/Einlanzerous/construct-server/commit/934f462bc60551e3ead2b8b9887d865b44c7734f))
+* model updates for ansible, include pruning ([507427f](https://github.com/Einlanzerous/construct-server/commit/507427f00c894260a4b9c2d4b14fb5eada932548))
+* New services added (vox-loop, cook-book), docker network, postgres, and some text updates ([db1f8a7](https://github.com/Einlanzerous/construct-server/commit/db1f8a703d45600c5a0ba42daa58691e00f434e6))
+* Support new aperture hrefs ([c9c09f3](https://github.com/Einlanzerous/construct-server/commit/c9c09f3bfb15164105843627121183f0052994e1))
+* Support signing into ghcr via ansible ([94787dd](https://github.com/Einlanzerous/construct-server/commit/94787dd8d5c20af58447cf6f5ed0032aa6a3128b))
+* support work laptop ([749a373](https://github.com/Einlanzerous/construct-server/commit/749a373a44d75a0d6c7f5dbd95c5bd1e9b0fc0ef))
+* Use env secrets instead of repo ([873f5e1](https://github.com/Einlanzerous/construct-server/commit/873f5e16ea486e1cd41cbac1646242c66e90bd77))
+
+
+### Bug Fixes
+
+* Add ansible task for semaphore commands ([8ddc7ef](https://github.com/Einlanzerous/construct-server/commit/8ddc7efab2dddf8b715d5a167a54e74b19b52b5d))
+* Add new check connection base line check for sunshine ([54072d3](https://github.com/Einlanzerous/construct-server/commit/54072d315c2a7fec6f1bd5ea8e97a84cd19e15b7))
+* Add render group ([866b5d3](https://github.com/Einlanzerous/construct-server/commit/866b5d31759d5f40573627d5fe7ca60062dad192))
+* Add Xorg to run on nvidia with customEDID, ensure neccessary components are installed ([e169cc0](https://github.com/Einlanzerous/construct-server/commit/e169cc0362dc783fba944f07f0d45a9861adaca6))
+* Additional capabilities errors ([4e34fb1](https://github.com/Einlanzerous/construct-server/commit/4e34fb187ec9854df69aec202941be478f46e269))
+* Address ansible script ability to generate edid ([04b5a83](https://github.com/Einlanzerous/construct-server/commit/04b5a83a80bff44dcc182bd95b53c6f788b1e478))
+* address ansible-lint errors ([ee2cad0](https://github.com/Einlanzerous/construct-server/commit/ee2cad08213fdb050c93c830e8f58f7ec7117131))
+* address container errors ([ff49521](https://github.com/Einlanzerous/construct-server/commit/ff4952123b807a85c8dc177d1d4a82cdac2e1e4c))
+* address container errors the other direction ([abaca17](https://github.com/Einlanzerous/construct-server/commit/abaca173f0d9de614a5decf08c2384a49627baa6))
+* address error on archive command ([f8bc55e](https://github.com/Einlanzerous/construct-server/commit/f8bc55ef9768d3eb735f8943e26120839639dcc1))
+* Address permissions errors, set wayland var, and have systemd user daemon reload ([6112358](https://github.com/Einlanzerous/construct-server/commit/6112358569af8ac29730f37df3971184795d4b0d))
+* Address serverside sunshine error ([4b7aac0](https://github.com/Einlanzerous/construct-server/commit/4b7aac0db59be5ee23c849c32b84112e1470b59e))
+* Address Sunshine user session ([e538faa](https://github.com/Einlanzerous/construct-server/commit/e538faae1ff8785f9413ffda247d94f13d25010c))
+* Address typo in config around DB for semaphore ([73e8b06](https://github.com/Einlanzerous/construct-server/commit/73e8b065043f924c5060fb53f4a4f6fbf14df4e3))
+* Better handle errors on cli install ([5b68cfa](https://github.com/Einlanzerous/construct-server/commit/5b68cfa6678134609ee6a9318776e92e8ea26516))
+* Better handle talking to postgres ([78780ee](https://github.com/Einlanzerous/construct-server/commit/78780ee0346094c5ae0f1521b315f579622ef462))
+* better support db init conditions ([a1f909e](https://github.com/Einlanzerous/construct-server/commit/a1f909e4068ac7b43ea55b6570fd00b299a9c4fe))
+* CI fixes ([5846bdd](https://github.com/Einlanzerous/construct-server/commit/5846bdd0e4577b9b6bbc04d8da589d58242b286e))
+* CI fixes ([9127dfe](https://github.com/Einlanzerous/construct-server/commit/9127dfe15e4b967a1e38d7bf3a242cc8a13b93de))
+* correct port for vox-loop ([36bb577](https://github.com/Einlanzerous/construct-server/commit/36bb577f61ccb87bd38c60092396292fe5860670))
+* Ensure docker network created before docker up ([4b6870d](https://github.com/Einlanzerous/construct-server/commit/4b6870d52a03411aabad4855135afde2ca4be1d5))
+* Ensure node is at least version 24 ([754138b](https://github.com/Einlanzerous/construct-server/commit/754138b85ed9de91ebe8c0d2b706b569ed996b19))
+* Fix volume issue in docker-compose ([a50f2be](https://github.com/Einlanzerous/construct-server/commit/a50f2be7b502964467a15a50895976382f1e3683))
+* forever caddy, move port to 8008 ([e2c74cf](https://github.com/Einlanzerous/construct-server/commit/e2c74cfae0efbedf25a0437e1b1965395bb017fb))
+* formatting issues ([9214c65](https://github.com/Einlanzerous/construct-server/commit/9214c65a60e6a40e7aaad2a91dd45e7489ba975a))
+* Have service cook_book get correct port number ([0ee708d](https://github.com/Einlanzerous/construct-server/commit/0ee708d345a687d94e071be8526534ab103559c2))
+* Have service cook_book get correct port number ([fe4f387](https://github.com/Einlanzerous/construct-server/commit/fe4f387c7f2a986a520c6dded86ee578024e5286))
+* linter fixes ([da1927c](https://github.com/Einlanzerous/construct-server/commit/da1927c1d9bd549f4581cd576e61eddd04e8d135))
+* Make db init idempotent ([710b7d5](https://github.com/Einlanzerous/construct-server/commit/710b7d585b170fbde9a2fa15ac21c8ad19dfe863))
+* Missed some conditionals ([1d6f20e](https://github.com/Einlanzerous/construct-server/commit/1d6f20e2ff86fd3fc8dc24fc2aacdcdaff6318a5))
+* more caddy fixes ([de7902a](https://github.com/Einlanzerous/construct-server/commit/de7902a5380a5d6efeefba10264045d7ed02f586))
+* more caddy fixes ([4c68f6c](https://github.com/Einlanzerous/construct-server/commit/4c68f6ce015d96fe99c85d84bbd48a00cf00b819))
+* Need to use named volumes ([02286f8](https://github.com/Einlanzerous/construct-server/commit/02286f826caf2dfeac525eeefd290166b3a0f15d))
+* Order of operations for matrix syn paths ([c07bb86](https://github.com/Einlanzerous/construct-server/commit/c07bb868a4af581d3425655f93289b026e9a168e))
+* pipe correctly ([3858a71](https://github.com/Einlanzerous/construct-server/commit/3858a719223ee21a13d2f2244baa52fd4d7d4e6d))
+* Properly grab new images for managed services only ([5a5a26e](https://github.com/Einlanzerous/construct-server/commit/5a5a26ec7954e60034df634cbedc7009f8f8b0e2))
+* Resolve connection issue with postgres for vox-loop ([c2f2481](https://github.com/Einlanzerous/construct-server/commit/c2f2481a7865208ab748b549c5d311ae76329d3a))
+* Server should not have power saving when it has a fake monitor connected ([15bf0d7](https://github.com/Einlanzerous/construct-server/commit/15bf0d7de32a3300988d70e4e40c01e2b5f0a1a2))
+* Skip verify on sunshine ([7f0c3b5](https://github.com/Einlanzerous/construct-server/commit/7f0c3b5a051c6684c1765b4e0229365a85de4228))
+* small errors need to be fixed ([b826280](https://github.com/Einlanzerous/construct-server/commit/b826280b68816b1546cee582605497f6c9fcb448))
+* Small user change ([3e193dd](https://github.com/Einlanzerous/construct-server/commit/3e193dd435b0ab23c6f26afdd49cabaf93b00803))
+* still missing order, fixed in compose ([bee8add](https://github.com/Einlanzerous/construct-server/commit/bee8addae6115442640570804d207cf3df3d6576))
+* update caddy to match vox-loop ([228066e](https://github.com/Einlanzerous/construct-server/commit/228066e7b9b284e89c237793f5a59f39bd6f39ac))
+* Update tags to enable faster ansible processing for sunshine tag, tasks successfully running now ([2832471](https://github.com/Einlanzerous/construct-server/commit/283247155a29e174928ff6e49de80a761ecf2865))
+* Use github variable single file for secrets ([d69824f](https://github.com/Einlanzerous/construct-server/commit/d69824fea4f2a0137e06f2dcb37c804da31caf02))
+* Verified sunshine boots up and appears to work correctly ([41a517b](https://github.com/Einlanzerous/construct-server/commit/41a517be129d3a6d9e15f4c38bfb3ce11ad91c14))
+* workflow updates should trigger deploys to construct ([f325570](https://github.com/Einlanzerous/construct-server/commit/f325570e9b7dba94c843246f46e5b5601251673a))
+
 ## [1.11.3](https://github.com/Einlanzerous/construct-server/compare/v1.11.2...v1.11.3) (2026-03-25)
 
 
