@@ -2,4 +2,5 @@
 ollama_models:
   - phi4-reasoning:14b   # Your heavy logic and system design thinker
   - gemma3:12b           # Your primary coding and daily driver
-  - gemma3:4b            # Your fast, low-VRAM utility model
+  - gemma4:e4b           # Fast utility model (replaces gemma3:4b)
+  - gemma4:26b           # High-quality MoE model (3.8B active params, 256K context)
