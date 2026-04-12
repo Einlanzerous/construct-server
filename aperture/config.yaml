@@ -24,6 +24,13 @@ services:
     href: "http://imperial-construct:3002"
     category: "Automation"
     size: s
+  - name: "Servo-Signal"
+    type: http
+    url: "http://host.docker.internal:8090/mcp"
+    href: "http://imperial-construct:8090"
+    category: "Automation"
+    size: s
+    check_connection_only: true
 
   # Applications
   - name: "vox-loop"
@@ -36,6 +43,12 @@ services:
     type: docker
     container: "cook_book"
     href: "http://imperial-construct:4001"
+    category: "Applications"
+    size: s
+  - name: "Vikunja"
+    type: http
+    url: "http://host.docker.internal:3456"
+    href: "http://imperial-construct:3456"
     category: "Applications"
     size: s
 

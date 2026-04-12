@@ -17,6 +17,9 @@ services:
               capabilities: [gpu]
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
+    networks:
+      - default
+      - construct_net
 
   # --- WEB UI (Open WebUI) ---
   open-webui:
@@ -133,7 +136,7 @@ services:
     depends_on:
       - aperture-backend
 
-  # --- AUTOMATION (n8n) ---
+  # --- AUTOMATION (n8n / Vox-Command) ---
   n8n:
     image: n8nio/n8n:latest
     container_name: n8n
@@ -142,8 +145,12 @@ services:
       - "5678:5678"
     environment:
       - N8N_SECURE_COOKIE=false
+      - GITHUB_PAT=${GITHUB_PAT}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - n8n_data:/home/node/.n8n
+    networks:
+      - construct_net
 
   # --- AUTOMATION (Semaphore UI) ---
   semaphore:
@@ -174,6 +181,7 @@ services:
       - VOX_LOOP_DB_PASSWORD=${VOX_LOOP_DB_PASSWORD}
       - COOK_BOOK_DB_PASSWORD=${COOK_BOOK_DB_PASSWORD}
       - SYNCV3_DB_PASSWORD=${SYNCV3_DB_PASSWORD}
+      - VIKUNJA_DB_PASSWORD=${VIKUNJA_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -235,6 +243,49 @@ services:
       sliding-sync:
         condition: service_started
 
+  # --- TASK MANAGEMENT (Vikunja / The Grand Terminal) ---
+  vikunja:
+    image: vikunja/vikunja:latest
+    container_name: vikunja
+    restart: unless-stopped
+    ports:
+      - "3456:3456"
+    environment:
+      - VIKUNJA_DATABASE_TYPE=postgres
+      - VIKUNJA_DATABASE_HOST=postgres
+      - VIKUNJA_DATABASE_DATABASE=vikunja
+      - VIKUNJA_DATABASE_USER=vikunja_user
+      - VIKUNJA_DATABASE_PASSWORD=${VIKUNJA_DB_PASSWORD}
+      - VIKUNJA_SERVICE_SECRET=${VIKUNJA_JWT_SECRET}
+      - VIKUNJA_SERVICE_PUBLICURL=http://localhost:3456
+      - VIKUNJA_CORS_ENABLE=false
+    volumes:
+      - vikunja_files:/app/vikunja/files
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+
+  # --- MCP TOOLING (Servo-Signal) ---
+  servo-signal:
+    build:
+      context: ../imperium-loop/servo-signal
+      dockerfile: Dockerfile
+    container_name: servo-signal
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      - GITHUB_PAT=${GITHUB_PAT}
+      - WORKSPACES_VOLUME=construct-server_servo_signal_workspaces
+    volumes:
+      - servo_signal_workspaces:/data/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - construct_net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
   # --- APP SERVICES ---
   cook_book:
     image: ghcr.io/einlanzerous/cook_book:latest
@@ -261,6 +312,8 @@ volumes:
   vox_loop_config:
   vox_loop_media:
   caddy_data:
+  vikunja_files:
+  servo_signal_workspaces:
 
 networks:
   construct_net:
