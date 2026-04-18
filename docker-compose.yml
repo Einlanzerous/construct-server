@@ -145,8 +145,10 @@ services:
       - "5678:5678"
     environment:
       - N8N_SECURE_COOKIE=false
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - GITHUB_PAT=${GITHUB_PAT}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       - n8n_data:/home/node/.n8n
     networks:
@@ -259,6 +261,7 @@ services:
       - VIKUNJA_SERVICE_SECRET=${VIKUNJA_JWT_SECRET}
       - VIKUNJA_SERVICE_PUBLICURL=http://localhost:3456
       - VIKUNJA_CORS_ENABLE=false
+      - VIKUNJA_OUTGOINGREQUESTS_ALLOWNONROUTABLEIPS=true
     volumes:
       - vikunja_files:/app/vikunja/files
     networks:
@@ -277,10 +280,33 @@ services:
       - "8090:8090"
     environment:
       - GITHUB_PAT=${GITHUB_PAT}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - WORKSPACES_VOLUME=construct-server_servo_signal_workspaces
     volumes:
       - servo_signal_workspaces:/data/workspaces
       - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - construct_net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # --- HUMAN-IN-THE-LOOP (Autosavant Discord bot) ---
+  autosavant-bot:
+    build:
+      context: ../imperium-loop/autosavant-bot
+      dockerfile: Dockerfile
+    container_name: autosavant-bot
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+      - AUTOSAVANT_HTTP_TOKEN=${AUTOSAVANT_HTTP_TOKEN}
+      - STATE_PATH=/data/state.json
+    volumes:
+      - autosavant_state:/data
     networks:
       - construct_net
     labels:
@@ -314,6 +340,7 @@ volumes:
   caddy_data:
   vikunja_files:
   servo_signal_workspaces:
+  autosavant_state:
 
 networks:
   construct_net:
