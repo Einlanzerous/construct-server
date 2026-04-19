@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.0](https://github.com/Einlanzerous/construct-server/compare/v2.0.0...v2.1.0) (2026-04-19)
+
+
+### Features
+
+* imperium-loop phase 3 implemented ([ded3652](https://github.com/Einlanzerous/construct-server/commit/ded365229d91c50f017aa8784dd939855aa994e0))
+* Updates to repo around docs, fixing sunshine, explaining new automation ([7b0830a](https://github.com/Einlanzerous/construct-server/commit/7b0830a90b2e3b7c7c32e2768d1069c7411ae1ac))
+
 ## [2.0.0](https://github.com/Einlanzerous/construct-server/compare/v1.11.3...v2.0.0) (2026-03-25)
 
 
