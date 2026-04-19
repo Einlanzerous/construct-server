@@ -171,6 +171,8 @@
     dest: "/etc/systemd/user/sunshine.service.d/override.conf"
     content: |
       [Service]
+      Environment=DISPLAY=:0
+      Environment=XAUTHORITY=/run/user/%U/gdm/Xauthority
       ExecStart=
       ExecStart=/usr/local/bin/start-sunshine.sh
     mode: "0644"

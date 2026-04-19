@@ -5,7 +5,7 @@ set -e
 # Usage: ensure_db <user> <password> <database>
 ensure_db() {
     local user=$1 pass=$2 db=$3
-    local psql_cmd="psql --username $POSTGRES_USER --dbname $POSTGRES_DB"
+    local psql_cmd="psql --username ${POSTGRES_USER:-postgres} --dbname ${POSTGRES_DB:-postgres}"
 
     # Create or update role
     if $psql_cmd -tAc "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '$user'" | grep -q 1; then
