@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/Einlanzerous/construct-server/compare/v2.1.0...v2.1.1) (2026-04-30)
+
+
+### Bug Fixes
+
+* Small tweak to MCP json ([eb03ab5](https://github.com/Einlanzerous/construct-server/commit/eb03ab59fc162e8393249bd0d4fe48feb56daa9c))
+
 ## [2.1.0](https://github.com/Einlanzerous/construct-server/compare/v2.0.0...v2.1.0) (2026-04-19)
 
 
