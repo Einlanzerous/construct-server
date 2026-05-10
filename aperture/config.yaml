@@ -45,10 +45,10 @@ services:
     href: "http://imperial-construct:4001"
     category: "Applications"
     size: s
-  - name: "Vikunja"
+  - name: "Switchyard"
     type: http
-    url: "http://host.docker.internal:3456"
-    href: "http://imperial-construct:3456"
+    url: "http://host.docker.internal:4002"
+    href: "http://imperial-construct:4002"
     category: "Applications"
     size: s
 

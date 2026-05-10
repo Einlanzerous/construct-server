@@ -31,7 +31,7 @@ The following services are currently active:
 -   **[Caddy](https://caddyserver.com/)**: Reverse proxy routing `.well-known`, sliding sync, and `_matrix/*` traffic to the appropriate service.
 
 ### 📋 Task Management & Automation
--   **[Vikunja](https://vikunja.io)**: Self-hosted task board (Kanban) backed by its own `vikunja` database. Used as the task hub for the **Imperium-Loop** automated development pipeline.
+-   **[Switchyard](https://github.com/Einlanzerous/switchyard)**: Self-hosted, API-first ticketing / project management system (Hono + Bun + Drizzle on the server, Vue 3 on the client) backed by its own `switchyard` database. Task hub for the **Imperium-Loop** automated development pipeline; replaced Vikunja in May 2026.
 -   **[n8n](https://n8n.io)**: Workflow automation engine (codename *Vox-Command*). Hosts the Cogitation Engine and Vox-Dictate workflows that drive Imperium-Loop.
 -   **[Servo-Signal](https://github.com/Einlanzerous/imperium-loop)**: Local MCP tool server (Go) that gives n8n and Claude access to git, filesystem, patching, ephemeral Docker execution, and two agentic loops (planning + greenfield). Source lives in `~/imperium-loop`.
 -   **[Autosavant](https://github.com/Einlanzerous/imperium-loop/tree/main/autosavant-bot)**: Discord bot that owns the human-in-the-loop approval checkpoints (plan review, greenfield guidance). Posts an embed to a task thread, watches for replies, and resumes the paused n8n execution.
@@ -52,7 +52,7 @@ Items that have shipped live in the [Current Stack](#-current-stack) above. This
 -   [ ] **[Kourier](https://github.com/Kourier/Kourier)**: Self-hosted modern email client.
 -   [ ] **[Rundeck](https://www.rundeck.com)**: Enterprise job scheduler (potential Semaphore replacement if needed).
 
-Previously on the roadmap, now in active use: Copyparty, Vikunja (replaced the earlier Plane plan), n8n, and the full Imperium-Loop pipeline.
+Previously on the roadmap, now in active use: Copyparty, Switchyard (which replaced Vikunja, which itself replaced the earlier Plane plan), n8n, and the full Imperium-Loop pipeline.
 
 ## 🛠️ Setup & Installation
 
@@ -63,7 +63,7 @@ Previously on the roadmap, now in active use: Copyparty, Vikunja (replaced the e
     ```
 
 2.  **Configure Environment Variables:**
-    Copy the example file and update it with your secrets. Core vars: Datadog API Key, Postgres/Vikunja/n8n passwords. Imperium-Loop pipeline also needs `ANTHROPIC_API_KEY`, `GITHUB_PAT`, `VIKUNJA_SERVICE_USER`/`VIKUNJA_SERVICE_PASSWORD`, `DISCORD_BOT_TOKEN`/`DISCORD_CHANNEL_ID`/`DISCORD_PLANNING_WEBHOOK_URL`, and `N8N_API_KEY`.
+    Copy the example file and update it with your secrets. Core vars: Datadog API Key, Postgres/Switchyard/n8n passwords. Imperium-Loop pipeline also needs `ANTHROPIC_API_KEY`, `GITHUB_PAT`, `SWITCHYARD_DB_PASSWORD`, `SWITCHYARD_BOOTSTRAP_TOKEN`, `DISCORD_BOT_TOKEN`/`DISCORD_CHANNEL_ID`/`DISCORD_PLANNING_WEBHOOK_URL`, and `N8N_API_KEY`.
     ```bash
     cp .env.example .env
     nano .env
@@ -100,7 +100,7 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 | vox-loop (Dendrite) | `vox_loop` | `vox_loop_user` | Dendrite auto-migrates on startup |
 | sliding-sync | `syncv3` | `syncv3_user` | Auto-migrates on startup |
 | cook_book | `cook_book` | `cook_book_user` | [Prisma Migrate](https://www.prisma.io/docs/concepts/components/prisma-migrate) — `prisma migrate deploy` at entrypoint |
-| vikunja | `vikunja` | `vikunja_user` | Vikunja auto-migrates on startup |
+| switchyard | `switchyard` | `switchyard_user` | Drizzle migrations run at server entrypoint |
 | n8n | `n8n` | `n8n_user` | n8n auto-migrates on startup |
 
 - Databases and users are created automatically by `db/init-db.sh` on first volume initialization.

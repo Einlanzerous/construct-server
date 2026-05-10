@@ -25,4 +25,5 @@ ensure_db() {
 ensure_db vox_loop_user "$VOX_LOOP_DB_PASSWORD" vox_loop
 ensure_db cook_book_user "$COOK_BOOK_DB_PASSWORD" cook_book
 ensure_db syncv3_user "$SYNCV3_DB_PASSWORD" syncv3
-ensure_db vikunja_user "$VIKUNJA_DB_PASSWORD" vikunja
+ensure_db switchyard_user "$SWITCHYARD_DB_PASSWORD" switchyard
+ensure_db switchyard_user "$SWITCHYARD_DB_PASSWORD" switchyard_test

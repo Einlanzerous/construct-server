@@ -175,6 +175,8 @@ services:
     image: postgres:16-alpine
     container_name: postgres
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
@@ -183,7 +185,7 @@ services:
       - VOX_LOOP_DB_PASSWORD=${VOX_LOOP_DB_PASSWORD}
       - COOK_BOOK_DB_PASSWORD=${COOK_BOOK_DB_PASSWORD}
       - SYNCV3_DB_PASSWORD=${SYNCV3_DB_PASSWORD}
-      - VIKUNJA_DB_PASSWORD=${VIKUNJA_DB_PASSWORD}
+      - SWITCHYARD_DB_PASSWORD=${SWITCHYARD_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -245,30 +247,6 @@ services:
       sliding-sync:
         condition: service_started
 
-  # --- TASK MANAGEMENT (Vikunja / The Grand Terminal) ---
-  vikunja:
-    image: vikunja/vikunja:latest
-    container_name: vikunja
-    restart: unless-stopped
-    ports:
-      - "3456:3456"
-    environment:
-      - VIKUNJA_DATABASE_TYPE=postgres
-      - VIKUNJA_DATABASE_HOST=postgres
-      - VIKUNJA_DATABASE_DATABASE=vikunja
-      - VIKUNJA_DATABASE_USER=vikunja_user
-      - VIKUNJA_DATABASE_PASSWORD=${VIKUNJA_DB_PASSWORD}
-      - VIKUNJA_SERVICE_SECRET=${VIKUNJA_JWT_SECRET}
-      - VIKUNJA_SERVICE_PUBLICURL=http://localhost:3456
-      - VIKUNJA_CORS_ENABLE=false
-      - VIKUNJA_OUTGOINGREQUESTS_ALLOWNONROUTABLEIPS=true
-    volumes:
-      - vikunja_files:/app/vikunja/files
-    networks:
-      - construct_net
-    depends_on:
-      - postgres
-
   # --- MCP TOOLING (Servo-Signal) ---
   servo-signal:
     build:
@@ -327,6 +305,59 @@ services:
     depends_on:
       - postgres
 
+  # --- TASK MANAGEMENT (Switchyard) ---
+  # Backend (API only). Service name `switchyard` so agent URLs
+  # (`http://switchyard:4002/v1/...`) resolve on construct_net.
+  # No host port — only the frontend exposes one.
+  switchyard:
+    build:
+      context: ../projects/switchyard
+      dockerfile: server/Dockerfile
+    container_name: switchyard
+    restart: unless-stopped
+    environment:
+      - PORT=4002
+      - DATABASE_URL=postgres://switchyard_user:${SWITCHYARD_DB_PASSWORD}@postgres:5432/switchyard?sslmode=disable
+      - PUBLIC_URL=${SWITCHYARD_PUBLIC_URL:-http://localhost:4002}
+      - UPLOAD_DIR=/data/uploads
+      - BOOTSTRAP_TOKEN=${SWITCHYARD_BOOTSTRAP_TOKEN}
+    volumes:
+      - switchyard_uploads:/data/uploads
+    networks:
+      - construct_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4002/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      - postgres
+    labels:
+      # Watchtower runs Mondays at 04:00 with rolling restart — opt out so deploys
+      # are explicit. (Suspected source of the prior password-drift bug.)
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # Frontend (Vue static + tiny Bun passthrough for /v1/* and /healthz).
+  switchyard-frontend:
+    build:
+      context: ../projects/switchyard
+      dockerfile: client/Dockerfile
+    container_name: switchyard-frontend
+    restart: unless-stopped
+    ports:
+      - "${SWITCHYARD_PORT:-4002}:4002"
+    environment:
+      - PORT=4002
+      - BACKEND_URL=http://switchyard:4002
+    networks:
+      - construct_net
+    depends_on:
+      switchyard:
+        condition: service_healthy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
 volumes:
   open-webui:
   ollama_data:
@@ -338,9 +369,9 @@ volumes:
   vox_loop_config:
   vox_loop_media:
   caddy_data:
-  vikunja_files:
   servo_signal_workspaces:
   autosavant_state:
+  switchyard_uploads:
 
 networks:
   construct_net:
