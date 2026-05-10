@@ -310,9 +310,7 @@ services:
   # (`http://switchyard:4002/v1/...`) resolve on construct_net.
   # No host port — only the frontend exposes one.
   switchyard:
-    build:
-      context: ../projects/switchyard
-      dockerfile: server/Dockerfile
+    image: ghcr.io/einlanzerous/switchyard/server:latest
     container_name: switchyard
     restart: unless-stopped
     environment:
@@ -340,9 +338,7 @@ services:
 
   # Frontend (Vue static + tiny Bun passthrough for /v1/* and /healthz).
   switchyard-frontend:
-    build:
-      context: ../projects/switchyard
-      dockerfile: client/Dockerfile
+    image: ghcr.io/einlanzerous/switchyard/frontend:latest
     container_name: switchyard-frontend
     restart: unless-stopped
     ports:
