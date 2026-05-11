@@ -43,7 +43,7 @@ jobs:
 
       - name: Deploy Stack
         # Pulls new images, recreates containers with config changes, removes old ones
-        run: docker compose pull postgres vox-loop sliding-sync caddy cook_book aperture-backend aperture-frontend && docker compose up -d --remove-orphans
+        run: docker compose pull && docker compose up -d --remove-orphans
 
       - name: Ensure databases exist
         # Idempotent — creates any missing users/databases without affecting existing ones

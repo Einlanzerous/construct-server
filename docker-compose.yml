@@ -149,6 +149,7 @@ services:
       - GITHUB_PAT=${GITHUB_PAT}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SWITCHYARD_TOKEN=${SWITCHYARD_API_TOKEN}
     volumes:
       - n8n_data:/home/node/.n8n
     networks:
@@ -282,6 +283,7 @@ services:
       - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
       - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
       - AUTOSAVANT_HTTP_TOKEN=${AUTOSAVANT_HTTP_TOKEN}
+      - SWITCHYARD_TOKEN=${SWITCHYARD_API_TOKEN}
       - STATE_PATH=/data/state.json
     volumes:
       - autosavant_state:/data
@@ -310,7 +312,7 @@ services:
   # (`http://switchyard:4002/v1/...`) resolve on construct_net.
   # No host port — only the frontend exposes one.
   switchyard:
-    image: ghcr.io/einlanzerous/switchyard/server:latest
+    image: ghcr.io/einlanzerous/switchyard/backend:latest
     container_name: switchyard
     restart: unless-stopped
     environment:
