@@ -284,7 +284,7 @@
   when: go_installed.rc != 0
 
 # --- 7. PYTHON VIA UV (ASTRAL) ---
-- name: Install uv (Astral Python package & version manager)
+- name: Install uv (Astral Python package & version manager)  # noqa: command-instead-of-module
   become_user: "{{ user_name }}"
   shell: curl -LsSf https://astral.sh/uv/install.sh | sh
   args:
@@ -293,7 +293,7 @@
     HOME: "/home/{{ user_name }}"
 
 # --- 8. BUN (JS RUNTIME & PACKAGE MANAGER) ---
-- name: Install bun
+- name: Install bun  # noqa: command-instead-of-module
   become_user: "{{ user_name }}"
   shell: curl -fsSL https://bun.sh/install | bash
   args:
