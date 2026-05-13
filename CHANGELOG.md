@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.0.0](https://github.com/Einlanzerous/construct-server/compare/v2.2.0...v3.0.0) (2026-05-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* vox-loop, sliding-sync, and caddy containers are removed. The vox_loop and syncv3 databases still exist on the running postgres volume and the root-level vox-loop/ runtime dir (owned by root) needs a manual cleanup after the stack is brought down.
+
+### Features
+
+* Add uv/bun/claude-code to ansible common role, audit cleanup ([6ef5db2](https://github.com/Einlanzerous/construct-server/commit/6ef5db2da7e36e9530a897170fcff22e8f915753))
+* Remove vox-loop / Matrix stack ([34f2e07](https://github.com/Einlanzerous/construct-server/commit/34f2e07e85bac453b2198010aacf1e00c2b2aabe))
+
+
+### Bug Fixes
+
+* Silence ansible-lint command-instead-of-module on uv/bun installers ([2237766](https://github.com/Einlanzerous/construct-server/commit/2237766f14fb9b8a9cde17a5f0d5dfc064f4b527))
+
 ## [2.2.0](https://github.com/Einlanzerous/construct-server/compare/v2.1.0...v2.2.0) (2026-05-11)
 
 
