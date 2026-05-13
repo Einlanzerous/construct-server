@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.2.0](https://github.com/Einlanzerous/construct-server/compare/v2.1.0...v2.2.0) (2026-05-11)
+
+
+### Features
+
+* Update plumbing for vikunja replacement, switchyard ([2b37fa4](https://github.com/Einlanzerous/construct-server/commit/2b37fa413e5746cbf97ffe5b3481c0336ef9e089))
+
+
+### Bug Fixes
+
+* Small tweak to MCP json ([eb03ab5](https://github.com/Einlanzerous/construct-server/commit/eb03ab59fc162e8393249bd0d4fe48feb56daa9c))
+* Variable name got changed ([c1f4dba](https://github.com/Einlanzerous/construct-server/commit/c1f4dba8ff373e0aeee8efd85904ced2d298b0f3))
+
 ## [2.1.0](https://github.com/Einlanzerous/construct-server/compare/v2.0.0...v2.1.0) (2026-04-19)
 
 
