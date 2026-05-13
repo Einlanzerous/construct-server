@@ -25,11 +25,6 @@ The following services are currently active:
 ### 🗄️ Database
 -   **[PostgreSQL 16](https://www.postgresql.org/)**: Shared instance providing isolated databases for application services. Each service gets its own database and user — see [Architecture](#-database-architecture) below.
 
-### 💬 Matrix Stack (vox-loop)
--   **[vox-loop (Dendrite)](services/vox-loop/)**: Self-hosted Matrix homeserver backed by the `vox_loop` database.
--   **[Sliding Sync](https://github.com/matrix-org/sliding-sync)**: Matrix sliding sync proxy for modern clients (Element X). Uses its own `syncv3` database.
--   **[Caddy](https://caddyserver.com/)**: Reverse proxy routing `.well-known`, sliding sync, and `_matrix/*` traffic to the appropriate service.
-
 ### 📋 Task Management & Automation
 -   **[Switchyard](https://github.com/Einlanzerous/switchyard)**: Self-hosted, API-first ticketing / project management system (Hono + Bun + Drizzle on the server, Vue 3 on the client) backed by its own `switchyard` database. Task hub for the **Imperium-Loop** automated development pipeline; replaced Vikunja in May 2026.
 -   **[n8n](https://n8n.io)**: Workflow automation engine (codename *Vox-Command*). Hosts the Cogitation Engine and Vox-Dictate workflows that drive Imperium-Loop.
@@ -97,8 +92,6 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 
 | Service | Database | User | Migrations |
 |---------|----------|------|------------|
-| vox-loop (Dendrite) | `vox_loop` | `vox_loop_user` | Dendrite auto-migrates on startup |
-| sliding-sync | `syncv3` | `syncv3_user` | Auto-migrates on startup |
 | cook_book | `cook_book` | `cook_book_user` | [Prisma Migrate](https://www.prisma.io/docs/concepts/components/prisma-migrate) — `prisma migrate deploy` at entrypoint |
 | switchyard | `switchyard` | `switchyard_user` | Drizzle migrations run at server entrypoint |
 | n8n | `n8n` | `n8n_user` | n8n auto-migrates on startup |
@@ -108,7 +101,7 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 - Postgres is internal-only on the `construct_net` bridge network (no exposed port).
 - Ollama is dual-homed (default + `construct_net`) so services like n8n and Servo-Signal can reach it by container name. Open WebUI, Uptime Kuma, Copyparty, Datadog, Dozzle, and Aperture remain on the default network for now — migration is incremental.
 
-> **TODO — Uptime Kuma monitoring:** Add Uptime Kuma to `construct_net` so it can monitor services internally (e.g. `http://vox-loop:8008`, `http://cook_book:4001`), then add HTTP monitors via the Kuma UI. Currently deferred because Kuma also monitors AI stack services that aren't on `construct_net` yet.
+> **TODO — Uptime Kuma monitoring:** Add Uptime Kuma to `construct_net` so it can monitor services internally (e.g. `http://cook_book:4001`, `http://switchyard:4002`), then add HTTP monitors via the Kuma UI. Currently deferred because Kuma also monitors AI stack services that aren't on `construct_net` yet.
 
 ### Makefile Targets
 

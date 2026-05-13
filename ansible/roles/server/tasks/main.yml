@@ -138,15 +138,11 @@
     - GITHUB_USER
     - GITHUB_PAT
     # Service ports
-    - VOX_LOOP_PORT
     - COOK_BOOK_PORT
     - SWITCHYARD_PORT
     # Postgres / per-service DB passwords
     - POSTGRES_PASSWORD
-    - VOX_LOOP_DB_PASSWORD
     - COOK_BOOK_DB_PASSWORD
-    - SYNCV3_DB_PASSWORD
-    - SYNCV3_SECRET
     - SWITCHYARD_DB_PASSWORD
     # Imperium-Loop pipeline (n8n / Switchyard / Anthropic / Discord)
     - N8N_API_KEY

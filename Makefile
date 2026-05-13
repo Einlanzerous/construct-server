@@ -27,11 +27,9 @@ db-init:
 # Verify databases and users were created correctly
 db-check:
 	@echo "=== Databases ==="
-	@docker compose exec postgres psql -U postgres -c "\l" | grep -E "vox_loop|cook_book|syncv3"
+	@docker compose exec postgres psql -U postgres -c "\l" | grep -E "cook_book|switchyard"
 	@echo ""
-	@echo "=== User access: vox_loop ==="
-	@docker compose exec postgres psql -U vox_loop_user -d vox_loop -c "SELECT 1 AS connected;"
 	@echo "=== User access: cook_book ==="
 	@docker compose exec postgres psql -U cook_book_user -d cook_book -c "SELECT 1 AS connected;"
-	@echo "=== User access: syncv3 ==="
-	@docker compose exec postgres psql -U syncv3_user -d syncv3 -c "SELECT 1 AS connected;"
+	@echo "=== User access: switchyard ==="
+	@docker compose exec postgres psql -U switchyard_user -d switchyard -c "SELECT 1 AS connected;"
