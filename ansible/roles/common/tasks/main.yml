@@ -12,23 +12,32 @@
     state: present
   tags: [common, sops]
 
+- name: Check if SOPS is installed
+  stat:
+    path: /usr/bin/sops
+  register: sops_stat
+  tags: [common, sops]
+
 - name: Download SOPS .deb
   get_url:
     url: "{{ sops_deb_url }}"
     dest: "/tmp/sops.deb"
     mode: "0644"
+  when: not sops_stat.stat.exists
   tags: [common, sops]
 
 - name: Install SOPS
   apt:
     deb: "/tmp/sops.deb"
     state: present
+  when: not sops_stat.stat.exists
   tags: [common, sops]
 
 - name: Cleanup SOPS .deb
   file:
     path: "/tmp/sops.deb"
     state: absent
+  when: not sops_stat.stat.exists
   tags: [common, sops]
 
 - name: Install community.sops collection (Local)
@@ -166,6 +175,18 @@
     HOME: "/home/{{ user_name }}"
   when: node24_installed.stdout == "missing"
 
+- name: Check if Google Gemini CLI is installed
+  become_user: "{{ user_name }}"
+  shell: |
+    export PATH="/home/{{ user_name }}/.local/share/fnm:$PATH"
+    eval "$(fnm env --shell bash)"
+    npm list -g --depth=0 2>/dev/null | grep -q "@google/gemini-cli"
+  register: gemini_cli_installed
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "/home/{{ user_name }}"
+
 - name: Install Google Gemini CLI
   become_user: "{{ user_name }}"
   shell: |
@@ -174,7 +195,40 @@
     npm install -g @google/gemini-cli
   environment:
     HOME: "/home/{{ user_name }}"
+  when: gemini_cli_installed.rc != 0
+
+- name: Check if Claude Code CLI is installed
+  become_user: "{{ user_name }}"
+  shell: |
+    export PATH="/home/{{ user_name }}/.local/share/fnm:$PATH"
+    eval "$(fnm env --shell bash)"
+    npm list -g --depth=0 2>/dev/null | grep -q "@anthropic-ai/claude-code"
+  register: claude_code_installed
   changed_when: false
+  failed_when: false
+  environment:
+    HOME: "/home/{{ user_name }}"
+
+- name: Install Claude Code CLI
+  become_user: "{{ user_name }}"
+  shell: |
+    export PATH="/home/{{ user_name }}/.local/share/fnm:$PATH"
+    eval "$(fnm env --shell bash)"
+    npm install -g @anthropic-ai/claude-code
+  environment:
+    HOME: "/home/{{ user_name }}"
+  when: claude_code_installed.rc != 0
+
+- name: Install TypeScript globally (via fnm)
+  become_user: "{{ user_name }}"
+  shell: |
+    export PATH="/home/{{ user_name }}/.local/share/fnm:$PATH"
+    eval "$(fnm env --shell bash)"
+    npm list -g --depth=0 2>/dev/null | grep -q "typescript@" || npm install -g typescript
+  environment:
+    HOME: "/home/{{ user_name }}"
+  register: typescript_install
+  changed_when: "'added' in typescript_install.stdout or 'changed' in typescript_install.stdout"
 
 # --- 6. GO VIA G (VERSION MANAGER) ---
 - name: Remove apt-installed Go
@@ -228,3 +282,21 @@
   environment:
     HOME: "/home/{{ user_name }}"
   when: go_installed.rc != 0
+
+# --- 7. PYTHON VIA UV (ASTRAL) ---
+- name: Install uv (Astral Python package & version manager)
+  become_user: "{{ user_name }}"
+  shell: curl -LsSf https://astral.sh/uv/install.sh | sh
+  args:
+    creates: "/home/{{ user_name }}/.local/bin/uv"
+  environment:
+    HOME: "/home/{{ user_name }}"
+
+# --- 8. BUN (JS RUNTIME & PACKAGE MANAGER) ---
+- name: Install bun
+  become_user: "{{ user_name }}"
+  shell: curl -fsSL https://bun.sh/install | bash
+  args:
+    creates: "/home/{{ user_name }}/.bun/bin/bun"
+  environment:
+    HOME: "/home/{{ user_name }}"

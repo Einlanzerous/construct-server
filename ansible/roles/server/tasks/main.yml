@@ -125,22 +125,36 @@
       - "env_file_content is search(item)"
     fail_msg: "Missing required key '{{ item }}' in .env file"
   loop:
+    # Datadog
     - DD_API_KEY
     - DD_SITE
     - DD_TAGS
+    # Semaphore UI
     - SEMAPHORE_ADMIN_PASSWORD
     - SEMAPHORE_ADMIN_NAME
     - SEMAPHORE_ADMIN_EMAIL
     - SEMAPHORE_ADMIN
+    # GitHub / GHCR
     - GITHUB_USER
     - GITHUB_PAT
+    # Service ports
     - VOX_LOOP_PORT
     - COOK_BOOK_PORT
+    - SWITCHYARD_PORT
+    # Postgres / per-service DB passwords
     - POSTGRES_PASSWORD
     - VOX_LOOP_DB_PASSWORD
     - COOK_BOOK_DB_PASSWORD
     - SYNCV3_DB_PASSWORD
     - SYNCV3_SECRET
+    - SWITCHYARD_DB_PASSWORD
+    # Imperium-Loop pipeline (n8n / Switchyard / Anthropic / Discord)
+    - N8N_API_KEY
+    - ANTHROPIC_API_KEY
+    - SWITCHYARD_PUBLIC_URL
+    - DISCORD_BOT_TOKEN
+    - DISCORD_GUILD_ID
+    - DISCORD_CHANNEL_ID
 
 - name: Copy .env file to server
   copy:

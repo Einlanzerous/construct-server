@@ -97,6 +97,13 @@ export PATH="$GOPATH/bin:$GOROOT/bin:$PATH"
 export PATH="$HOME/.local/share/fnm:$PATH"
 eval "$(fnm env --use-on-cd --shell zsh)"
 
+# uv (Astral) — installs to ~/.local/bin
+export PATH="$HOME/.local/bin:$PATH"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
 # User configuration
 
 # export MANPATH="/usr/local/man:$MANPATH"

@@ -70,13 +70,6 @@
     - role: sunshine
       tags: sunshine
 
-- name: Configure Desktop
-  hosts: desktop
-  become: true
-  roles:
-    - desktop
-
-  # Handlers must be reachable by the play that notifies them.
-  # Since server role notifies 'Restart Docker', we should ensure handlers are available.
-  # The simple way is to define them in the roles, which we did.
-  # Ansible handles role dependencies naturally.
+# Note: the 'desktop' host group inherits the 'common' play above (hosts: all),
+# which now includes TypeScript and the rest of the dev tooling. No separate
+# desktop play is needed.

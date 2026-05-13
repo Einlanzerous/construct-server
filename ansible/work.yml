@@ -9,7 +9,6 @@
 
   roles:
     - common
-    - desktop
 
   tasks:
     # --- 1. WORK DIRECTORY & GIT CONFIG ---

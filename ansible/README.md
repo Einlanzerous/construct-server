@@ -29,25 +29,29 @@ This directory contains the Ansible playbooks for managing the various environme
 
 ### 1. `site.yml` (Server & Desktop)
 The main playbook for managing personal infrastructure.
-- **Hosts**: `server`, `desktop`
+- **Hosts**: `server`, `desktop` (desktop inherits the `common` play via `hosts: all`)
 
 **Role Breakdown:**
-*   **`[server]` Role**:
-    *   **Docker & Nvidia Drivers**: For running local LLMs and containers.
-    *   **Construct Repo**: Clones the main repo for the stack.
-    *   **GitHub Runner**: Installs and configures a self-hosted runner.
-*   **`[desktop]` Role**:
-    *   **Development Tools**: Golang, Node.js, TypeScript.
-    *   **IDE**: Visual Studio Code with **Gemini Code Assist** extension.
-*   **Shared Config**:
-    *   **Shell**: Zsh with Oh-My-Zsh, Powerlevel10k, and Plugins.
+*   **`common` (all hosts)**:
+    *   **Shell**: Zsh with Oh-My-Zsh, Powerlevel10k, autosuggestions/syntax-highlighting/autocomplete.
     *   **Dotfiles**: Deploys a standardized `.zshrc` and `.p10k.zsh`.
     *   **SSH Keys**: Generates an Ed25519 key if missing.
+    *   **Secrets tooling**: `age`, `sops`.
+    *   **Language runtimes & version managers**:
+        *   Node.js via [`fnm`](https://github.com/Schniz/fnm) (Node 24 LTS as default).
+        *   Go via [`g`](https://github.com/stefanmaric/g).
+        *   Python via [`uv`](https://docs.astral.sh/uv/) (Astral).
+        *   [`bun`](https://bun.sh) (JS runtime / package manager).
+    *   **Global npm CLIs**: TypeScript, [`@google/gemini-cli`](https://github.com/google-gemini/gemini-cli), [`@anthropic-ai/claude-code`](https://docs.claude.com/claude-code).
+*   **`server` (server host only)**:
+    *   **Docker & GPU drivers**: For running local LLMs and containers.
+    *   **Construct Repo**: Clones the main repo for the stack.
+*   **`tailscale`, `github_runner`, `sunshine`**: server-only roles for VPN mesh, CI runner, and game streaming respectively.
 
 ### 2. `work.yml` (Work Laptop)
 A specialized playbook for the work laptop (Genesys environment).
 - **Hosts**: `work`
-- **Roles**: `common`, `desktop`
+- **Roles**: `common`
 
 **Features:**
 *   **Directory**: Creates `~/genesys` directory.
