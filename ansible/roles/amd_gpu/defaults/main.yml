@@ -1,0 +1,14 @@
+---
+# HWE kernel meta-package — pulls 6.12+ which is required for RDNA 4 (gfx12).
+# Ubuntu 24.04's GA kernel (6.8) cannot probe Navi 4x cards.
+hwe_kernel_package: linux-generic-hwe-24.04
+
+# amdgpu-install wires up Radeon's APT repos and provides the ROCm installer.
+# Bump these together when moving to a newer ROCm release.
+amdgpu_install_version: "6.4.4"
+amdgpu_install_deb: "amdgpu-install_6.4.60404-1_all.deb"
+amdgpu_install_url: "https://repo.radeon.com/amdgpu-install/{{ amdgpu_install_version }}/ubuntu/noble/{{ amdgpu_install_deb }}"
+
+# --usecase value passed to amdgpu-install. "rocm" gets the compute stack;
+# "graphics" adds the OpenGL/Vulkan userspace if you want it on a desktop.
+amdgpu_usecase: "rocm"

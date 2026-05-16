@@ -1,0 +1,7 @@
+---
+- name: Reboot for kernel update
+  reboot:
+    msg: "Rebooting to load new HWE kernel for AMD GPU support"
+
+- name: Update Grub
+  command: update-grub

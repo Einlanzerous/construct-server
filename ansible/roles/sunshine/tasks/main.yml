@@ -11,6 +11,11 @@
       - dconf-cli
       - python3-psutil
       - scrot
+      # AMD VA-API (encoder = vaapi in sunshine.conf):
+      - mesa-va-drivers
+      - vainfo
+      # X.Org DDX driver for amdgpu (used by xorg.conf):
+      - xserver-xorg-video-amdgpu
     state: present
     update_cache: true
 
@@ -46,7 +51,7 @@
   register: sunshine_path
   changed_when: false
 
-- name: Set capabilities on Sunshine binary (KMS/NVENC)
+- name: Set capabilities on Sunshine binary (KMS capture)
   command: setcap cap_sys_admin+p "{{ sunshine_path.stdout }}"
   changed_when: false
 
@@ -195,26 +200,9 @@
   register: systemd_dir_list
   changed_when: false
   tags: [debug]
-# Headless setup - GRUB
-- name: Check if nvidia-drm.modeset=1 is in GRUB
-  lineinfile:
-    path: /etc/default/grub
-    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="(.*)nvidia-drm.modeset=1(.*)"'
-    state: absent
-  check_mode: true
-  register: grub_check
-  failed_when: false
-  changed_when: false
-
-- name: Enable nvidia-drm.modeset=1 in GRUB
-  lineinfile:
-    path: /etc/default/grub
-    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="((?:(?!nvidia-drm\.modeset=1).)*?)"$'
-    line: 'GRUB_CMDLINE_LINUX_DEFAULT="\1 nvidia-drm.modeset=1"'
-    backrefs: true
-  notify: Update Grub
-
 # Headless Display Setup (EDID + Autologin)
+# Note: amdgpu does kernel modesetting unconditionally — no GRUB param needed
+# (unlike the old Nvidia setup, which required nvidia-drm.modeset=1).
 - name: Install Display Manager (GDM3) and XOrg
   apt:
     name:

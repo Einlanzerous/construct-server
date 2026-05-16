@@ -1,20 +1,19 @@
 services:
   # --- AI & LLM STACK ---
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:rocm
     container_name: ollama
     restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - "44"   # video
+      - "993"  # render (host GID — name lookup fails in ollama:rocm image)
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
     networks:
@@ -81,13 +80,15 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu, utility]
+    # GPU reservation disabled during Nvidia → AMD R9700 swap.
+    # Datadog Agent supports AMD/ROCm metrics; revisit when ROCm role lands.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu, utility]
 
   # --- Container Logging (Dozzle) ---
   dozzle:
@@ -146,10 +147,13 @@ services:
     environment:
       - N8N_SECURE_COOKIE=false
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - NODE_FUNCTION_ALLOW_EXTERNAL=mammoth
       - GITHUB_PAT=${GITHUB_PAT}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - SWITCHYARD_TOKEN=${SWITCHYARD_API_TOKEN}
+      - SWITCHYARD_TOKEN_N8N_VOX_DICTATE=${SWITCHYARD_TOKEN_N8N_VOX_DICTATE}
+      - SWITCHYARD_WEBHOOK_SECRET=${SWITCHYARD_WEBHOOK_SECRET}
     volumes:
       - n8n_data:/home/node/.n8n
     networks:
@@ -261,6 +265,14 @@ services:
       - PUBLIC_URL=${SWITCHYARD_PUBLIC_URL:-http://localhost:4002}
       - UPLOAD_DIR=/data/uploads
       - BOOTSTRAP_TOKEN=${SWITCHYARD_BOOTSTRAP_TOKEN}
+      # Public GitHub webhook receiver — exposed via Tailscale Funnel at
+      # https://imperial-construct.tail64150e.ts.net/v1/external/github.
+      # HMAC gates all requests; absent secret = receiver returns 503.
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+      # Wildcard prefix — match any <KEY>-<NUM> ticket reference in PR
+      # titles/branches and resolve via the projects table. Strict "SWY"
+      # works fine for a single project but doesn't scale to LOOP etc.
+      - EXTERNAL_REF_KEY_PREFIX=*
     volumes:
       - switchyard_uploads:/data/uploads
     networks:

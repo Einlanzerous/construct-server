@@ -64,6 +64,7 @@
       when: sops_load.failed
   roles:
     - common
+    - amd_gpu
     - server
     - tailscale
     - github_runner

@@ -1,0 +1,67 @@
+---
+# --- 1. HWE KERNEL ---
+# RDNA 4 / Navi 4x (gfx12 ISA, e.g. AMD Radeon AI PRO R9700) requires kernel
+# 6.12+. Ubuntu 24.04's stock HWE meta-package currently lands on 6.17.
+- name: Install HWE kernel (required for RDNA 4 / gfx12)
+  apt:
+    name: "{{ hwe_kernel_package }}"
+    state: present
+    update_cache: true
+  notify: Reboot for kernel update
+
+# --- 2. GRUB CLEANUP ---
+# Strip any stale nvidia-drm.modeset=1 left over from the previous Nvidia
+# setup. amdgpu does modesetting unconditionally — no kernel param needed.
+- name: Strip nvidia-drm.modeset=1 from GRUB cmdline
+  replace:
+    path: /etc/default/grub
+    regexp: '\s*nvidia-drm\.modeset=1'
+    replace: ''
+  notify: Update Grub
+
+# --- 3. ROCm USERSPACE ---
+- name: Check if amdgpu-install is already present
+  stat:
+    path: /usr/bin/amdgpu-install
+  register: amdgpu_install_bin
+
+- name: Download amdgpu-install package
+  get_url:
+    url: "{{ amdgpu_install_url }}"
+    dest: "/tmp/{{ amdgpu_install_deb }}"
+    mode: "0644"
+  when: not amdgpu_install_bin.stat.exists
+
+- name: Install amdgpu-install (registers Radeon APT repos)
+  apt:
+    deb: "/tmp/{{ amdgpu_install_deb }}"
+    state: present
+  when: not amdgpu_install_bin.stat.exists
+
+- name: Refresh apt cache after registering ROCm repos
+  apt:
+    update_cache: true
+  when: not amdgpu_install_bin.stat.exists
+
+- name: Cleanup amdgpu-install .deb
+  file:
+    path: "/tmp/{{ amdgpu_install_deb }}"
+    state: absent
+  when: not amdgpu_install_bin.stat.exists
+
+- name: Check if ROCm userspace is installed (rocminfo present)
+  stat:
+    path: /opt/rocm/bin/rocminfo
+  register: rocminfo_bin
+
+# --no-dkms: rely on the in-tree amdgpu kernel driver (works once HWE is booted).
+- name: Install ROCm userspace via amdgpu-install
+  command: "amdgpu-install --usecase={{ amdgpu_usecase }} --no-dkms -y"
+  when: not rocminfo_bin.stat.exists
+
+# --- 4. DEVICE ACCESS ---
+- name: Add user to render and video groups (ROCm device access)
+  user:
+    name: "{{ user_name }}"
+    groups: render,video
+    append: true

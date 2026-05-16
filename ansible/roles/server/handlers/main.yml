@@ -7,4 +7,4 @@
 # Optional: Reboot if drivers or kernel changed
 - name: Reboot Server
   reboot:
-    msg: "Rebooting {{ user_name }}'s server to load Nvidia Drivers"
+    msg: "Rebooting {{ user_name }}'s server (kernel or driver update)"
