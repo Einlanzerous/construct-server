@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Have gemma4:26b grade every response in a results directory, BATCHED PER PROMPT.
-# One call per prompt: 26b sees the task + all 4 answers and emits grades for each.
-# 4x speedup over per-answer calls; matches how a human reviewer naturally compares.
+# Have a local model grade every response in a results directory, BATCHED PER PROMPT.
+# One call per prompt: the judge sees the task + all answers and emits grades for each.
+#
+# Generators are auto-discovered from files in the results dir (any *.<slug>.md
+# where <slug> is not the judge output). Output file is named per the judge model
+# slug, so multiple judges can coexist without clobbering each other.
 #
 # Usage:
-#   ./grade-gemma.sh results/<timestamp>
+#   ./grade-gemma.sh results/<timestamp>                   # default judge gemma4:26b
+#   JUDGE_MODEL=gpt-oss:20b ./grade-gemma.sh results/...   # swap judge model
 #
-# Writes grades-gemma.tsv into the same directory:
+# Writes grades-<judge-slug>.tsv into the same directory:
 #   prompt    generator    grade    rationale
 
 set -euo pipefail
@@ -27,13 +31,49 @@ if [[ ! -d "$RESULTS_DIR" ]]; then
   exit 1
 fi
 
-OUT="$RESULTS_DIR/grades-gemma.tsv"
-RAW_DIR="$RESULTS_DIR/judge-raw"
+# Slug for the judge: gemma4:26b -> gemma4_26b, gpt-oss:20b -> gpt-oss_20b
+judge_slug=$(echo "$JUDGE_MODEL" | tr ':/' '__')
+# Friendly shortname for the output filename: drop everything after first underscore for gemma.
+# gemma4_26b -> gemma; gpt-oss_20b -> gpt-oss
+out_short="${judge_slug%%_*}"
+# Preserve the legacy filename for gemma-family judges (backwards compat with the original report)
+if [[ "$out_short" == "gemma4" ]]; then
+  out_short="gemma"
+fi
+
+OUT="$RESULTS_DIR/grades-${out_short}.tsv"
+RAW_DIR="$RESULTS_DIR/judge-raw-${out_short}"
 mkdir -p "$RAW_DIR"
 printf "prompt\tgenerator\tgrade\trationale\n" > "$OUT"
 
-# The four generator slugs we expect, in fixed order
-GENS=(claude gemma4_31b gemma4_26b gemma4_e4b)
+# Discover generators by globbing all .md files for the first prompt's claude pair, then taking
+# every *.SLUG.md that shares the prompt prefix.
+first_prompt=""
+for f in "$RESULTS_DIR"/*.claude.md; do
+  [[ -f "$f" ]] || continue
+  first_prompt=$(basename "$f" .claude.md)
+  break
+done
+if [[ -z "$first_prompt" ]]; then
+  echo "no *.claude.md found in $RESULTS_DIR" >&2
+  exit 1
+fi
+
+GENS=()
+for f in "$RESULTS_DIR/${first_prompt}".*.md; do
+  [[ -f "$f" ]] || continue
+  slug=$(basename "$f" .md)
+  slug="${slug#${first_prompt}.}"
+  GENS+=("$slug")
+done
+
+if [[ ${#GENS[@]} -eq 0 ]]; then
+  echo "no generator outputs discovered" >&2
+  exit 1
+fi
+echo "→ generators: ${GENS[*]}"
+echo "→ judge: $JUDGE_MODEL"
+echo "→ output: $OUT"
 
 # Discover prompt names from claude responses
 prompt_names=()
@@ -59,10 +99,16 @@ for name in "${prompt_names[@]}"; do
   echo
   echo "▶ judging $name (batched)"
 
-  # Build the full message: rubric + task + each answer labeled A1..A4
+  # Build the full message: rubric + task + each answer labeled A1..An
+  n_answers=${#GENS[@]}
+  format_block=""
+  for ((i=1; i<=n_answers; i++)); do
+    format_block+="A${i}_GRADE: <letter>"$'\n'
+    format_block+="A${i}_RATIONALE: <2-3 sentences, concrete>"$'\n'
+  done
   judge_prompt=$(
-    cat <<'EOF'
-You are grading four independent answers to the same coding task. Be a tough, fair
+    cat <<EOF
+You are grading ${n_answers} independent answers to the same coding task. Be a tough, fair
 senior engineer. Focus on:
 - Correctness: does the answer solve the actual problem, with no real bugs?
 - Completeness: does it cover every explicit requirement in the task?
@@ -74,14 +120,7 @@ A great answer is an A regardless of whether the others are also great. A buggy
 answer is a D or F regardless of whether the others are also buggy.
 
 Reply EXACTLY in this format, no preamble, no markdown:
-A1_GRADE: <letter>
-A1_RATIONALE: <2-3 sentences, concrete>
-A2_GRADE: <letter>
-A2_RATIONALE: <2-3 sentences, concrete>
-A3_GRADE: <letter>
-A3_RATIONALE: <2-3 sentences, concrete>
-A4_GRADE: <letter>
-A4_RATIONALE: <2-3 sentences, concrete>
+${format_block}
 EOF
   )
   judge_prompt+=$'\n\n---\nTASK:\n'"$task"$'\n\n'
@@ -97,8 +136,25 @@ EOF
     judge_prompt+=$'\n---\nANSWER A'"${n}"':\n'"$(cat "$resp_file")"$'\n'
   done
 
-  body=$(jq -nc --arg model "$JUDGE_MODEL" --arg content "$judge_prompt" \
-    '{model:$model, messages:[{role:"user", content:$content}], stream:false, think:false, options:{temperature:0.2, num_ctx:32768, num_predict:2000}}')
+  # Different reasoning-mode models need different knobs to suppress hidden CoT.
+  # gemma4 family: `think: false` works.
+  # gpt-oss family: `think: false` is ignored; pass `reasoning_effort: "low"` in options
+  #                 AND a `Reasoning: low` system message. Even then it does *some*
+  #                 reasoning; size num_predict accordingly.
+  case "$JUDGE_MODEL" in
+    gpt-oss*)
+      body=$(jq -nc --arg model "$JUDGE_MODEL" --arg content "$judge_prompt" \
+        '{model:$model,
+          messages:[{role:"system", content:"Reasoning: low"},
+                    {role:"user",   content:$content}],
+          stream:false,
+          options:{temperature:0.2, num_ctx:32768, num_predict:4000, reasoning_effort:"low"}}')
+      ;;
+    *)
+      body=$(jq -nc --arg model "$JUDGE_MODEL" --arg content "$judge_prompt" \
+        '{model:$model, messages:[{role:"user", content:$content}], stream:false, think:false, options:{temperature:0.2, num_ctx:32768, num_predict:2000}}')
+      ;;
+  esac
 
   start=$(date +%s.%N)
   raw=$(curl -sS "$OLLAMA_URL" -d "$body") || true

@@ -9,7 +9,9 @@ and the broader "when to re-run" guidance live in [`docs/bakeoffs/`](../docs/bak
 ```bash
 ./run.sh                                              # all prompts × default lineup
 ./run.sh 03 07                                        # only prompts 03 and 07
-GEN_MODELS=gemma4:31b,gemma4:26b,gemma4:e4b ./run.sh  # override local lineup
+GEN_MODELS=gemma4:31b,gpt-oss:20b ./run.sh            # override local lineup
+SKIP_CLAUDE=1 GEN_MODELS=gpt-oss:20b ./run.sh         # add a generator to an
+                                                      # existing run (skip Claude)
 CLAUDE_MODEL=opus ./run.sh                            # pin Claude model
 ```
 
@@ -39,10 +41,17 @@ Two-judge methodology — neither sees the other's grades.
    ```bash
    ./grade-gemma.sh results/<timestamp>            # default: gemma4:26b
    JUDGE_MODEL=gemma4:31b ./grade-gemma.sh ...     # swap judge model
+   JUDGE_MODEL=gpt-oss:20b ./grade-gemma.sh ...    # also supported
    ```
 
-The local judge uses `/api/chat` with `think: false` — gemma4 has a built-in
-thinking mode that otherwise silently consumes output tokens. See
+   Generators are auto-discovered from `*.<slug>.md` files in the results dir,
+   so adding a new generator means just dropping the new outputs in and
+   re-running the grader. Output filename uses the judge slug:
+   `grades-gemma.tsv`, `grades-gpt-oss.tsv`, etc.
+
+The grader picks the right reasoning-suppression knob per model family:
+gemma uses `think: false`, gpt-oss uses `reasoning_effort: "low"` plus a
+system message (the former is ignored by gpt-oss). See
 [`docs/bakeoffs/README.md#gotchas`](../docs/bakeoffs/README.md#gotchas).
 
 ## The prompts

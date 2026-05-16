@@ -134,10 +134,27 @@ the naive way produces an **empty `.response` field** while burning all your
 output tokens on hidden chain-of-thought. The `done_reason: "length"` flag is
 your only clue.
 
-**Fix in `grade-gemma.sh`**: use `/api/chat` with `think: false` and bump
-`num_predict` to ~2000. The runner script (`run.sh`) uses `/api/generate`
-deliberately so generators *can* think — flip the same way if you ever want
-to compare thinking vs non-thinking output for the same model.
+**Each model family has its own knob — pick the right one**:
+
+| Model family | Knob | Notes |
+|---|---|---|
+| `gemma4:*` | `think: false` at the top level of the chat request | Works in `/api/chat`. Also accepts `num_predict: 2000`. |
+| `gpt-oss:*` | `options.reasoning_effort: "low"` + a `system: "Reasoning: low"` message | `think: false` is **ignored** by gpt-oss. Even with reasoning capped, gpt-oss still burns ~1000-5000 tokens internally — set `num_predict` to 4000+ for short prompts, 8000+ when batching multiple long answers. |
+| `qwen3:*` (reasoning variants) | Same as gemma — `think: false` honored | Confirm with a short smoke test. |
+| `deepseek-r1:*` | `think: false` ignored; reasoning ALWAYS emits — strip via parsing `<think>...</think>` from response | Treat the deepseek family as "reasoning model where the visible response is post-reasoning". |
+
+**Symptom-driven debugging**: if the response `content` is empty AND
+`done_reason: "length"` AND `eval_count` ≈ `num_predict`, you've hit this.
+The model burned every available output token reasoning. Either:
+1. Find the right knob for the family (table above)
+2. Raise `num_predict` until the model gets to emit visible content
+3. Switch to a shorter prompt — batching 5 long answers compounds the problem
+
+**Why the runner (`run.sh`) and grader (`grade-gemma.sh`) differ**: `run.sh`
+uses `/api/generate` deliberately so generators *can* think for quality. The
+grader uses `/api/chat` with reasoning suppressed because the only output
+that matters is "letter grade + 2-sentence rationale" — reasoning would
+crowd it out.
 
 ### `claude -p --output-format json` cache-creation tax
 
@@ -157,11 +174,21 @@ processing the queued request. If a re-run looks stuck, check
 ### Model swap latency on Ollama
 
 The R9700 has 32 GiB VRAM. The default local lineup (`gemma4:31b` @ 20 GB,
-`gemma4:26b` @ 17 GB, `gemma4:e4b` @ 10 GB) all fit individually but **cannot
-co-reside**. Ollama swaps weights from disk on every model change, costing
-~5–10s per swap. The runner's per-prompt loop hits 3 swaps × 8 prompts = 24
-swaps total — figure ~3 minutes of overhead. Doesn't change the comparative
-result but does inflate wall-clock numbers.
+`gemma4:26b` @ 17 GB, `gemma4:e4b` @ 10 GB, `gpt-oss:20b` @ 13 GB) all fit
+individually but **cannot co-reside**. Ollama swaps weights from disk on
+every model change, costing ~5–10s per swap. The runner's per-prompt loop
+hits N swaps × 8 prompts — figure ~3-5 minutes of overhead for a 4-generator
+run. Doesn't change the comparative result but does inflate wall-clock
+numbers.
+
+### Three judges, one truth
+
+When running >1 local judge, run them sequentially — each judge holds the
+GPU during its pass. Snapshot the previous `grades-<judge>.tsv` before
+re-running with more generators: adding a 5th answer to an already-judged
+batch slightly changes the model's scoring of the original 4 (context
+attention shifts). The 4-gen pass and 5-gen pass are not directly
+comparable; pick one and stick with it for a given report.
 
 ---
 

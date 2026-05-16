@@ -6,6 +6,7 @@
 #   ./run.sh 03 07                              # only prompts 03 and 07
 #   GEN_MODELS=gemma4:31b,gemma4:e4b ./run.sh   # override the gemma list
 #   CLAUDE_MODEL=opus ./run.sh                  # pin claude model
+#   SKIP_CLAUDE=1 ./run.sh                      # local generators only (e.g. adding to an existing run)
 #
 # Generators:
 #   - claude (via `claude -p --output-format json`, tools disabled — see README)
@@ -103,13 +104,17 @@ for prompt_file in "${prompts[@]}"; do
   echo
   echo "▶ $name"
 
-  # --- Claude ---
-  out="$RESULTS_DIR/${name}.claude.md"
-  echo "  → claude..."
-  read secs in_tok out_tok cost < <(run_claude "$prompt" "$out")
-  bytes=$(wc -c < "$out")
-  printf "%s\tclaude\t%s\t%s\t%s\t%s\t%s\n" "$name" "$secs" "$in_tok" "$out_tok" "$bytes" "$cost" >> "$summary"
-  echo "    ✓ ${secs}s | in=${in_tok} out=${out_tok} | ${bytes}B | \$${cost}"
+  # --- Claude (skippable) ---
+  if [[ -z "${SKIP_CLAUDE:-}" ]]; then
+    out="$RESULTS_DIR/${name}.claude.md"
+    echo "  → claude..."
+    read secs in_tok out_tok cost < <(run_claude "$prompt" "$out")
+    bytes=$(wc -c < "$out")
+    printf "%s\tclaude\t%s\t%s\t%s\t%s\t%s\n" "$name" "$secs" "$in_tok" "$out_tok" "$bytes" "$cost" >> "$summary"
+    echo "    ✓ ${secs}s | in=${in_tok} out=${out_tok} | ${bytes}B | \$${cost}"
+  else
+    echo "  → claude... SKIPPED (SKIP_CLAUDE set)"
+  fi
 
   # --- Each Gemma ---
   for model in "${MODELS_ARR[@]}"; do
