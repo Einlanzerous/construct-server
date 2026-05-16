@@ -51,6 +51,13 @@
   # vars_files:
   #   - secrets.yml
   pre_tasks:
+    # TODO(magos): If running ansible *from the server itself*, place your age
+    # private key at ~/.config/sops/age/keys.txt (or set SOPS_AGE_KEY_FILE).
+    # The matching recipient is in secrets.sops.yml's `sops.age` block. Without
+    # it, this play stops at "Fail if secrets were not loaded" — the common
+    # play (above) still applies cleanly. The key normally lives on whatever
+    # workstation runs ansible (laptop / Semaphore); the server has never had
+    # it because deploys historically came from elsewhere.
     - name: Load encrypted secrets
       community.sops.load_vars:
         file: secrets.sops.yml
