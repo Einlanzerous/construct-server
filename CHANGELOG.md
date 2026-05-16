@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.0.0](https://github.com/Einlanzerous/construct-server/compare/v3.0.0...v4.0.0) (2026-05-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* requires AMD GPU and kernel 6.12+. The server role will purge Nvidia/CUDA packages on first run.
+
+### Features
+
+* **bakeoff:** add Claude Code vs local LLM benchmarking harness ([ab3d735](https://github.com/Einlanzerous/construct-server/commit/ab3d7352f9b576bbb924cc8619bc2bb7aecb6421))
+* Migrate from Nvidia RTX 3080 to AMD Radeon AI PRO R9700 ([54c3614](https://github.com/Einlanzerous/construct-server/commit/54c3614d1d401168e241cb66ce991d8f84f1e5a1))
+
 ## [3.0.0](https://github.com/Einlanzerous/construct-server/compare/v2.2.0...v3.0.0) (2026-05-13)
 
 
