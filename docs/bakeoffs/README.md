@@ -181,6 +181,26 @@ hits N swaps × 8 prompts — figure ~3-5 minutes of overhead for a 4-generator
 run. Doesn't change the comparative result but does inflate wall-clock
 numbers.
 
+### Context-window defaults
+
+`OLLAMA_NUM_CTX=65536` is set on the ollama container (see `docker-compose.yml`)
+so all default-config calls get 64K context. This is much larger than Ollama's
+stock 2K default and chosen as a sweet spot for the R9700's 32 GiB VRAM:
+
+- `gemma4:31b` at 64K → ~26 GB resident (weights + KV cache). Fits alone, no
+  headroom for a second model.
+- `gemma4:26b` at 64K → ~22 GB resident. Same.
+- `gemma4:e4b` at 64K → ~13 GB. Two of these could co-reside.
+- `gpt-oss:20b` at 64K → ~17 GB. Fits with room to spare.
+
+**Per-call overrides** still work. The bakeoff grader uses `num_ctx: 32768` to
+free a bit of VRAM during sequential judging. Anything that wants 128K for
+"read this whole file" workflows passes `options.num_ctx` in the API request.
+
+**KV cache is the real cost**, not weights. Going from 32K → 128K on a 30B
+model adds ~9 GB of KV cache, which will spill to system RAM and tank
+throughput. Stay at 64K unless a specific call genuinely needs more.
+
 ### Three judges, one truth
 
 When running >1 local judge, run them sequentially — each judge holds the
