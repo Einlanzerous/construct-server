@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.0](https://github.com/Einlanzerous/construct-server/compare/v4.0.0...v4.1.0) (2026-05-18)
+
+
+### Features
+
+* **bakeoff:** add gpt-oss:20b as 5th generator and 3rd judge ([441f9b8](https://github.com/Einlanzerous/construct-server/commit/441f9b874fdc41b01aa48d189cee1ff143003131))
+* **ollama:** raise default num_ctx to 64K via OLLAMA_NUM_CTX ([6017624](https://github.com/Einlanzerous/construct-server/commit/6017624539b6a31a5075686feb3f6e03c27bb5b2))
+
 ## [4.0.0](https://github.com/Einlanzerous/construct-server/compare/v3.0.0...v4.0.0) (2026-05-16)
 
 
