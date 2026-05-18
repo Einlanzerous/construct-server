@@ -1,6 +1,5 @@
 ---
 ollama_models:
-  - phi4-reasoning:14b   # Heavy logic and system design thinker
   - gemma4:e4b           # Fast utility model (4.5B effective, 128K context)
   - gemma4:26b           # High-throughput MoE (3.8B active / 25.2B total, 256K context)
   - gemma4:31b           # Primary daily driver — dense, 30.7B params, 256K context, max quality
