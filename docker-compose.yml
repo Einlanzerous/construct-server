@@ -213,9 +213,11 @@ services:
       - GITHUB_PAT=${GITHUB_PAT}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - WORKSPACES_VOLUME=construct-server_servo_signal_workspaces
+      - PRINCIPLES_PATH=/data/principles/PRINCIPLES.md
     volumes:
       - servo_signal_workspaces:/data/workspaces
       - /var/run/docker.sock:/var/run/docker.sock
+      - ../imperium-loop/PRINCIPLES.md:/data/principles/PRINCIPLES.md:ro
     networks:
       - construct_net
     labels:
