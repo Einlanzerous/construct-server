@@ -1,5 +1,5 @@
 ---
 ollama_models:
   - gemma4:e4b           # Fast utility model (4.5B effective, 128K context)
-  - gemma4:26b           # High-throughput MoE (3.8B active / 25.2B total, 256K context)
-  - gemma4:31b           # Primary daily driver — dense, 30.7B params, 256K context, max quality
+  - gemma4:31b           # Gemma4 dense — held in reserve while Ollama runtime issues are sorted (30.7B params, 256K context)
+  - hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL  # Primary daily driver — Qwen3-Coder-Flash MoE (30B total / 3.3B active, 256K context, Unsloth dynamic Q4 + tool-calling fix)
