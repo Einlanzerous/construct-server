@@ -238,7 +238,13 @@ services:
     volumes:
       - servo_signal_workspaces:/data/workspaces
       - /var/run/docker.sock:/var/run/docker.sock
-      - ../imperium-loop/PRINCIPLES.md:/data/principles/PRINCIPLES.md:ro
+      # Absolute path: the runner-side compose is checked out at a different
+      # location than ~/construct-server (the GH Actions runner only has
+      # construct-server, no sibling imperium-loop), so `../imperium-loop/...`
+      # resolves to a nonexistent path during CI deploys. Docker auto-creates
+      # the target as an empty directory when the source is missing, which
+      # makes /principles 404 silently. Pinning to the canonical host path.
+      - /home/magos/imperium-loop/PRINCIPLES.md:/data/principles/PRINCIPLES.md:ro
     networks:
       - construct_net
     labels:
