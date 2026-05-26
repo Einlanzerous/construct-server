@@ -156,9 +156,26 @@ services:
       - N8N_SECURE_COOKIE=false
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - NODE_FUNCTION_ALLOW_EXTERNAL=mammoth
-      - GITHUB_PAT=${GITHUB_PAT}
+      # WEBHOOK_URL controls the host n8n stamps into $execution.resumeUrl
+      # (the Wait-node signed-resume accessor) and any other webhook URLs it
+      # returns. We keep it on the construct_net hostname so Autosavant —
+      # which lives in the same Docker network — can POST approve/reject
+      # replies back. Host-side debug still works via the 5678:5678 port
+      # mapping. See LOOP-22.
+      - WEBHOOK_URL=http://n8n:5678/
+      # LOOP-28: pipeline GitHub identity. Stored in .env as IL_GH_PAT
+      # (Imperium-Loop GitHub PAT, matching the GitHub-side token name);
+      # remapped to GITHUB_PAT here so consumer code (Servo-Signal, n8n
+      # HTTP nodes) stays unchanged. Token is a classic PAT with repo +
+      # workflow scopes.
+      - GITHUB_PAT=${IL_GH_PAT}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # LOOP-24: provider toggle for The High Review. Default is claude (the
+      # workflow's gate node also defaults to claude when unset, this just
+      # makes the var visible in `docker exec n8n env` for debugging). Flip
+      # to gemini in ~/construct-server/.env to swap back without code edits.
+      - HIGH_REVIEW_PROVIDER=${HIGH_REVIEW_PROVIDER:-claude}
       - SWITCHYARD_TOKEN=${SWITCHYARD_API_TOKEN}
       - SWITCHYARD_TOKEN_N8N_VOX_DICTATE=${SWITCHYARD_TOKEN_N8N_VOX_DICTATE}
       - SWITCHYARD_WEBHOOK_SECRET=${SWITCHYARD_WEBHOOK_SECRET}
@@ -210,7 +227,11 @@ services:
     ports:
       - "8090:8090"
     environment:
-      - GITHUB_PAT=${GITHUB_PAT}
+      # LOOP-28: see n8n service comment above. IL_GH_PAT is the classic
+      # PAT with repo + workflow scopes; remapped to GITHUB_PAT inside the
+      # container so Servo-Signal's Go code (os.Getenv("GITHUB_PAT")) is
+      # unchanged.
+      - GITHUB_PAT=${IL_GH_PAT}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - WORKSPACES_VOLUME=construct-server_servo_signal_workspaces
       - PRINCIPLES_PATH=/data/principles/PRINCIPLES.md
