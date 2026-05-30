@@ -84,11 +84,13 @@ services:
     container: "watchtower"
     category: "Infrastructure"
     size: s
+    status_only: true
   - name: "PostgreSQL"
     type: docker
     container: "postgres"
     category: "Infrastructure"
     size: s
+    status_only: true
 
 ollama:
   url: "http://host.docker.internal:11434"
