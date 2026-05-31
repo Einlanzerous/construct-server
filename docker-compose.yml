@@ -129,6 +129,18 @@ services:
     volumes:
       - ./aperture/config.yaml:/app/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # AMD GPU monitoring: mount the host ROCm tree so amd-smi is on PATH.
+      # Versioned path — update on a ROCm upgrade. Takes effect once the
+      # ubuntu-based backend image (with python3) is deployed.
+      - /opt/rocm-6.4.4:/opt/rocm:ro
+    # GPU device passthrough + render/video groups (GIDs from this host:
+    # `getent group render video` -> video=44, render=993).
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - "44"
+      - "993"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
