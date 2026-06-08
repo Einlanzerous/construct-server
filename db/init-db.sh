@@ -25,3 +25,4 @@ ensure_db() {
 ensure_db cook_book_user "$COOK_BOOK_DB_PASSWORD" cook_book
 ensure_db switchyard_user "$SWITCHYARD_DB_PASSWORD" switchyard
 ensure_db switchyard_user "$SWITCHYARD_DB_PASSWORD" switchyard_test
+ensure_db centrifuge_user "$CENTRIFUGE_DB_PASSWORD" centrifuge
