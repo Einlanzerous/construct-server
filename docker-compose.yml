@@ -226,6 +226,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - COOK_BOOK_DB_PASSWORD=${COOK_BOOK_DB_PASSWORD}
       - SWITCHYARD_DB_PASSWORD=${SWITCHYARD_DB_PASSWORD}
+      - CENTRIFUGE_DB_PASSWORD=${CENTRIFUGE_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -354,6 +355,41 @@ services:
     depends_on:
       switchyard:
         condition: service_healthy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # --- NEWSLETTER CURATION (Centrifuge) ---
+  # Single image carrying the HTTP API and the decoupled scoring worker.
+  # Migrations run in the entrypoint (`centrifuge migrate`) against the
+  # centrifuge DB that db/init-db.sh provisions; restart: unless-stopped covers
+  # the first-boot race where that DB isn't created until the deploy's init-db
+  # step runs after `up -d`. Scoring calls the in-stack ollama by service name.
+  centrifuge:
+    image: ghcr.io/einlanzerous/centrifuge:latest
+    container_name: centrifuge
+    restart: unless-stopped
+    ports:
+      - "${CENTRIFUGE_PORT:-4003}:8080"
+    environment:
+      - PORT=8080
+      - DATABASE_URL=postgres://centrifuge_user:${CENTRIFUGE_DB_PASSWORD}@postgres:5432/centrifuge?sslmode=disable
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=${CENTRIFUGE_OLLAMA_MODEL:-gemma4:31b}
+      - INGEST_TOKEN=${CENTRIFUGE_INGEST_TOKEN}
+      - RELEVANCE_TOPICS=${CENTRIFUGE_RELEVANCE_TOPICS:-AI engineering,urbanism,transit/trains,nuclear,tech,video games}
+      # Absolute base URL stamped into /feed.xml links; blank => derived per request.
+      - PUBLIC_BASE_URL=${CENTRIFUGE_PUBLIC_BASE_URL:-}
+      - LOG_LEVEL=${CENTRIFUGE_LOG_LEVEL:-info}
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 
