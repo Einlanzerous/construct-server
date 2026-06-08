@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.2.0](https://github.com/Einlanzerous/construct-server/compare/v4.1.0...v4.2.0) (2026-06-08)
+
+
+### Features
+
+* **aperture:** pass through AMD GPU for amd-smi monitoring ([d6c7b95](https://github.com/Einlanzerous/construct-server/commit/d6c7b950da14d149d8657cbd088e71763306962a))
+* deploy centrifuge newsletter-curation service (CTFG-25) ([#41](https://github.com/Einlanzerous/construct-server/issues/41)) ([fd2c5e3](https://github.com/Einlanzerous/construct-server/commit/fd2c5e3ba4df18aecb3443881566ad7bdcc1d1c4))
+* Incorporate status only widgets ([75076bf](https://github.com/Einlanzerous/construct-server/commit/75076bfbdd35bd86ab6569ed71f6a3113d6cddcb))
+* **servo-signal:** mount PRINCIPLES.md for the /principles endpoint ([887c15f](https://github.com/Einlanzerous/construct-server/commit/887c15f4384ab2fb3298edadb1effeb6660e23b7))
+
+
+### Bug Fixes
+
+* backfill compose env drift (WEBHOOK_URL, IL_GH_PAT remap) ([d73a1de](https://github.com/Einlanzerous/construct-server/commit/d73a1deefdcdbdfebca2f7b32a301f02b16cfa04))
+* **servo-signal:** pin PRINCIPLES.md bind mount to absolute host path ([be86871](https://github.com/Einlanzerous/construct-server/commit/be868710e2b76b30543686965d753635c293f61d))
+
 ## [4.1.0](https://github.com/Einlanzerous/construct-server/compare/v4.0.0...v4.1.0) (2026-05-18)
 
 
