@@ -45,6 +45,12 @@ services:
     href: "http://imperial-construct:4002"
     category: "Applications"
     size: s
+  - name: "Centrifuge"
+    type: http
+    url: "http://host.docker.internal:4004"
+    href: "http://imperial-construct:4004"
+    category: "Applications"
+    size: s
 
   # File Sharing
   - name: "Copyparty"
