@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.0](https://github.com/Einlanzerous/construct-server/compare/v4.2.0...v4.3.0) (2026-06-10)
+
+
+### Features
+
+* add centrifuge-web service + Aperture tile (CTFG-38) ([#42](https://github.com/Einlanzerous/construct-server/issues/42)) ([fe9f824](https://github.com/Einlanzerous/construct-server/commit/fe9f824c6802c9061b06bad51164a3b6e11b3f50))
+
 ## [4.2.0](https://github.com/Einlanzerous/construct-server/compare/v4.1.0...v4.2.0) (2026-06-08)
 
 
