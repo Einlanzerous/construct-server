@@ -364,9 +364,9 @@ services:
   # centrifuge DB that db/init-db.sh provisions; restart: unless-stopped covers
   # the first-boot race where that DB isn't created until the deploy's init-db
   # step runs after `up -d`. Scoring calls the in-stack ollama by service name.
-  centrifuge:
-    image: ghcr.io/einlanzerous/centrifuge:latest
-    container_name: centrifuge
+  centrifuge-backend:
+    image: ghcr.io/einlanzerous/centrifuge/backend:latest
+    container_name: centrifuge-backend
     restart: unless-stopped
     ports:
       - "${CENTRIFUGE_PORT:-4003}:8080"
@@ -398,18 +398,18 @@ services:
   # points nginx at the backend service; nginx resolves it lazily so the UI
   # survives the backend restarting. Built+pushed from the same release as the
   # backend (CTFG-38).
-  centrifuge-web:
-    image: ghcr.io/einlanzerous/centrifuge-web:latest
-    container_name: centrifuge-web
+  centrifuge-frontend:
+    image: ghcr.io/einlanzerous/centrifuge/frontend:latest
+    container_name: centrifuge-frontend
     restart: unless-stopped
     ports:
       - "${CENTRIFUGE_WEB_PORT:-4004}:8080"
     environment:
-      - CENTRIFUGE_UPSTREAM=centrifuge:8080
+      - CENTRIFUGE_UPSTREAM=centrifuge-backend:8080
     networks:
       - construct_net
     depends_on:
-      - centrifuge
+      - centrifuge-backend
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/ || exit 1"]
       interval: 30s
