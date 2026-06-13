@@ -315,6 +315,11 @@ services:
       - PUBLIC_URL=${SWITCHYARD_PUBLIC_URL:-http://localhost:4002}
       - UPLOAD_DIR=/data/uploads
       - BOOTSTRAP_TOKEN=${SWITCHYARD_BOOTSTRAP_TOKEN}
+      # External-ref poller credential. Reuses the host PAT. Unset/expired =>
+      # poller logs "GITHUB_TOKEN unset — polling disabled" and attached refs
+      # never refresh state (PR-merge auto-close stops firing). Serves as the
+      # reconciliation backstop for repos without a push webhook configured.
+      - GITHUB_TOKEN=${GITHUB_PAT}
       # Public GitHub webhook receiver — exposed via Tailscale Funnel at
       # https://imperial-construct.tail64150e.ts.net/v1/external/github.
       # HMAC gates all requests; absent secret = receiver returns 503.
