@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.1](https://github.com/Einlanzerous/construct-server/compare/v4.3.0...v4.3.1) (2026-06-13)
+
+
+### Bug Fixes
+
+* some centrifuge adjustments ([cd55fcc](https://github.com/Einlanzerous/construct-server/commit/cd55fcc4988bdf8038829e118c8a536bce372656))
+
 ## [4.3.0](https://github.com/Einlanzerous/construct-server/compare/v4.2.0...v4.3.0) (2026-06-10)
 
 
