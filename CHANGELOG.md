@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.4.1](https://github.com/Einlanzerous/construct-server/compare/v4.4.0...v4.4.1) (2026-06-21)
+
+
+### Bug Fixes
+
+* pass ARGOSY_DB_PASSWORD into postgres (init-db) ([#47](https://github.com/Einlanzerous/construct-server/issues/47)) ([9ed96ec](https://github.com/Einlanzerous/construct-server/commit/9ed96ec938e38b5b4e0e11e4e4b9adc5983216d4))
+
 ## [4.4.0](https://github.com/Einlanzerous/construct-server/compare/v4.3.1...v4.4.0) (2026-06-21)
 
 
