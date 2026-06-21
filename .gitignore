@@ -10,6 +10,9 @@ ansible/secrets.yml
 *.retry
 *.log
 
+# Secrets / env snapshots
+*.snapshot
+
 # System
 .DS_Store
 
