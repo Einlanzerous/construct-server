@@ -301,6 +301,48 @@ services:
     depends_on:
       - postgres
 
+  # --- ARGOSY (media streaming) ---
+  # Single Go binary with the Vue SPA embedded + ffmpeg/Intel-QSV runtime (image
+  # published by the argosy repo). Needs /dev/dri for hardware transcoding and
+  # the media library mounted read-only.
+  argosy:
+    image: ghcr.io/einlanzerous/argosy:latest
+    container_name: argosy
+    restart: unless-stopped
+    ports:
+      - "${ARGOSY_PORT:-8096}:8096"
+    environment:
+      - ARGOSY_ADDR=:8096
+      - ARGOSY_DATABASE_URL=postgres://argosy_user:${ARGOSY_DB_PASSWORD}@postgres:5432/argosy?sslmode=disable
+      - ARGOSY_MEDIA_DIR=/media
+      - ARGOSY_ARTWORK_DIR=/artwork
+      - ARGOSY_SUBTITLE_DIR=/subtitles
+      - ARGOSY_TRANSCODE_DIR=/transcode
+      - ARGOSY_SCAN_INTERVAL=${ARGOSY_SCAN_INTERVAL:-15m}
+      - ARGOSY_ADMIN_USERNAME=${ARGOSY_ADMIN_USERNAME:-admin}
+      - ARGOSY_ADMIN_PASSWORD=${ARGOSY_ADMIN_PASSWORD}
+      - TMDB_API_READ_ACCESS_KEY=${TMDB_API_READ_ACCESS_KEY}
+      - TMDB_API_KEY=${TMDB_API_KEY}
+      - OPEN_SUBTITLES_API_KEY=${OPEN_SUBTITLES_API_KEY}
+      - OPEN_SUBTITLES_USERNAME=${OPEN_SUBTITLES_USERNAME}
+      - OPEN_SUBTITLES_PASSWORD=${OPEN_SUBTITLES_PASSWORD}
+    volumes:
+      - argosy_artwork:/artwork
+      - argosy_subtitles:/subtitles
+      - argosy_transcode:/transcode
+      - ${ARGOSY_MEDIA_DIR_HOST:-/data/media}:/media:ro
+    devices:
+      - /dev/dri   # Intel QSV / VAAPI hardware transcoding
+    group_add:
+      - "44"   # video
+      - "993"  # render (host GID)
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
   # --- TASK MANAGEMENT (Switchyard) ---
   # Backend (API only). Service name `switchyard` so agent URLs
   # (`http://switchyard:4002/v1/...`) resolve on construct_net.
@@ -435,6 +477,9 @@ volumes:
   servo_signal_workspaces:
   autosavant_state:
   switchyard_uploads:
+  argosy_artwork:
+  argosy_subtitles:
+  argosy_transcode:
 
 networks:
   construct_net:

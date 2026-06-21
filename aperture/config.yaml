@@ -51,6 +51,12 @@ services:
     href: "http://imperial-construct:4004"
     category: "Applications"
     size: s
+  - name: "Argosy"
+    type: http
+    url: "http://host.docker.internal:8096/healthz"
+    href: "http://imperial-construct:8096"
+    category: "Applications"
+    size: s
 
   # File Sharing
   - name: "Copyparty"
