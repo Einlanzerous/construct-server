@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.4.0](https://github.com/Einlanzerous/construct-server/compare/v4.3.1...v4.4.0) (2026-06-21)
+
+
+### Features
+
+* add argosy (media streaming) to the stack + aperture ([#45](https://github.com/Einlanzerous/construct-server/issues/45)) ([abb072c](https://github.com/Einlanzerous/construct-server/commit/abb072c622dd16b5bfc418448af77a7abb739c25))
+
 ## [4.3.1](https://github.com/Einlanzerous/construct-server/compare/v4.3.0...v4.3.1) (2026-06-13)
 
 
