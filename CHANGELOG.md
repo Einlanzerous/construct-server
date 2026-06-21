@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.5.0](https://github.com/Einlanzerous/construct-server/compare/v4.4.1...v4.5.0) (2026-06-21)
+
+
+### Features
+
+* wire up copyparty for argosy media library (SERV-5) ([#49](https://github.com/Einlanzerous/construct-server/issues/49)) ([70d5f2a](https://github.com/Einlanzerous/construct-server/commit/70d5f2aa1d4b315adfa8b63d7a5404bf819eb671))
+
 ## [4.4.1](https://github.com/Einlanzerous/construct-server/compare/v4.4.0...v4.4.1) (2026-06-21)
 
 
