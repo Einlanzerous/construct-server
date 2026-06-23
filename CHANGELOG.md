@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.5.1](https://github.com/Einlanzerous/construct-server/compare/v4.5.0...v4.5.1) (2026-06-23)
+
+
+### Bug Fixes
+
+* **centrifuge:** use 127.0.0.1 in frontend healthcheck (CTFG-60) ([3436e52](https://github.com/Einlanzerous/construct-server/commit/3436e520d541b8a4d77571ffaddd18e49c011a93))
+
 ## [4.5.0](https://github.com/Einlanzerous/construct-server/compare/v4.4.1...v4.5.0) (2026-06-21)
 
 
