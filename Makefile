@@ -1,4 +1,4 @@
-.PHONY: network up down db-up db-shell db-check db-init
+.PHONY: network up down recreate drift-check db-up db-shell db-check db-init
 
 # Create the construct_net Docker bridge network (required before starting the stack)
 network:
@@ -11,6 +11,20 @@ up: network
 # Stop the full stack
 down:
 	docker compose down
+
+# Recreate service(s) so docker-compose.yml edits (mounts/env/image) take effect.
+# ALWAYS use this after editing the compose — NEVER `docker restart`, which silently
+# keeps the old container spec (see SERV-8 / the /media-ssd drift incident).
+# Usage: make recreate            (recreate any drifted service across the stack)
+#        make recreate svc=argosy (recreate a single service)
+recreate: network
+	docker compose up -d $(svc)
+
+# Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
+# Usage: make drift-check            (check every service)
+#        make drift-check svc=argosy (check a single service)
+drift-check:
+	./scripts/check-compose-drift.sh $(svc)
 
 # Start only the postgres service
 db-up: network
