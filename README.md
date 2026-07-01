@@ -110,9 +110,61 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 | `make network` | Create the `construct_net` Docker bridge network |
 | `make up` | Create network + start full stack |
 | `make down` | Stop full stack |
+| `make recreate [svc=<name>]` | **Recreate** service(s) after a compose edit (see [Operations](#-operations--runbook)) |
+| `make drift-check [svc=<name>]` | Detect containers running a stale spec vs `docker-compose.yml` |
 | `make db-up` | Start only the postgres service |
 | `make db-shell` | Open a psql shell to postgres |
 | `make db-check` | Verify databases and user access |
+
+## 🛠️ Operations & Runbook
+
+### ⚠️ After editing `docker-compose.yml`: recreate, never restart
+
+`docker restart <svc>` **reuses the existing container's config** — it does **not** pick up
+mount, env, image, port, or any other change you just made to `docker-compose.yml`. The
+container keeps running its old spec, silently, until it is recreated.
+
+After **any** edit to `docker-compose.yml`, recreate the affected service so the new spec
+takes effect:
+
+```bash
+make recreate svc=argosy
+# or directly:
+docker compose up -d argosy           # `up -d` detects config drift and recreates
+```
+
+`docker compose up -d` is safe to run repeatedly: it recreates only the services whose
+config changed and leaves the rest untouched. Data on **named volumes survives** a
+recreate (e.g. postgres data lives on a named volume — recreating the container does not
+touch it).
+
+> **Why this matters — the SSD Library outage (SERV-8, 2026-06-29):** the `/mnt/ssd_storage/media → /media-ssd:ro`
+> bind was added to `docker-compose.yml`, but the live `argosy` container had only been
+> `docker restart`ed afterward, so it never gained the mount. Every SSD-Library title
+> (Futurama, 24, …) 503'd then 404'd with `open /media-ssd/shows/...: no such file or directory`,
+> even though the host SSD was healthy and the DB had valid rows. The fix was a single
+> `docker compose up -d argosy`, which detected the drift and reattached the mount.
+
+### Checking for drift
+
+To verify that the live containers actually match `docker-compose.yml` — i.e. nothing has
+been left on a stale spec — run the drift checker:
+
+```bash
+make drift-check              # check every service
+make drift-check svc=argosy   # check one service
+```
+
+It compares each running container's live mounts (`docker inspect`) against the mounts
+declared in the resolved compose file (`docker compose config`) and flags:
+
+- **DRIFT** (exit 1) — a declared mount is **missing** or has the wrong type/read-only
+  flag, or a stale bind lingers that compose no longer declares. Fix with `make recreate svc=<name>`.
+- **warn** (exit 0) — informational only, e.g. a bind source that differs because the
+  stack was deployed from a different checkout (the CI runner), or an image-declared
+  anonymous volume.
+
+Because it exits non-zero on real drift, it's also suitable as a periodic / pre-deploy check.
 
 ## 🧰 Helper Tools
 - **[Software Page Generator](tools/software-page/README.md)**: Creates a static HTML page with links to essential software downloads.
