@@ -331,7 +331,13 @@ services:
       - argosy_artwork:/artwork
       - argosy_subtitles:/subtitles
       - argosy_transcode:/transcode
+      # Library 1 (NVMe): the original /data/media library. argosy is multi-library
+      # (libraries table, per-row root_path) — ARGOSY_MEDIA_DIR is vestigial/unused.
       - ${ARGOSY_MEDIA_DIR_HOST:-/data/media}:/media:ro
+      # Library 2 (2TB SATA SSD at /mnt/ssd_storage): active-acquisition shows
+      # (24, Futurama S5-11, future grabs). Registered as a second `libraries` row
+      # with root_path=/media-ssd. Read-only — only the Servarr stack writes here.
+      - /mnt/ssd_storage/media:/media-ssd:ro
     devices:
       - /dev/dri   # Intel QSV / VAAPI hardware transcoding
     group_add:
