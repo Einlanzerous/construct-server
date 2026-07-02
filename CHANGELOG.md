@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.5.1](https://github.com/Einlanzerous/construct-server/compare/v4.5.0...v4.5.1) (2026-07-02)
+
+
+### Bug Fixes
+
+* **argosy:** commit /media-ssd Library-2 bind + compose-drift guardrail ([#52](https://github.com/Einlanzerous/construct-server/issues/52)) ([37389e6](https://github.com/Einlanzerous/construct-server/commit/37389e6d9343e2f47dc53f8237381563c0eb7b10))
+* **centrifuge:** use 127.0.0.1 in frontend healthcheck (CTFG-60) ([3436e52](https://github.com/Einlanzerous/construct-server/commit/3436e520d541b8a4d77571ffaddd18e49c011a93))
+
 ## [4.5.0](https://github.com/Einlanzerous/construct-server/compare/v4.4.1...v4.5.0) (2026-06-21)
 
 
