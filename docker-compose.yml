@@ -228,6 +228,8 @@ services:
       - SWITCHYARD_DB_PASSWORD=${SWITCHYARD_DB_PASSWORD}
       - CENTRIFUGE_DB_PASSWORD=${CENTRIFUGE_DB_PASSWORD}
       - ARGOSY_DB_PASSWORD=${ARGOSY_DB_PASSWORD}
+      # Authentik (SERV-19) — its DB/user is provisioned by db/init-db.sh.
+      - AUTHENTIK_DB_PASSWORD=${AUTHENTIK_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -467,6 +469,170 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 
+  # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
+  # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
+  # ONLY Argosy + a deny-all catch-all; `internal` (:9080 HTTP, deliberately NOT
+  # published) carries the tunneled apps and is the cloudflared origin. Identity headers are
+  # stripped on ingress. TLS via Let's Encrypt DNS-01 (Cloudflare). File provider only
+  # — no Docker socket, edge policy is committed under config/traefik/.
+  #
+  # LIVE for the tunnel path: cloudflared → internal → switchyard, gated by Cloudflare
+  # Access. The public/Argosy path is NOT wired yet — it needs the CF token for certs
+  # (SERV-21) and the Phase 3 relay (line is behind CGNAT — SERV-15). TLS issuance
+  # no-ops until the token lands, which is fine (tunnel apps use Cloudflare's edge cert).
+  # See docs/zerogravity-edge.md.
+  traefik:
+    image: traefik:v3.3
+    container_name: traefik
+    restart: unless-stopped
+    # No host port published: the public/Argosy path is CGNAT-blocked (SERV-15) AND host
+    # 443 is currently held by Tailscale Funnel. cloudflared reaches the `internal`
+    # entrypoint over construct_net, so the tunnel path needs no host bind. `internal`
+    # (:9080) and the dashboard (:8080) are construct_net-only by design. Re-enable the
+    # public bind when the Phase 3 relay lands (on a free interface if 443 is still taken):
+    #   ports:
+    #     - "443:8443"   # -> public entrypoint (:8443)
+    environment:
+      # Scoped Cloudflare token (Zone:DNS:Edit on zerogravity.industries) for the
+      # ACME DNS-01 challenge. Set in .env once minted (SERV-14 / SERV-21).
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN:-}
+    volumes:
+      - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./config/traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik_letsencrypt:/letsencrypt
+    networks:
+      - construct_net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # --- CLOUDFLARE TUNNEL (cloudflared) — SERV-23 ---
+  # Dashboard-managed (token) tunnel. Runs ON construct_net so it can reach Traefik's
+  # unpublished `internal` entrypoint at http://traefik:9080 — a host-run connector
+  # cannot, which is why this must be containerized here. Ingress (public hostname →
+  # http://traefik:9080) is configured in the Zero Trust dashboard (SERV-24), not a
+  # local config file. No open ports: cloudflared dials out to the Cloudflare edge.
+  #
+  # NOTE: retire any host-run `cloudflared tunnel run` (and its systemd service)
+  # before starting this — two connectors on one token would let Cloudflare route
+  # requests to the host connector, which can't reach traefik:9080. See docs.
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-latest}
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      # Same token you stored in .env for the host run — reused verbatim.
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - construct_net
+    depends_on:
+      - traefik
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # --- IDENTITY (Authentik) — SERV-19 ---
+  # Self-hosted IdP and source of truth for the hybrid edge. Uses the shared
+  # postgres (authentik DB provisioned by db/init-db.sh) + a dedicated Redis.
+  # NO public exposure: the server HTTP port is bound to localhost only for
+  # first-boot admin (akadmin) setup; Phase 2 fronts it via Traefik `internal`
+  # + an Access-exempt tunnel hostname. Forward-auth/OIDC integrations point at
+  # http://authentik-server:9000 over construct_net, so identity on the direct
+  # path survives a Cloudflare outage.
+  authentik-server:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG:-stable}
+    container_name: authentik-server
+    restart: unless-stopped
+    # Gated behind the `identity` profile: NOT started by a plain `docker compose up -d`.
+    # Bring up deliberately AFTER setting AUTHENTIK_* secrets in .env and provisioning
+    # the DB (postgres must be recreated to pick up AUTHENTIK_DB_PASSWORD, then `make db-init`):
+    #   docker compose --profile identity up -d authentik-redis authentik-server authentik-worker
+    profiles: ["identity"]
+    command: server
+    environment:
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_POSTGRESQL__HOST=postgres
+      - AUTHENTIK_POSTGRESQL__PORT=5432
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_POSTGRESQL__USER=authentik_user
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${AUTHENTIK_DB_PASSWORD}
+      - AUTHENTIK_REDIS__HOST=authentik-redis
+      - AUTHENTIK_ERROR_REPORTING__ENABLED=false
+      - AUTHENTIK_DISABLE_UPDATE_CHECK=true
+      # First-boot admin bootstrap (akadmin). Consumed only on initial DB init.
+      - AUTHENTIK_BOOTSTRAP_EMAIL=${AUTHENTIK_BOOTSTRAP_EMAIL:-}
+      - AUTHENTIK_BOOTSTRAP_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD:-}
+      - AUTHENTIK_BOOTSTRAP_TOKEN=${AUTHENTIK_BOOTSTRAP_TOKEN:-}
+    ports:
+      # localhost-only — reach via SSH forward for initial setup; never 0.0.0.0.
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+    depends_on:
+      - postgres
+      - authentik-redis
+    networks:
+      - construct_net
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG:-stable}
+    container_name: authentik-worker
+    restart: unless-stopped
+    profiles: ["identity"]
+    command: worker
+    # Background tasks (cert rotation, outpost mgmt, email). Upstream runs the
+    # worker as root. No Docker socket mounted — Traefik forward-auth uses the
+    # embedded outpost in the server, so no docker-managed outposts are needed.
+    user: root
+    environment:
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_POSTGRESQL__HOST=postgres
+      - AUTHENTIK_POSTGRESQL__PORT=5432
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_POSTGRESQL__USER=authentik_user
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${AUTHENTIK_DB_PASSWORD}
+      - AUTHENTIK_REDIS__HOST=authentik-redis
+      - AUTHENTIK_ERROR_REPORTING__ENABLED=false
+      - AUTHENTIK_DISABLE_UPDATE_CHECK=true
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+    depends_on:
+      - postgres
+      - authentik-redis
+    networks:
+      - construct_net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # Dedicated Redis for Authentik (nothing else in the stack uses one).
+  authentik-redis:
+    image: redis:7-alpine
+    container_name: authentik-redis
+    restart: unless-stopped
+    profiles: ["identity"]
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - authentik_redis_data:/data
+    networks:
+      - construct_net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
 volumes:
   open-webui:
   ollama_data:
@@ -481,6 +647,11 @@ volumes:
   argosy_artwork:
   argosy_subtitles:
   argosy_transcode:
+  # Zero Gravity Industries hybrid edge (SERV-19/20)
+  traefik_letsencrypt:
+  authentik_media:
+  authentik_templates:
+  authentik_redis_data:
 
 networks:
   construct_net:

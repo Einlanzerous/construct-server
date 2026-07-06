@@ -1,0 +1,123 @@
+# Traefik dynamic configuration — Zero Gravity Industries hybrid edge (SERV-20)
+#
+# Explicit allowlist. Only the routers below are served. On the public entrypoint,
+# anything that is not Argosy is refused by `public-catchall`. The tunneled routers
+# exist ONLY on the internal entrypoint, so the open WAN port physically cannot
+# reach them — that is the "no tunnel bypass via the open port" guarantee.
+
+http:
+  middlewares:
+    # Strip spoofable identity headers on ingress. Applied to BOTH entrypoints via
+    # entryPoints.*.http.middlewares in traefik.yml. An empty value deletes the
+    # header, so a client cannot inject a forged identity that an app might trust.
+    strip-identity-headers:
+      headers:
+        customRequestHeaders:
+          X-Authentik-Username: ""
+          X-Authentik-Groups: ""
+          X-Authentik-Email: ""
+          X-Authentik-Name: ""
+          X-Authentik-Uid: ""
+          X-Authentik-Jwt: ""
+          X-Authentik-Meta-Jwks: ""
+          X-Authentik-Meta-Outpost: ""
+          X-Authentik-Meta-Provider: ""
+          X-Authentik-Meta-App: ""
+          X-Authentik-Meta-Version: ""
+          Remote-User: ""
+          Remote-Groups: ""
+          Remote-Email: ""
+          Remote-Name: ""
+          X-Forwarded-User: ""
+          X-Forwarded-Groups: ""
+          X-Forwarded-Email: ""
+          X-Forwarded-Preferred-Username: ""
+
+    # Public edge only: Cloudflare Access is NOT in front of the direct Argosy path,
+    # so a client must not be able to inject Cf-Access-* trust headers. On the
+    # internal entrypoint these arrive from cloudflared and are cryptographically
+    # validated in Phase 2 (SERV-25) — so they are NOT stripped there.
+    strip-cf-access:
+      headers:
+        customRequestHeaders:
+          Cf-Access-Jwt-Assertion: ""
+          Cf-Access-Authenticated-User-Email: ""
+
+    # Deny-all for the public catch-all. Traefik has no native 444; an ipAllowList
+    # with an unmatchable source range returns 403 before any backend is reached.
+    # A true connection-drop (444) can be layered on later at the relay or via a
+    # plugin — the security property (unknown hosts get nothing) already holds.
+    deny-all:
+      ipAllowList:
+        sourceRange:
+          - "255.255.255.255/32"
+
+  routers:
+    # ---------------- PUBLIC entrypoint: Argosy ONLY ----------------
+    argosy:
+      entryPoints:
+        - public
+      rule: "Host(`argosy.zerogravity.industries`)"
+      service: argosy
+      middlewares:
+        - strip-cf-access
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "zerogravity.industries"
+            sans:
+              - "*.zerogravity.industries"
+
+    # Lowest-priority deny-all. Any Host/SNI on :public that is not Argosy is
+    # refused (403). Defense-in-depth: the tunneled routers below do not exist on
+    # this entrypoint at all, so there is nothing to bypass to.
+    public-catchall:
+      entryPoints:
+        - public
+      rule: "HostRegexp(`.+`)"
+      priority: 1
+      service: blackhole
+      middlewares:
+        - deny-all
+      tls: {}
+
+    # ------------- INTERNAL entrypoint: tunneled apps -------------
+    # Reachable only via cloudflared over construct_net. Phase 2 (SERV-25) adds a
+    # cf-access-jwt validation middleware to each of these routers.
+    switchyard:
+      entryPoints:
+        - internal
+      rule: "Host(`switchyard.zerogravity.industries`)"
+      service: switchyard
+      # No TLS: internal is plain HTTP (Cloudflare terminates TLS at the edge and
+      # the tunnel encrypts the wire). Phase 2 (SERV-25) adds a cf-access-jwt
+      # validation middleware here.
+
+    # Lyceum is not yet deployed to this stack (LYCM project). Uncomment once a
+    # `lyceum` service exists on construct_net, then it routes like switchyard
+    # (HTTP on the internal entrypoint — no tls block).
+    # lyceum:
+    #   entryPoints:
+    #     - internal
+    #   rule: "Host(`lyceum.zerogravity.industries`)"
+    #   service: lyceum
+
+  services:
+    argosy:
+      loadBalancer:
+        servers:
+          - url: "http://argosy:8096"
+
+    switchyard:
+      loadBalancer:
+        # switchyard-frontend serves the SPA and passes /v1 + /healthz to the
+        # backend (see docker-compose.yml). Route the tunneled host at the frontend.
+        servers:
+          - url: "http://switchyard-frontend:4002"
+
+    # Never actually reached — deny-all returns 403 first. Present only because a
+    # Traefik router requires a service reference.
+    blackhole:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:1"

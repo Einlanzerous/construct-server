@@ -1,0 +1,76 @@
+# Traefik static configuration — Zero Gravity Industries hybrid edge (SERV-20)
+#
+# Split entrypoints are the security keystone (plan-of-record, non-negotiable):
+#   * public   — the WAN-forwarded 443. Serves ONLY the Argosy router plus a
+#                lowest-priority deny-all catch-all. Nothing tunneled lives here.
+#   * internal — Docker-network-only (NOT published to the host). cloudflared
+#                dials this; it carries the tunneled apps (switchyard, lyceum…).
+# Identity headers are stripped on ingress on BOTH entrypoints (see the
+# entryPoints.*.http.middlewares refs below + config/traefik/dynamic/routers.yml).
+#
+# TLS is issued via Let's Encrypt DNS-01 (Cloudflare) — never opens port 80 and
+# works behind grey-cloud / CGNAT. See docs/zerogravity-edge.md for the runbook.
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+
+accessLog:
+  format: json
+
+api:
+  dashboard: true
+  insecure: false   # dashboard is reachable only on the internal :8080, never published
+
+entryPoints:
+  # WAN-facing 443 (router port-forward, or fronted by the Phase 3 relay while the
+  # line is behind CGNAT — see SERV-15). Argosy only; everything else is denied.
+  public:
+    address: ":8443"
+    http:
+      middlewares:
+        - strip-identity-headers@file
+    # Do not trust any client-supplied X-Forwarded-* on the public edge.
+    forwardedHeaders:
+      trustedIPs: []
+
+  # Internal entrypoint — target for cloudflared at http://traefik:9080. Plain HTTP
+  # on purpose: the leg from cloudflared to Traefik runs inside construct_net behind
+  # an already-encrypted tunnel, and Cloudflare presents the edge cert to browsers,
+  # so no origin cert is needed here (only the public/Argosy path needs the LE cert).
+  # This port is intentionally absent from the compose `ports:` list, so it is
+  # unreachable from the host/WAN and can never provide a bypass around Access.
+  internal:
+    address: ":9080"
+    http:
+      middlewares:
+        - strip-identity-headers@file
+
+  # Traefik dashboard / API — internal only, never published.
+  traefik:
+    address: ":8080"
+
+providers:
+  file:
+    # Explicit allowlist of routers/services/middlewares. No Docker provider: the
+    # edge policy is committed and reviewable, and nothing is auto-exposed.
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: acme@zerogravity.industries   # non-secret; change if you prefer
+      storage: /letsencrypt/acme.json
+      # DNS-01 only. The cloudflare provider reads CF_DNS_API_TOKEN from the
+      # container environment (set in .env). While testing, switch to staging to
+      # avoid rate limits:
+      #   caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      dnsChallenge:
+        provider: cloudflare
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
