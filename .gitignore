@@ -12,6 +12,11 @@ ansible/secrets.yml
 
 # Secrets / env snapshots
 *.snapshot
+creds/
+
+# WIP services (not yet landed as their own PRs)
+services/argosy-acquisition/
+services/argosy-derrick/
 
 # System
 .DS_Store
