@@ -28,3 +28,5 @@ ensure_db switchyard_user "$SWITCHYARD_DB_PASSWORD" switchyard_test
 ensure_db centrifuge_user "$CENTRIFUGE_DB_PASSWORD" centrifuge
 ensure_db argosy_user "$ARGOSY_DB_PASSWORD" argosy
 ensure_db authentik_user "$AUTHENTIK_DB_PASSWORD" authentik
+ensure_db lyceum_user "$LYCEUM_DB_PASSWORD" lyceum
+ensure_db lyceum_user "$LYCEUM_DB_PASSWORD" lyceum_test
