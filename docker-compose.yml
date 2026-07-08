@@ -230,6 +230,8 @@ services:
       - ARGOSY_DB_PASSWORD=${ARGOSY_DB_PASSWORD}
       # Authentik (SERV-19) — its DB/user is provisioned by db/init-db.sh.
       - AUTHENTIK_DB_PASSWORD=${AUTHENTIK_DB_PASSWORD}
+      # Lyceum (LYCM-61) — DB/user provisioned by db/init-db.sh.
+      - LYCEUM_DB_PASSWORD=${LYCEUM_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -475,6 +477,56 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 
+  # --- LYCEUM (self-hosted ebook reader + sync) — LYCM-61 ---
+  # One Go binary serving the JSON API *and* the embedded Vue reader SPA
+  # same-origin (image published by the lyceum repo). Shared Postgres; EPUB/cover
+  # blobs on a named volume; folder-ingest watches the acquisition books library
+  # read-only. Native apps (Android/Windows) + the browser reader all hit :4005.
+  lyceum:
+    image: ghcr.io/einlanzerous/lyceum:latest
+    container_name: lyceum
+    restart: unless-stopped
+    ports:
+      - "${LYCEUM_PORT:-4005}:4005"
+    environment:
+      - LYCEUM_ADDR=:4005
+      - LYCEUM_DATABASE_URL=postgres://lyceum_user:${LYCEUM_DB_PASSWORD}@postgres:5432/lyceum?sslmode=disable
+      - LYCEUM_DATA_DIR=/data/blobs
+      # Folder ingest: EPUBs dropped into the mounted books library are ingested
+      # like an /upload. Absorbs LYCM-57 (prod must set the watch dir).
+      - LYCEUM_BOOKS_WATCH_DIR=/books
+      - LYCEUM_BOOKS_WATCH_INTERVAL=${LYCEUM_BOOKS_WATCH_INTERVAL:-15}
+      # Canonical cover fetch (Apple Books/iTunes) fills poor embedded covers.
+      - LYCEUM_COVER_FETCH=${LYCEUM_COVER_FETCH:-true}
+      # CORS for cross-origin native shells (Wails desktop). Blank => same-origin
+      # web build only, which sends no Origin.
+      - LYCEUM_CORS_ORIGINS=${LYCEUM_CORS_ORIGINS:-}
+      # Optional Eidolon/delivery API tokens + Send-to-Kindle SMTP (LYCM-40x).
+      # Unset => those features stay disabled.
+      - LYCEUM_API_TOKENS=${LYCEUM_API_TOKENS:-}
+      - LYCEUM_SMTP_HOST=${LYCEUM_SMTP_HOST:-}
+      - LYCEUM_SMTP_PORT=${LYCEUM_SMTP_PORT:-587}
+      - LYCEUM_SMTP_USERNAME=${LYCEUM_SMTP_USERNAME:-}
+      - LYCEUM_SMTP_PASSWORD=${LYCEUM_SMTP_PASSWORD:-}
+      - LYCEUM_SMTP_FROM=${LYCEUM_SMTP_FROM:-}
+      - LYCEUM_KINDLE_ADDR=${LYCEUM_KINDLE_ADDR:-}
+    volumes:
+      - lyceum_data:/data/blobs
+      # Books library to fold-ingest, read-only (defaults alongside argosy media).
+      - ${LYCEUM_BOOKS_DIR_HOST:-/data/media/books}:/books:ro
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4005/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
   # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
   # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
   # ONLY Argosy + a deny-all catch-all; `internal` (:9080 HTTP, deliberately NOT
@@ -653,6 +705,7 @@ volumes:
   argosy_artwork:
   argosy_subtitles:
   argosy_transcode:
+  lyceum_data:
   # Zero Gravity Industries hybrid edge (SERV-19/20)
   traefik_letsencrypt:
   authentik_media:
