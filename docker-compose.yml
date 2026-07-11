@@ -326,6 +326,11 @@ services:
       - ARGOSY_SCAN_INTERVAL=${ARGOSY_SCAN_INTERVAL:-15m}
       - ARGOSY_ADMIN_USERNAME=${ARGOSY_ADMIN_USERNAME:-admin}
       - ARGOSY_ADMIN_PASSWORD=${ARGOSY_ADMIN_PASSWORD}
+      # PIN-pairing LAN discovery (ARGY-123) can't advertise from this bridge
+      # network — multicast never leaves it — so keep the mDNS advertiser off.
+      # To enable discovery, switch this service to network_mode: host and set
+      # ARGOSY_SERVER_NAME (drop the ports: mapping; the binary listens on 8096).
+      - ARGOSY_DISABLE_MDNS=1
       - TMDB_API_READ_ACCESS_KEY=${TMDB_API_READ_ACCESS_KEY}
       - TMDB_API_KEY=${TMDB_API_KEY}
       - OPEN_SUBTITLES_API_KEY=${OPEN_SUBTITLES_API_KEY}
@@ -381,6 +386,13 @@ services:
       # titles/branches and resolve via the projects table. Strict "SWY"
       # works fine for a single project but doesn't scale to LOOP etc.
       - EXTERNAL_REF_KEY_PREFIX=*
+      # Cloudflare Access SSO (SWY-161) — auto sign-in from the tunnel-injected
+      # Cf-Access-Jwt-Assertion JWT. Both must be set or the endpoint returns
+      # sso_disabled and the login page falls back to token paste. Values are
+      # public identifiers (not secrets): AUD tag + team domain from the Zero
+      # Trust dashboard. A CF-verified email must match a switchyard user's email.
+      - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      - CF_ACCESS_AUD=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de
     volumes:
       - switchyard_uploads:/data/uploads
     networks:
