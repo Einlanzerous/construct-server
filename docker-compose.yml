@@ -232,6 +232,8 @@ services:
       - AUTHENTIK_DB_PASSWORD=${AUTHENTIK_DB_PASSWORD}
       # Lyceum (LYCM-61) — DB/user provisioned by db/init-db.sh.
       - LYCEUM_DB_PASSWORD=${LYCEUM_DB_PASSWORD}
+      # Purser (SERV-33) — DB/user provisioned by db/init-db.sh.
+      - PURSER_DB_PASSWORD=${PURSER_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -536,6 +538,46 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # --- PURSER (cross-service provisioning & invite service) — SERV-33 ---
+  # One command onboards a person into multiple services: creates their Switchyard
+  # user + token and grants Cloudflare Access SSO, returning a copy-pasteable
+  # credential block (or emailing it). Tunnel-internal / CLI tool, no public
+  # hostname. Reuses the Switchyard bootstrap admin token (SERV-35 tracks a
+  # dedicated one). See github.com/Einlanzerous/purser.
+  purser:
+    image: ghcr.io/einlanzerous/purser:latest
+    container_name: purser
+    restart: unless-stopped
+    ports:
+      - "${PURSER_PORT:-4006}:4006"
+    environment:
+      - PURSER_ADDR=:4006
+      - PURSER_DATABASE_URL=postgres://purser_user:${PURSER_DB_PASSWORD}@postgres:5432/purser?sslmode=disable
+      - PURSER_API_TOKEN=${PURSER_API_TOKEN}
+      # Switchyard connector: create user + mint token.
+      - PURSER_SWITCHYARD_BASE_URL=http://switchyard:4002
+      - PURSER_SWITCHYARD_TOKEN=${SWITCHYARD_BOOTSTRAP_TOKEN}
+      - PURSER_SWITCHYARD_URL=https://switchyard.zerogravity.industries
+      # Cloudflare Access connector (SERV-36). Unset => `--to cloudflare` prints
+      # the manual dashboard step instead of granting access via the API.
+      - PURSER_CF_API_TOKEN=${PURSER_CF_API_TOKEN:-}
+      - PURSER_CF_ACCOUNT_ID=${PURSER_CF_ACCOUNT_ID:-}
+      - PURSER_CF_ACCESS_GROUP_ID=${PURSER_CF_ACCESS_GROUP_ID:-}
+      - PURSER_CF_ACCESS_GROUP_NAME=zerogravity-members
+      - PURSER_CF_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4006/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 
