@@ -524,6 +524,13 @@ services:
       - LYCEUM_SMTP_PASSWORD=${LYCEUM_SMTP_PASSWORD:-}
       - LYCEUM_SMTP_FROM=${LYCEUM_SMTP_FROM:-}
       - LYCEUM_KINDLE_ADDR=${LYCEUM_KINDLE_ADDR:-}
+      # Bindery acquirer (LYCM-76): a confirmed "wanted" ISBN triggers a real
+      # grab via Bindery's searchOnAdd. Base URL defaults to Bindery's
+      # host-published port (reachable from construct_net); override via .env if
+      # the host IP changes. The API key must be set in PROD_ENV_FILE — without
+      # both, Lyceum falls back to the no-op acquirer (records "wanted" only).
+      - LYCEUM_BINDERY_BASE_URL=${LYCEUM_BINDERY_BASE_URL:-http://10.0.0.45:8787}
+      - LYCEUM_BINDERY_API_KEY=${LYCEUM_BINDERY_API_KEY:-}
     volumes:
       - lyceum_data:/data/blobs
       # Books library to fold-ingest, read-only (defaults alongside argosy media).
