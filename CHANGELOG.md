@@ -1,5 +1,15 @@
 # Changelog
 
+## [4.6.0](https://github.com/Einlanzerous/construct-server/compare/v4.5.1...v4.6.0) (2026-07-12)
+
+
+### Features
+
+* **edge:** Zero Gravity hybrid edge — Traefik split entrypoints + Cloudflare tunnel + Access (SERV-19/20/23/24/25) ([#53](https://github.com/Einlanzerous/construct-server/issues/53)) ([6644a7f](https://github.com/Einlanzerous/construct-server/commit/6644a7f975f03aadf3b27bcd8ae0875ec2a0111f))
+* **lyceum:** add Lyceum service to the construct stack (LYCM-61) ([#56](https://github.com/Einlanzerous/construct-server/issues/56)) ([1285856](https://github.com/Einlanzerous/construct-server/commit/12858565ddad6db0e57f7ef84c63c1b02975057f))
+* **lyceum:** wire the Bindery acquirer (LYCM-76) ([#59](https://github.com/Einlanzerous/construct-server/issues/59)) ([3352d95](https://github.com/Einlanzerous/construct-server/commit/3352d9570f63eef4bf87fc2863c4d740ea9414cc))
+* **purser:** deploy Purser service + provision its database (SERV-33/37) ([#58](https://github.com/Einlanzerous/construct-server/issues/58)) ([d68d19a](https://github.com/Einlanzerous/construct-server/commit/d68d19a3e51c104b48f6cd000a7de6086a408779))
+
 ## [4.5.1](https://github.com/Einlanzerous/construct-server/compare/v4.5.0...v4.5.1) (2026-07-02)
 
 
