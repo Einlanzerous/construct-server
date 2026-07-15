@@ -506,6 +506,14 @@ services:
       - LYCEUM_ADDR=:4005
       - LYCEUM_DATABASE_URL=postgres://lyceum_user:${LYCEUM_DB_PASSWORD}@postgres:5432/lyceum?sslmode=disable
       - LYCEUM_DATA_DIR=/data/blobs
+      # Household accounts (LYCM-804). With this on, the reader core requires a
+      # signed-in user; with it off (the default) every request is served as the
+      # owner. OWNER_EMAIL lands the operator's identity on the seeded owner row.
+      # Both come from PROD_ENV_FILE. Turning AUTH on locks out any client that
+      # can't sign in yet — do it only once the phones are on an accounts build.
+      - LYCEUM_AUTH=${LYCEUM_AUTH:-false}
+      - LYCEUM_OWNER_EMAIL=${LYCEUM_OWNER_EMAIL:-}
+      - LYCEUM_OWNER_NAME=${LYCEUM_OWNER_NAME:-}
       # Folder ingest: EPUBs dropped into the mounted books library are ingested
       # like an /upload. Absorbs LYCM-57 (prod must set the watch dir).
       - LYCEUM_BOOKS_WATCH_DIR=/books
