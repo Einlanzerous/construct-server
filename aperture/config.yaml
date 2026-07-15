@@ -57,6 +57,12 @@ services:
     href: "http://imperial-construct:8096"
     category: "Applications"
     size: s
+  - name: "Lyceum"
+    type: http
+    url: "http://host.docker.internal:4005/healthz"
+    href: "http://imperial-construct:4005"
+    category: "Applications"
+    size: s
 
   # File Sharing
   - name: "Copyparty"
