@@ -33,6 +33,7 @@ The following services are currently active:
 
 ### 🔧 Application Services
 -   **[cook_book](services/cook_book/)**: TypeScript/Prisma recipe service with its own `cook_book` database.
+-   **[Purser](https://github.com/Einlanzerous/purser)**: Cross-service provisioning & invite service (Go, single static binary — CLI + thin HTTP API). One command onboards a person into multiple Construct services: creates their [Switchyard](https://github.com/Einlanzerous/switchyard) user + token and grants Cloudflare Access SSO (email OTP), returning a copy-pasteable credential block. A downstream consumer of this stack — backed by its own `purser` database, and it calls Switchyard's `/v1` API and the Cloudflare Access API. Image: `ghcr.io/einlanzerous/purser`.
 
 ### 🎮 Gaming & Remote Play
 -   **[Sunshine](https://github.com/LizardByte/Sunshine)**: High-performance game streaming host for Moonlight.
@@ -94,6 +95,7 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 |---------|----------|------|------------|
 | cook_book | `cook_book` | `cook_book_user` | [Prisma Migrate](https://www.prisma.io/docs/concepts/components/prisma-migrate) — `prisma migrate deploy` at entrypoint |
 | switchyard | `switchyard` | `switchyard_user` | Drizzle migrations run at server entrypoint |
+| purser | `purser` | `purser_user` | In-process embedded migrator (`internal/store/migrate.go`) at boot |
 | n8n | `n8n` | `n8n_user` | n8n auto-migrates on startup |
 
 - Databases and users are created automatically by `db/init-db.sh` on first volume initialization.
