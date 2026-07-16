@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.7.0](https://github.com/Einlanzerous/construct-server/compare/v4.6.0...v4.7.0) (2026-07-16)
+
+
+### Features
+
+* **aperture:** add Lyceum to the dashboard ([#63](https://github.com/Einlanzerous/construct-server/issues/63)) ([800f982](https://github.com/Einlanzerous/construct-server/commit/800f98210871a6bf577b74dce4ed6accf8a353ac))
+* **lyceum:** enable household accounts on the reader core (LYCM-804) ([#61](https://github.com/Einlanzerous/construct-server/issues/61)) ([e9e5713](https://github.com/Einlanzerous/construct-server/commit/e9e5713d2805336237fae9ef20d3b829f1789361))
+
+
+### Bug Fixes
+
+* **db:** don't blank a role when its password env is empty (SERV-33/40) ([#64](https://github.com/Einlanzerous/construct-server/issues/64)) ([c977bde](https://github.com/Einlanzerous/construct-server/commit/c977bde4f19d0eda7e15751d188f08590030f219))
+
 ## [4.6.0](https://github.com/Einlanzerous/construct-server/compare/v4.5.1...v4.6.0) (2026-07-12)
 
 
