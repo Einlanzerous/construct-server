@@ -13,7 +13,9 @@ services:
       # (gemma4:31b at 64K ≈ 26 GB resident). Callers wanting longer ctx pass
       # `options.num_ctx` per request; callers wanting shorter to free VRAM
       # do the same. Beware: 128K+ on a 30B model spills to system RAM.
-      - OLLAMA_NUM_CTX=65536
+      # Ollama ≥0.32 reads OLLAMA_CONTEXT_LENGTH; the old OLLAMA_NUM_CTX name
+      # is ignored (server falls back to a VRAM-based default of 32K).
+      - OLLAMA_CONTEXT_LENGTH=65536
     volumes:
       - ollama_data:/root/.ollama
     devices:
