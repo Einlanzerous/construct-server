@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.8.0](https://github.com/Einlanzerous/construct-server/compare/v4.7.0...v4.8.0) (2026-07-18)
+
+
+### Features
+
+* **interlock:** add Interlock web + worker to the stack (ITLK-18) ([#66](https://github.com/Einlanzerous/construct-server/issues/66)) ([64ecb70](https://github.com/Einlanzerous/construct-server/commit/64ecb70ffe50c37c423c315f61932304d58f39df))
+
+
+### Bug Fixes
+
+* **ollama:** rename OLLAMA_NUM_CTX to OLLAMA_CONTEXT_LENGTH ([#65](https://github.com/Einlanzerous/construct-server/issues/65)) ([e0f214d](https://github.com/Einlanzerous/construct-server/commit/e0f214d4ed7c77c3dbc29171a2a29f86baa356f3))
+
 ## [4.7.0](https://github.com/Einlanzerous/construct-server/compare/v4.6.0...v4.7.0) (2026-07-16)
 
 
