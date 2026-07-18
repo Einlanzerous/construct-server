@@ -236,6 +236,9 @@ services:
       - LYCEUM_DB_PASSWORD=${LYCEUM_DB_PASSWORD}
       # Purser (SERV-33) — DB/user provisioned by db/init-db.sh.
       - PURSER_DB_PASSWORD=${PURSER_DB_PASSWORD}
+      # Interlock (ITLK-18) — DB/user provisioned by db/init-db.sh. The worker's
+      # migration creates pg_trgm itself (trusted extension; interlock_user owns the DB).
+      - INTERLOCK_DB_PASSWORD=${INTERLOCK_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -595,6 +598,71 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # --- INTERLOCK (city + state legislation tracker) — ITLK-18 ---
+  # Nuxt/Nitro SSR app: serves the UI and its /api behind single-user session auth
+  # (ITLK-13). SESSION_PASSWORD seals the cookie; AUTH_PASSWORD_HASH is the scrypt
+  # login hash (`bun run auth:hash` in the interlock repo). Public exposure — Traefik
+  # router + cloudflared + CF Access — is ITLK-19; until then the host port is how you
+  # reach it. Flip INTERLOCK_AUTH_COOKIE_SECURE=true once it's served over HTTPS.
+  interlock-web:
+    image: ghcr.io/einlanzerous/interlock/web:latest
+    container_name: interlock-web
+    restart: unless-stopped
+    ports:
+      - "${INTERLOCK_PORT:-4007}:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://interlock_user:${INTERLOCK_DB_PASSWORD}@postgres:5432/interlock?sslmode=disable
+      - SESSION_PASSWORD=${INTERLOCK_SESSION_PASSWORD}
+      - AUTH_PASSWORD_HASH=${INTERLOCK_AUTH_PASSWORD_HASH}
+      - AUTH_COOKIE_SECURE=${INTERLOCK_AUTH_COOKIE_SECURE:-false}
+      # Keep the UI and ingest in agreement on the sponsor auto-link threshold.
+      - MATCH_NAME_SIMILARITY_THRESHOLD=${INTERLOCK_MATCH_THRESHOLD:-0.85}
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    healthcheck:
+      # /api/health is public (unauthenticated); bun is in the image, so no extra tools.
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>r.json()).then(h=>process.exit(h.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # The headless poller + normalizer + alerter. No host port. `restart: unless-stopped`
+  # + the persisted fetch_cursor gives crash-resume, and it also rides out the first-boot
+  # race where the interlock DB isn't created until the deploy's init-db step runs after
+  # `up -d` (the worker crash-loops for a few seconds, then migrates and polls).
+  interlock-worker:
+    image: ghcr.io/einlanzerous/interlock/worker:latest
+    container_name: interlock-worker
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://interlock_user:${INTERLOCK_DB_PASSWORD}@postgres:5432/interlock?sslmode=disable
+      # Illinois GA ingest. Blank => Chicago-only (the Clerk's eLMS needs no key); logged loudly.
+      - LEGISCAN_API_KEY=${INTERLOCK_LEGISCAN_API_KEY:-}
+      # Email alerts. Blank => in-app alerts only.
+      - SMTP_URL=${INTERLOCK_SMTP_URL:-}
+      - ALERT_EMAIL_TO=${INTERLOCK_ALERT_EMAIL_TO:-}
+      - ALERT_EMAIL_FROM=${INTERLOCK_ALERT_EMAIL_FROM:-}
+      - MATCH_NAME_SIMILARITY_THRESHOLD=${INTERLOCK_MATCH_THRESHOLD:-0.85}
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 

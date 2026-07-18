@@ -43,3 +43,4 @@ ensure_db authentik_user "$AUTHENTIK_DB_PASSWORD" authentik
 ensure_db lyceum_user "$LYCEUM_DB_PASSWORD" lyceum
 ensure_db lyceum_user "$LYCEUM_DB_PASSWORD" lyceum_test
 ensure_db purser_user "$PURSER_DB_PASSWORD" purser
+ensure_db interlock_user "$INTERLOCK_DB_PASSWORD" interlock
