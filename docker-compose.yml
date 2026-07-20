@@ -519,6 +519,14 @@ services:
       - LYCEUM_AUTH=${LYCEUM_AUTH:-false}
       - LYCEUM_OWNER_EMAIL=${LYCEUM_OWNER_EMAIL:-}
       - LYCEUM_OWNER_NAME=${LYCEUM_OWNER_NAME:-}
+      # Cloudflare Access SSO (LYCM-803) — auto sign-in from the tunnel-injected
+      # Cf-Access-Jwt-Assertion JWT, mirroring switchyard (SWY-161). Both must be
+      # set or the endpoint stays disabled. Values are public identifiers (not
+      # secrets): team domain + the Access application's AUD tag from the Zero
+      # Trust dashboard. A CF-verified email must match a lyceum user's email;
+      # unknown emails are refused, never auto-provisioned.
+      - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      - CF_ACCESS_AUD=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850
       # Folder ingest: EPUBs dropped into the mounted books library are ingested
       # like an /upload. Absorbs LYCM-57 (prod must set the watch dir).
       - LYCEUM_BOOKS_WATCH_DIR=/books
