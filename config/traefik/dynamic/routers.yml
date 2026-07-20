@@ -93,14 +93,15 @@ http:
       # the tunnel encrypts the wire). Phase 2 (SERV-25) adds a cf-access-jwt
       # validation middleware here.
 
-    # Lyceum is not yet deployed to this stack (LYCM project). Uncomment once a
-    # `lyceum` service exists on construct_net, then it routes like switchyard
-    # (HTTP on the internal entrypoint — no tls block).
-    # lyceum:
-    #   entryPoints:
-    #     - internal
-    #   rule: "Host(`lyceum.zerogravity.industries`)"
-    #   service: lyceum
+    # Lyceum (LYCM-803): tunneled + Cloudflare Access, mirroring switchyard. HTTP
+    # on the internal entrypoint — no tls block. Cf-Access-Jwt-Assertion is
+    # preserved here (only stripped on the public entrypoint) and validated by
+    # Lyceum's backend against the team-domain JWKS + AUD.
+    lyceum:
+      entryPoints:
+        - internal
+      rule: "Host(`lyceum.zerogravity.industries`)"
+      service: lyceum
 
   services:
     argosy:
@@ -114,6 +115,13 @@ http:
         # backend (see docker-compose.yml). Route the tunneled host at the frontend.
         servers:
           - url: "http://switchyard-frontend:4002"
+
+    lyceum:
+      loadBalancer:
+        # One Go binary serves the JSON API and the embedded reader SPA same-origin
+        # on :4005 — no separate frontend, so route the tunneled host straight at it.
+        servers:
+          - url: "http://lyceum:4005"
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.
