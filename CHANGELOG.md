@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.9.0](https://github.com/Einlanzerous/construct-server/compare/v4.8.0...v4.9.0) (2026-07-20)
+
+
+### Features
+
+* **lyceum:** tunnel + Cloudflare Access edge for lyceum.zerogravity.industries (LYCM-803) ([#68](https://github.com/Einlanzerous/construct-server/issues/68)) ([eb6fb43](https://github.com/Einlanzerous/construct-server/commit/eb6fb433f2f39fec530f8999da2ce4aef02fbc4c))
+
 ## [4.8.0](https://github.com/Einlanzerous/construct-server/compare/v4.7.0...v4.8.0) (2026-07-18)
 
 
