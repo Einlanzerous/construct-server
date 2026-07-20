@@ -22,6 +22,10 @@ The following services are currently active:
 ### 📂 Storage & File Sharing
 -   **[Copyparty](https://github.com/9001/copyparty)**: Lightweight file server serving files from the 1TB NVMe drive (`/data`).
 
+### 🎬 Media & Library
+-   **[Argosy](https://github.com/Einlanzerous/argosy)**: Self-hosted media streaming — a single Go binary with the Vue SPA embedded, plus an ffmpeg/Intel-QSV runtime for hardware transcoding (`/dev/dri`). Libraries span the NVMe (`/data/media`) and the 2TB SSD (`/mnt/ssd_storage`), mounted read-only.
+-   **[Lyceum](https://github.com/Einlanzerous/lyceum)**: Self-hosted ebook reader + sync. One Go binary serving the JSON API *and* the embedded Vue reader SPA same-origin; EPUB/cover blobs on a named volume, folder-ingest watching the books library. Native Android/Windows shells and the browser reader all hit `:4005`. Household accounts are on (`LYCEUM_AUTH=true`) with Cloudflare Access SSO.
+
 ### 🗄️ Database
 -   **[PostgreSQL 16](https://www.postgresql.org/)**: Shared instance providing isolated databases for application services. Each service gets its own database and user — see [Architecture](#-database-architecture) below.
 
@@ -33,22 +37,34 @@ The following services are currently active:
 
 ### 🔧 Application Services
 -   **[cook_book](services/cook_book/)**: TypeScript/Prisma recipe service with its own `cook_book` database.
--   **[Purser](https://github.com/Einlanzerous/purser)**: Cross-service provisioning & invite service (Go, single static binary — CLI + thin HTTP API). One command onboards a person into multiple Construct services: creates their [Switchyard](https://github.com/Einlanzerous/switchyard) user + token and grants Cloudflare Access SSO (email OTP), returning a copy-pasteable credential block. A downstream consumer of this stack — backed by its own `purser` database, and it calls Switchyard's `/v1` API and the Cloudflare Access API. Image: `ghcr.io/einlanzerous/purser`.
+-   **[Purser](https://github.com/Einlanzerous/purser)**: Cross-service provisioning & invite service (Go, single static binary — CLI + thin HTTP API). One command onboards a person into multiple Construct services: creates their [Switchyard](https://github.com/Einlanzerous/switchyard) user + token, creates their [Lyceum](https://github.com/Einlanzerous/lyceum) account, and grants Cloudflare Access SSO (email OTP), returning a copy-pasteable credential block. A downstream consumer of this stack — backed by its own `purser` database, and it calls Switchyard's `/v1` API, Lyceum's `/admin` API, and the Cloudflare Access API. Image: `ghcr.io/einlanzerous/purser`.
+-   **[Interlock](https://github.com/Einlanzerous/interlock)**: City + state legislation tracker (Nuxt/Nitro SSR) serving its UI and `/api` behind single-user session auth. A `worker` sidecar handles scheduled LegiScan syncs and alerting.
+-   **[Centrifuge](https://github.com/Einlanzerous/centrifuge)**: Newsletter curation — HTTP API plus a decoupled scoring worker that calls the in-stack Ollama by service name for relevance scoring.
 
 ### 🎮 Gaming & Remote Play
 -   **[Sunshine](https://github.com/LizardByte/Sunshine)**: High-performance game streaming host for Moonlight.
+
+### 🌐 Public Edge
+Public hostnames under `zerogravity.industries` are served through a Cloudflare Tunnel — **no open ports**. See **[docs/zerogravity-edge.md](docs/zerogravity-edge.md)** for the full architecture, the split-entrypoint security model, and the bring-up runbook.
+
+-   **[Traefik v3](https://traefik.io)**: Reverse proxy with split entrypoints — `internal` (tunnel-only, never published to the host) and `public` (Argosy's direct path, not yet bound). Strips spoofable identity headers on ingress.
+-   **[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)**: In-stack tunnel connector; origins point at `http://traefik:9080`.
+-   **Cloudflare Access**: Email one-time-PIN SSO in front of the tunneled apps. A shared `zerogravity-members` group is the single allow-list; Switchyard and Lyceum both match the CF-verified email against their own user records and **never auto-provision**, so accounts are created up-front via Purser.
+
+> **Identity invariant:** a person needs *both* a Cloudflare Access entry and an app account with the same email. Provision with `purser invite --to switchyard,lyceum,cloudflare` so both halves land together — adding only one side leaves them able to pass the edge gate and then be refused by the app.
 
 ## 🗺️ Roadmap
 
 Items that have shipped live in the [Current Stack](#-current-stack) above. This section tracks what's still planned:
 
--   [ ] **[Panox](https://panox.io)**: Library Management System for books/games.
 -   [ ] **[Strapi](https://strapi.io)**: Headless CMS for the urbanist blog.
 -   [ ] **[Betterstack](https://betterstack.com)**: Uptime monitoring and incident alerting.
 -   [ ] **[Kourier](https://github.com/Kourier/Kourier)**: Self-hosted modern email client.
 -   [ ] **[Rundeck](https://www.rundeck.com)**: Enterprise job scheduler (potential Semaphore replacement if needed).
+-   [ ] **Authentik**: Self-hosted identity as the single source of truth, replacing Cloudflare Access's built-in email-OTP IdP. Authored and gated behind the `identity` compose profile — not started by a plain `docker compose up -d`. See [docs/zerogravity-edge.md](docs/zerogravity-edge.md).
+-   [ ] **Direct/Argosy path**: A DNS-only record → WAN 443 → Traefik's `public` entrypoint, so media bypasses the tunnel. Blocked by CGNAT; needs a relay.
 
-Previously on the roadmap, now in active use: Copyparty, Switchyard (which replaced Vikunja, which itself replaced the earlier Plane plan), n8n, and the full Imperium-Loop pipeline.
+Previously on the roadmap, now in active use: Copyparty, Switchyard (which replaced Vikunja, which itself replaced the earlier Plane plan), n8n, the full Imperium-Loop pipeline, and **Lyceum** (which supersedes the earlier Panox plan for book library management).
 
 ## 🛠️ Setup & Installation
 
@@ -59,7 +75,9 @@ Previously on the roadmap, now in active use: Copyparty, Switchyard (which repla
     ```
 
 2.  **Configure Environment Variables:**
-    Copy the example file and update it with your secrets. Core vars: Datadog API Key, Postgres/Switchyard/n8n passwords. Imperium-Loop pipeline also needs `ANTHROPIC_API_KEY`, `GITHUB_PAT`, `SWITCHYARD_DB_PASSWORD`, `SWITCHYARD_BOOTSTRAP_TOKEN`, `DISCORD_BOT_TOKEN`/`DISCORD_CHANNEL_ID`/`DISCORD_PLANNING_WEBHOOK_URL`, and `N8N_API_KEY`.
+    Copy the example file and update it with your secrets. Core vars: Datadog API Key, Postgres/Switchyard/n8n passwords. Imperium-Loop pipeline also needs `ANTHROPIC_API_KEY`, `GITHUB_PAT`, `SWITCHYARD_DB_PASSWORD`, `SWITCHYARD_BOOTSTRAP_TOKEN`, `DISCORD_BOT_TOKEN`/`DISCORD_CHANNEL_ID`/`DISCORD_PLANNING_WEBHOOK_URL`, and `N8N_API_KEY`. The public edge needs `CLOUDFLARE_TUNNEL_TOKEN` (and `CF_DNS_API_TOKEN` once the direct path is unblocked); Purser's connectors need `PURSER_CF_*` and `PURSER_LYCEUM_OWNER_TOKEN`.
+
+    > **Deploys don't read this file.** CI writes `.env` on the server from the **`PROD_ENV_FILE`** secret on the `home-server` environment. A var added here but not there will vanish on the next deploy — update both (`gh secret set PROD_ENV_FILE --env home-server < .env`).
     ```bash
     cp .env.example .env
     nano .env
@@ -96,6 +114,11 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 | cook_book | `cook_book` | `cook_book_user` | [Prisma Migrate](https://www.prisma.io/docs/concepts/components/prisma-migrate) — `prisma migrate deploy` at entrypoint |
 | switchyard | `switchyard` | `switchyard_user` | Drizzle migrations run at server entrypoint |
 | purser | `purser` | `purser_user` | In-process embedded migrator (`internal/store/migrate.go`) at boot |
+| argosy | `argosy` | `argosy_user` | Run by the Go binary at startup |
+| lyceum | `lyceum` | `lyceum_user` | Run by the Go binary at startup |
+| interlock | `interlock` | `interlock_user` | Custom SQL migrator (`packages/db`), advisory-locked so web + worker can't race at boot |
+| centrifuge | `centrifuge` | `centrifuge_user` | `centrifuge migrate` in the entrypoint |
+| authentik | `authentik` | `authentik_user` | Django migrations on boot (`identity` profile — authored, not deployed) |
 | n8n | `n8n` | `n8n_user` | n8n auto-migrates on startup |
 
 - Databases and users are created automatically by `db/init-db.sh` on first volume initialization.

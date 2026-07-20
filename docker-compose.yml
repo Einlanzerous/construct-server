@@ -596,6 +596,13 @@ services:
       - PURSER_CF_ACCESS_GROUP_ID=${PURSER_CF_ACCESS_GROUP_ID:-}
       - PURSER_CF_ACCESS_GROUP_NAME=zerogravity-members
       - PURSER_CF_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      # Lyceum connector (SERV-42). OWNER_TOKEN must be an owner *session* token:
+      # redeem a `lyceum mint-token` invite via POST /auth/session — a
+      # LYCEUM_API_TOKENS entry can't reach /admin. The lyceum service must also
+      # run with LYCEUM_AUTH=true. Unset => connector registers as Unavailable.
+      - PURSER_LYCEUM_BASE_URL=http://lyceum:4005
+      - PURSER_LYCEUM_OWNER_TOKEN=${PURSER_LYCEUM_OWNER_TOKEN:-}
+      - PURSER_LYCEUM_URL=https://lyceum.zerogravity.industries
     networks:
       - construct_net
     depends_on:
