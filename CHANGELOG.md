@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.10.0](https://github.com/Einlanzerous/construct-server/compare/v4.9.0...v4.10.0) (2026-07-23)
+
+
+### Features
+
+* **edge:** Argosy WAN path live + CrowdSec hardening (SERV-26, SERV-27) ([#70](https://github.com/Einlanzerous/construct-server/issues/70)) ([743a40d](https://github.com/Einlanzerous/construct-server/commit/743a40d36ae3c403fab3d7a435364762e0301c20))
+
 ## [4.9.0](https://github.com/Einlanzerous/construct-server/compare/v4.8.0...v4.9.0) (2026-07-20)
 
 
