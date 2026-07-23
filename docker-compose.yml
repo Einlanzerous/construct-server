@@ -688,30 +688,58 @@ services:
   # stripped on ingress. TLS via Let's Encrypt DNS-01 (Cloudflare). File provider only
   # — no Docker socket, edge policy is committed under config/traefik/.
   #
-  # LIVE for the tunnel path: cloudflared → internal → switchyard, gated by Cloudflare
-  # Access. The public/Argosy path is NOT wired yet — it needs the CF token for certs
-  # (SERV-21) and the Phase 3 relay (line is behind CGNAT — SERV-15). TLS issuance
-  # no-ops until the token lands, which is fine (tunnel apps use Cloudflare's edge cert).
+  # LIVE for both paths: cloudflared → internal → switchyard/lyceum (gated by Cloudflare
+  # Access), and WAN 443 → public → Argosy (SERV-26, static IP via the Plume forward).
+  # The public path is hardened by CrowdSec (SERV-27): the crowdsec service below parses
+  # the access log; the bouncer plugin on the Argosy routers enforces its decisions.
   # See docs/zerogravity-edge.md.
   traefik:
     image: traefik:v3.3
     container_name: traefik
     restart: unless-stopped
-    # No host port published: the public/Argosy path is CGNAT-blocked (SERV-15) AND host
-    # 443 is currently held by Tailscale Funnel. cloudflared reaches the `internal`
-    # entrypoint over construct_net, so the tunnel path needs no host bind. `internal`
-    # (:9080) and the dashboard (:8080) are construct_net-only by design. Re-enable the
-    # public bind when the Phase 3 relay lands (on a free interface if 443 is still taken):
-    #   ports:
-    #     - "443:8443"   # -> public entrypoint (:8443)
+    # Host 443 -> Traefik's `public` entrypoint (:8443) for the Argosy WAN path (SERV-26).
+    # Tailscale Funnel previously held 443; it was moved off (the Switchyard GitHub webhook
+    # now rides cloudflared — SERV-45), freeing the port. The `internal` (:9080) and
+    # dashboard (:8080) entrypoints stay construct_net-only (unpublished), so the open WAN
+    # port can only ever reach the Argosy router — never a tunneled app.
+    ports:
+      - "443:8443"   # WAN 443 -> host 443 -> public entrypoint (:8443)
     environment:
       # Scoped Cloudflare token (Zone:DNS:Edit on zerogravity.industries) for the
       # ACME DNS-01 challenge. Set in .env once minted (SERV-14 / SERV-21).
       - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN:-}
+      # LAPI key for the CrowdSec bouncer plugin (SERV-27). Minted once via
+      # `docker exec crowdsec cscli bouncers add traefik-bouncer -o raw` → .env.
+      # Referenced from dynamic/routers.yml via file-provider go-templating.
+      - CROWDSEC_BOUNCER_KEY=${CROWDSEC_BOUNCER_KEY:-}
     volumes:
       - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./config/traefik/dynamic:/etc/traefik/dynamic:ro
       - traefik_letsencrypt:/letsencrypt
+      - traefik_access_logs:/var/log/traefik
+    networks:
+      - construct_net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  # --- CROWDSEC (SERV-27) — behavioral IPS for the open WAN path ---
+  # Parses Traefik's JSON access log (shared volume, read-only) with the
+  # crowdsecurity/traefik collection; scenario hits (brute force, scanning,
+  # http-probing…) become ban decisions served over its LAPI (:8080, construct_net
+  # only — never published). Traefik's crowdsec-bouncer middleware enforces them
+  # on the public Argosy routers. LAN/tailnet are exempt at the bouncer, so a
+  # false positive can never lock us out of our own edge.
+  crowdsec:
+    image: crowdsecurity/crowdsec:v1.7.8
+    container_name: crowdsec
+    restart: unless-stopped
+    environment:
+      - COLLECTIONS=crowdsecurity/traefik
+    volumes:
+      - ./config/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - crowdsec_config:/etc/crowdsec
+      - crowdsec_data:/var/lib/crowdsec/data
+      - traefik_access_logs:/var/log/traefik:ro
     networks:
       - construct_net
     labels:
@@ -862,6 +890,9 @@ volumes:
   lyceum_data:
   # Zero Gravity Industries hybrid edge (SERV-19/20)
   traefik_letsencrypt:
+  traefik_access_logs:
+  crowdsec_config:
+  crowdsec_data:
   authentik_media:
   authentik_templates:
   authentik_redis_data:

@@ -52,6 +52,37 @@ http:
         sourceRange:
           - "255.255.255.255/32"
 
+    # Login brute-force throttle for the WAN-exposed Argosy auth endpoints (SERV-27).
+    # Applied ONLY via the argosy-auth router below (scoped to /api/v1/auth/*), so it
+    # never touches media/HLS-segment requests. Per client IP — the public edge trusts
+    # no X-Forwarded-* (traefik.yml forwardedHeaders.trustedIPs: []), so this is the
+    # real remote IP arriving via the router's DNAT. Token bucket: 5 req/s sustained,
+    # bursts up to 15.
+    argosy-login-ratelimit:
+      rateLimit:
+        average: 5
+        burst: 15
+
+    # CrowdSec bouncer (SERV-27): rejects IPs with an active CrowdSec decision
+    # before anything else runs. `live` mode = one LAPI round-trip per new client
+    # IP (then cached). The LAPI key is minted with `cscli bouncers add` and
+    # injected via the container env (file provider go-templating). LAN, tailnet
+    # and loopback are exempt so a misfiring scenario can never lock us out of
+    # our own edge.
+    crowdsec-bouncer:
+      plugin:
+        crowdsec-bouncer:
+          enabled: true
+          crowdsecMode: live
+          crowdsecLapiScheme: http
+          crowdsecLapiHost: "crowdsec:8080"
+          crowdsecLapiKey: '{{ env "CROWDSEC_BOUNCER_KEY" }}'
+          clientTrustedIps:
+            - "10.0.0.0/24"      # home LAN
+            - "100.64.0.0/10"    # tailnet
+            - "172.16.0.0/12"    # docker networks
+            - "127.0.0.1/32"
+
   routers:
     # ---------------- PUBLIC entrypoint: Argosy ONLY ----------------
     argosy:
@@ -60,7 +91,28 @@ http:
       rule: "Host(`argosy.zerogravity.industries`)"
       service: argosy
       middlewares:
+        - crowdsec-bouncer
         - strip-cf-access
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "zerogravity.industries"
+            sans:
+              - "*.zerogravity.industries"
+
+    # Same Argosy backend, but the auth endpoints get the login rate-limit. Higher
+    # priority than `argosy` so /api/v1/auth/* matches here; everything else (incl.
+    # media/HLS segments) falls through to `argosy` unthrottled.
+    argosy-auth:
+      entryPoints:
+        - public
+      rule: "Host(`argosy.zerogravity.industries`) && PathPrefix(`/api/v1/auth/`)"
+      priority: 1000
+      service: argosy
+      middlewares:
+        - crowdsec-bouncer
+        - strip-cf-access
+        - argosy-login-ratelimit
       tls:
         certResolver: letsencrypt
         domains:
