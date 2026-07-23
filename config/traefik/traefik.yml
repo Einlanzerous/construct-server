@@ -20,6 +20,19 @@ log:
 
 accessLog:
   format: json
+  # Written to a file (shared volume) so CrowdSec can tail it — the crowdsec
+  # container mounts this path read-only and parses it with the traefik
+  # collection (SERV-27). Error/startup logs still go to stdout (`docker logs`).
+  filePath: /var/log/traefik/access.log
+
+# CrowdSec bouncer middleware (SERV-27): checks each request's client IP against
+# the local CrowdSec LAPI and 403s banned IPs. Wired into the public Argosy
+# routers in dynamic/routers.yml.
+experimental:
+  plugins:
+    crowdsec-bouncer:
+      moduleName: github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+      version: v1.6.0
 
 api:
   dashboard: true

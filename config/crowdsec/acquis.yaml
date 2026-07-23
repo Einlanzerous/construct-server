@@ -1,0 +1,7 @@
+# CrowdSec log acquisition (SERV-27): tail Traefik's JSON access log from the
+# shared traefik_access_logs volume. The `traefik` label routes lines to the
+# crowdsecurity/traefik parser (installed via COLLECTIONS in docker-compose).
+filenames:
+  - /var/log/traefik/access.log
+labels:
+  type: traefik
