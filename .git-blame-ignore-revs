@@ -1,0 +1,6 @@
+# Revisions to skip in `git blame` — whole-tree reformatting with no content
+# change. Enable with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# SERV-52: normalize all text files to LF (line endings only).
+f6797e0cc59346c87c10d0608ed728f28b01bd94

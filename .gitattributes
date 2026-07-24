@@ -1,1 +1,9 @@
+# Normalize every text file to LF in the repository and on checkout. Without a
+# rule covering docker-compose.yml, a working copy converted to CRLF turns into
+# a whole-file conflict (~920 lines) that can hide a real one-line regression —
+# see SERV-52. text=auto still auto-detects binaries, so images and archives
+# pass through untouched.
+* text=auto eol=lf
+
+# Explicit: shell scripts must be LF or the shebang line breaks under bash.
 *.sh text eol=lf
