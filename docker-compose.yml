@@ -409,7 +409,12 @@ services:
       # /v1/signet/* returns configured:false). Token must match the daemon's
       # SIGNET_API_TOKEN; it never reaches the browser (server-side proxy only).
       - SIGNET_BASE_URL=${SIGNET_BASE_URL:-http://host.docker.internal:4010}
-      - SIGNET_API_TOKEN=${SIGNET_API_TOKEN}
+      # Bare passthrough, NOT ${SIGNET_API_TOKEN}: the interpolated form always
+      # sets the key, and Switchyard's env validation rejects a present-but-empty
+      # token (min 8 chars) — which crash-loops the container before the Signet
+      # connector ever gets to self-disable. Bare syntax omits the key entirely
+      # when unset and still reads the value from .env once provisioned.
+      - SIGNET_API_TOKEN
     # Container-to-host bridge so the connector above can reach the Signet
     # daemon bound to 127.0.0.1:4010 on the host.
     extra_hosts:
