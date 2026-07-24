@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.12.0](https://github.com/Einlanzerous/construct-server/compare/v4.11.1...v4.12.0) (2026-07-24)
+
+
+### Features
+
+* **purser:** wire the Argosy connector env (SERV-50) ([#75](https://github.com/Einlanzerous/construct-server/issues/75)) ([de5c8d1](https://github.com/Einlanzerous/construct-server/commit/de5c8d14f34b843a183b432ea13d4f0ce4cc128f))
+
 ## [4.11.1](https://github.com/Einlanzerous/construct-server/compare/v4.11.0...v4.11.1) (2026-07-24)
 
 
