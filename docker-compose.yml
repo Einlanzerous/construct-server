@@ -622,6 +622,14 @@ services:
       - PURSER_LYCEUM_BASE_URL=http://lyceum:4005
       - PURSER_LYCEUM_OWNER_TOKEN=${PURSER_LYCEUM_OWNER_TOKEN:-}
       - PURSER_LYCEUM_URL=https://lyceum.zerogravity.industries
+      # Argosy connector (SERV-50): create account + return the one-time
+      # password. Reuses the same secret the argosy service holds — argosy
+      # registers POST /api/v1/admin/accounts only when ARGOSY_PROVISION_TOKEN is
+      # set and 404s the route otherwise, so the two must stay in lockstep.
+      # Unset => connector registers as Unavailable. Note port 8096, not 8080.
+      - PURSER_ARGOSY_BASE_URL=http://argosy:8096
+      - PURSER_ARGOSY_PROVISION_TOKEN=${ARGOSY_PROVISION_TOKEN:-}
+      - PURSER_ARGOSY_URL=https://argosy.zerogravity.industries
     networks:
       - construct_net
     depends_on:
