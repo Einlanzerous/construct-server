@@ -75,6 +75,8 @@
     - server
     - tailscale
     - github_runner
+    - role: signet
+      tags: signet
     - role: sunshine
       tags: sunshine
 

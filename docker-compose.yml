@@ -333,6 +333,9 @@ services:
       - ARGOSY_SCAN_INTERVAL=${ARGOSY_SCAN_INTERVAL:-15m}
       - ARGOSY_ADMIN_USERNAME=${ARGOSY_ADMIN_USERNAME:-admin}
       - ARGOSY_ADMIN_PASSWORD=${ARGOSY_ADMIN_PASSWORD}
+      # Service-level secret for POST /api/v1/admin/accounts (ARGY-132);
+      # Purser presents it as X-Provision-Token. Managed by Signet.
+      - ARGOSY_PROVISION_TOKEN=${ARGOSY_PROVISION_TOKEN}
       # PIN-pairing LAN discovery (ARGY-123) can't advertise from this bridge
       # network — multicast never leaves it — so keep the mDNS advertiser off.
       # To enable discovery, switch this service to network_mode: host and set
@@ -400,6 +403,17 @@ services:
       # Trust dashboard. A CF-verified email must match a switchyard user's email.
       - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
       - CF_ACCESS_AUD=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de
+      # Signet connector (SWY-165 / SERV-44). Signet is a host daemon, not a
+      # container — reach it via host.docker.internal (see extra_hosts below).
+      # Both vars absent => connector self-disables (Admin › Credentials hidden,
+      # /v1/signet/* returns configured:false). Token must match the daemon's
+      # SIGNET_API_TOKEN; it never reaches the browser (server-side proxy only).
+      - SIGNET_BASE_URL=${SIGNET_BASE_URL:-http://host.docker.internal:4010}
+      - SIGNET_API_TOKEN=${SIGNET_API_TOKEN}
+    # Container-to-host bridge so the connector above can reach the Signet
+    # daemon bound to 127.0.0.1:4010 on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - switchyard_uploads:/data/uploads
     networks:

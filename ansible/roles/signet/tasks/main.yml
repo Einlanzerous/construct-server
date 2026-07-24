@@ -1,0 +1,64 @@
+---
+- name: Check whether the Signet binary is installed
+  stat:
+    path: "{{ signet_binary }}"
+  register: signet_binary_stat
+
+- name: Warn if the Signet binary is missing
+  debug:
+    msg: >-
+      {{ signet_binary }} not found — installing the systemd unit but leaving it
+      stopped. Complete Signet bring-up (SGNT-1: build/install the binary, init
+      the vault) then re-run this role to start the daemon.
+  when: not signet_binary_stat.stat.exists
+
+- name: Create Signet secrets directory
+  file:
+    path: "{{ signet_env_dir }}"
+    state: directory
+    owner: root
+    group: "{{ signet_user }}"
+    mode: "0750"
+
+- name: Deploy Signet environment file (SIGNET_API_TOKEN)
+  template:
+    src: signet.env.j2
+    dest: "{{ signet_env_file }}"
+    owner: "{{ signet_user }}"
+    group: "{{ signet_user }}"
+    mode: "0600"
+  no_log: true
+  notify: Restart Signet
+
+- name: Deploy Signet systemd unit
+  template:
+    src: signet.service.j2
+    dest: /etc/systemd/system/signet.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd daemon
+    - Restart Signet
+
+- name: Flush handlers so the unit is (re)loaded before enable/start
+  meta: flush_handlers
+
+# Only start once the vault actually exists — an empty token or missing binary
+# would just crash-loop the unit. Both present => enable + start on boot.
+- name: Enable and start Signet
+  systemd:
+    name: signet
+    enabled: true
+    state: started
+  when:
+    - signet_binary_stat.stat.exists
+    - signet_api_token | length > 0
+
+- name: Note that Signet was left stopped
+  debug:
+    msg: >-
+      Signet unit installed but not started — {{ 'binary missing' if not
+      signet_binary_stat.stat.exists else 'signet_api_token is empty (set it in
+      secrets.sops.yml)' }}.
+  when: not (signet_binary_stat.stat.exists and (signet_api_token | length > 0))

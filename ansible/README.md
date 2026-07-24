@@ -47,6 +47,7 @@ The main playbook for managing personal infrastructure.
     *   **Docker & GPU drivers**: For running local LLMs and containers.
     *   **Construct Repo**: Clones the main repo for the stack.
 *   **`tailscale`, `github_runner`, `sunshine`**: server-only roles for VPN mesh, CI runner, and game streaming respectively.
+*   **`signet`** (server host only): installs the Signet credential-vault host daemon as a systemd unit (`signet serve` on `127.0.0.1:4010`), consumed by Switchyard's connector. Requires `signet_api_token` in SOPS secrets; see [`roles/signet/README.md`](roles/signet/README.md). Run in isolation with `--tags signet`.
 
 ### 2. `work.yml` (Work Laptop)
 A specialized playbook for the work laptop (Genesys environment).
