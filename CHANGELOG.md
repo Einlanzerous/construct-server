@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.1](https://github.com/Einlanzerous/construct-server/compare/v4.11.0...v4.11.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* **switchyard:** don't set an empty SIGNET_API_TOKEN (crash-loop) ([#74](https://github.com/Einlanzerous/construct-server/issues/74)) ([1fdb8e5](https://github.com/Einlanzerous/construct-server/commit/1fdb8e51f64fc80d312d2571f16616cf7d30490a))
+
 ## [4.11.0](https://github.com/Einlanzerous/construct-server/compare/v4.10.0...v4.11.0) (2026-07-24)
 
 
