@@ -333,6 +333,9 @@ services:
       - ARGOSY_SCAN_INTERVAL=${ARGOSY_SCAN_INTERVAL:-15m}
       - ARGOSY_ADMIN_USERNAME=${ARGOSY_ADMIN_USERNAME:-admin}
       - ARGOSY_ADMIN_PASSWORD=${ARGOSY_ADMIN_PASSWORD}
+      # Service-level secret for POST /api/v1/admin/accounts (ARGY-132);
+      # Purser presents it as X-Provision-Token. Managed by Signet.
+      - ARGOSY_PROVISION_TOKEN=${ARGOSY_PROVISION_TOKEN}
       # PIN-pairing LAN discovery (ARGY-123) can't advertise from this bridge
       # network — multicast never leaves it — so keep the mDNS advertiser off.
       # To enable discovery, switch this service to network_mode: host and set
