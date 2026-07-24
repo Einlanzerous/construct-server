@@ -1,0 +1,29 @@
+# {{ ansible_managed }}
+# Signet host daemon — credential vault + outbound-sync REST API (SGNT / SERV-44).
+# Consumed by Switchyard's Signet connector (SWY-165) over host.docker.internal:4010.
+[Unit]
+Description=Signet credential vault + sync daemon
+Documentation=https://github.com/Einlanzerous/signet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ signet_user }}
+Group={{ signet_user }}
+# SIGNET_API_TOKEN (bearer required by the API) + any overrides.
+EnvironmentFile={{ signet_env_file }}
+Environment=SIGNET_ADDR={{ signet_addr }}
+ExecStart={{ signet_binary }} serve
+Restart=on-failure
+RestartSec=5s
+
+# Hardening — the vault (key + DB) is the only thing this daemon should touch.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths={{ signet_state_dir }}
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

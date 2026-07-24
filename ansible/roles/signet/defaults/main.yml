@@ -1,0 +1,26 @@
+---
+# Signet — construct-server credential vault + outbound-sync daemon (SGNT).
+# v1 runs as a system unit under the `magos` account (per IDEA-13 Q4): the vault
+# (master key + SQLite DB) lives in that user's home, so User= must own it.
+signet_user: magos
+
+# Binary + on-disk vault locations. These are provisioned out of band during
+# Signet bring-up (SGNT-1) — this role only wires the daemon, it does not
+# install the binary or initialize the vault. If the binary is absent the role
+# installs the unit but skips enable/start (see tasks/main.yml).
+signet_binary: "/home/{{ signet_user }}/.local/bin/signet"
+signet_config_dir: "/home/{{ signet_user }}/.config/signet"   # master.key (0400)
+signet_state_dir: "/home/{{ signet_user }}/.local/share/signet"  # signet.db + audit ledger
+
+# Loopback bind — the daemon is only ever reached from the Switchyard container
+# via host.docker.internal (host-gateway), never published to the LAN.
+signet_addr: "127.0.0.1:4010"
+
+# EnvironmentFile holding SIGNET_API_TOKEN (0600, owned by signet_user). The
+# token value comes from `signet_api_token`, which should be defined in the
+# SOPS-encrypted secrets (ansible/secrets.sops.yml). Left empty here so a plain
+# checkout doesn't ship a placeholder token; an empty token means the unit is
+# installed but not started (the daemon refuses to serve without it).
+signet_env_dir: /etc/signet
+signet_env_file: "{{ signet_env_dir }}/signet.env"
+signet_api_token: ""

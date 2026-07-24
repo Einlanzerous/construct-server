@@ -1,0 +1,12 @@
+---
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: true
+
+- name: Restart Signet
+  systemd:
+    name: signet
+    state: restarted
+  # Only bounce a running daemon; first-boot enable/start is handled in tasks
+  # and guarded on the binary existing.
+  when: signet_binary_stat.stat.exists
