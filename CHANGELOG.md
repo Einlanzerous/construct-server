@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.0](https://github.com/Einlanzerous/construct-server/compare/v4.10.0...v4.11.0) (2026-07-24)
+
+
+### Features
+
+* **signet:** deploy host daemon — systemd unit + Switchyard wiring (SERV-44) ([#72](https://github.com/Einlanzerous/construct-server/issues/72)) ([b72fa08](https://github.com/Einlanzerous/construct-server/commit/b72fa080d2d547f56c81e13c2bfb097c7845dcfc))
+
 ## [4.10.0](https://github.com/Einlanzerous/construct-server/compare/v4.9.0...v4.10.0) (2026-07-23)
 
 
