@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.12.1](https://github.com/Einlanzerous/construct-server/compare/v4.12.0...v4.12.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* **git:** normalize all text files to LF via .gitattributes (SERV-52) ([#78](https://github.com/Einlanzerous/construct-server/issues/78)) ([8197e03](https://github.com/Einlanzerous/construct-server/commit/8197e03e0d9b30b64016f416dbd68cc2ed69e123))
+
 ## [4.12.0](https://github.com/Einlanzerous/construct-server/compare/v4.11.1...v4.12.0) (2026-07-24)
 
 
