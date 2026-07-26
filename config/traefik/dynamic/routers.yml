@@ -1,9 +1,10 @@
 # Traefik dynamic configuration — Zero Gravity Industries hybrid edge (SERV-20)
 #
 # Explicit allowlist. Only the routers below are served. On the public entrypoint,
-# anything that is not Argosy is refused by `public-catchall`. The tunneled routers
-# exist ONLY on the internal entrypoint, so the open WAN port physically cannot
-# reach them — that is the "no tunnel bypass via the open port" guarantee.
+# anything that is not Argosy or the Lyceum direct path (SERV-60) is refused by
+# `public-catchall`. The tunneled routers exist ONLY on the internal entrypoint, so
+# the open WAN port physically cannot reach them — that is the "no tunnel bypass via
+# the open port" guarantee.
 
 http:
   middlewares:
@@ -59,6 +60,17 @@ http:
     # real remote IP arriving via the router's DNAT. Token bucket: 5 req/s sustained,
     # bursts up to 15.
     argosy-login-ratelimit:
+      rateLimit:
+        average: 5
+        burst: 15
+
+    # Login brute-force throttle for Lyceum's WAN-exposed auth endpoints (SERV-60).
+    # Applied ONLY via the lyceum-public-auth router below (scoped to /auth/*), so it
+    # covers pairing-code / invite redemption (POST /auth/session) without touching
+    # book/reader traffic. Sits at the edge on top of Lyceum's in-app pairingLimiter.
+    # Per client IP (same rationale as argosy-login-ratelimit — the public edge trusts
+    # no X-Forwarded-*). Token bucket: 5 req/s sustained, bursts up to 15.
+    lyceum-login-ratelimit:
       rateLimit:
         average: 5
         burst: 15
@@ -120,9 +132,50 @@ http:
             sans:
               - "*.zerogravity.industries"
 
-    # Lowest-priority deny-all. Any Host/SNI on :public that is not Argosy is
-    # refused (403). Defense-in-depth: the tunneled routers below do not exist on
-    # this entrypoint at all, so there is nothing to bypass to.
+    # ---------------- PUBLIC entrypoint: Lyceum direct path (SERV-60) ----------------
+    # Puts Lyceum on the open 443 edge alongside Argosy so the Flutter app (LYCM-101)
+    # can reach it with a bearer token — no Tailscale, no Cloudflare Access. Points at
+    # the SAME `lyceum` backend as the tunneled `lyceum` router; the only difference is
+    # this host isn't SSO-gated, so a client falls back to invite/pairing (correct).
+    # strip-cf-access ensures a spoofed Cf-Access-* on this path authenticates nobody.
+    lyceum-public:
+      entryPoints:
+        - public
+      rule: "Host(`lyceum-direct.zerogravity.industries`)"
+      service: lyceum
+      middlewares:
+        - crowdsec-bouncer
+        - strip-cf-access
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "zerogravity.industries"
+            sans:
+              - "*.zerogravity.industries"
+
+    # Same Lyceum backend, but /auth/* gets the login rate-limit. Higher priority than
+    # lyceum-public so pairing-code / invite redemption is throttled at the edge;
+    # everything else (books, reader, covers) falls through to lyceum-public unthrottled.
+    lyceum-public-auth:
+      entryPoints:
+        - public
+      rule: "Host(`lyceum-direct.zerogravity.industries`) && PathPrefix(`/auth/`)"
+      priority: 1000
+      service: lyceum
+      middlewares:
+        - crowdsec-bouncer
+        - strip-cf-access
+        - lyceum-login-ratelimit
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "zerogravity.industries"
+            sans:
+              - "*.zerogravity.industries"
+
+    # Lowest-priority deny-all. Any Host/SNI on :public that is not Argosy or the
+    # Lyceum direct host is refused (403). Defense-in-depth: the tunneled routers
+    # below do not exist on this entrypoint at all, so there is nothing to bypass to.
     public-catchall:
       entryPoints:
         - public

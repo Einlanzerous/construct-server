@@ -26,7 +26,7 @@ The open WAN 443 must never provide a bypass around Cloudflare Access. Traefik r
 
 | Entrypoint | Container port | Published? | Serves |
 |-----------|----------------|-----------|--------|
-| `public`   | `:8443` | **not yet** (see Status) | Argosy router **only** + a deny-all catch-all |
+| `public`   | `:8443` | yes (host `443:8443`) | direct routers only — Argosy + Lyceum's direct path (SERV-60) — + a deny-all catch-all |
 | `internal` | `:9080` (HTTP) | **no** (construct_net only) | tunneled apps; cloudflared origin |
 | `traefik`  | `:8080` | **no** | dashboard/API |
 
