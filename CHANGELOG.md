@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.13.0](https://github.com/Einlanzerous/construct-server/compare/v4.12.1...v4.13.0) (2026-07-27)
+
+
+### Features
+
+* **edge:** add Lyceum direct public 443 route (SERV-60) ([#80](https://github.com/Einlanzerous/construct-server/issues/80)) ([6c6e359](https://github.com/Einlanzerous/construct-server/commit/6c6e35901c1be15f262843d4a7af00bd48442ecf))
+
 ## [4.12.1](https://github.com/Einlanzerous/construct-server/compare/v4.12.0...v4.12.1) (2026-07-24)
 
 
