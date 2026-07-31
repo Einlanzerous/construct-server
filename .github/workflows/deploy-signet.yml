@@ -1,0 +1,84 @@
+name: Deploy Signet
+
+# Auto-deploy the Signet daemon on release (SERV-62). Signet's own release
+# workflow attaches the linux-amd64 binary + .sha256 to the GitHub Release, then
+# fires a `signet-released` repository_dispatch here with the tag in the payload
+# (SGNT-12).
+#
+# The job runs on the self-hosted runner because the daemon lives on that host,
+# and sits behind a required reviewer so the credential daemon is never bounced
+# unreviewed.
+#
+# The environment is `signet-prod`, not the existing `home-server`, for two
+# reasons. `home-server` is shared with deploy.yml, so a reviewer rule there
+# would also gate every docker stack deploy — a much bigger behavioural change
+# than this ticket intends. And IDEA-19 models delivery as environment × service
+# with GitHub Environments as the gate, so naming by service and environment
+# lets a future `signet-dev` sit beside this one instead of forcing a rename.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Signet release tag to deploy, e.g. v1.2.0"
+        required: true
+        type: string
+  repository_dispatch:
+    types: [signet-released]
+
+concurrency:
+  # Never let two deploys race for the same binary and unit.
+  group: deploy-signet
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    environment: signet-prod
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Resolve the release tag
+        id: tag
+        env:
+          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${INPUT_TAG:-$DISPATCH_TAG}"
+          if [ -z "$TAG" ]; then
+            echo "No tag supplied by either trigger." >&2
+            exit 1
+          fi
+          # Refuse anything that is not a plain version tag: this value reaches
+          # a shell command, and repository_dispatch payloads are attacker-
+          # controlled by anyone who can call the API with a repo token.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Refusing malformed tag: $TAG" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploying Signet $TAG"
+
+      - name: Install Ansible collections
+        run: ansible-galaxy collection install -r ansible/requirements.yml
+
+      # Downloads the release asset, verifies its sha256, installs it atomically,
+      # restarts the unit through the scoped sudo rule, and confirms /healthz
+      # reports the new version. Idempotent: a host already on the target
+      # version is left alone.
+      - name: Deploy the release
+        env:
+          # `gh release download` needs a token; the default job token can read
+          # releases from the signet repo when it is public, and SIGNET_RELEASE_TOKEN
+          # overrides it for the private case.
+          GH_TOKEN: ${{ secrets.SIGNET_RELEASE_TOKEN || github.token }}
+        run: |
+          ansible-playbook ansible/ops/update-signet.yml \
+            -i ansible/inventory.ini \
+            -e signet_version=${{ steps.tag.outputs.tag }}
+
+      - name: Report the deployed version
+        run: |
+          echo "### Signet ${{ steps.tag.outputs.tag }} deployed" >> "$GITHUB_STEP_SUMMARY"
+          curl -sf --max-time 5 http://127.0.0.1:4010/healthz >> "$GITHUB_STEP_SUMMARY" || true
