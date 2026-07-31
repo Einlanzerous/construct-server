@@ -35,10 +35,15 @@
   become: "{{ signet_binary_become | default(true) }}"
   become_user: "{{ signet_user }}"
   block:
+    # Staged beside the destination, not in the default /tmp. The install below
+    # is a rename, which is only atomic within one filesystem; a staging dir on
+    # another mount would make mv fall back to copy-then-unlink and leave a
+    # window where the executed path holds a truncated binary.
     - name: Create a staging directory for the release download
       tempfile:
         state: directory
         suffix: signet-release
+        path: "{{ signet_binary | dirname }}"
       register: signet_stage
 
     - name: Download the release binary and its checksum
@@ -65,11 +70,19 @@
         path: "{{ signet_stage.path }}/{{ signet_asset }}"
         mode: "0755"
 
+    # Kept so a failed deploy has somewhere to go back to. The health check
+    # cannot roll back on its own — by the time it fails the restart has already
+    # happened — so preserving the outgoing binary is what makes recovery a one
+    # line mv instead of a re-run at the old tag.
+    - name: Keep the outgoing binary for rollback
+      command: cp -p {{ signet_binary }} {{ signet_binary }}.prev
+      when: signet_binary_stat.stat.exists
+      changed_when: true
+
     # Rename, never truncate: the old binary is mapped by the running daemon,
     # and writing over it in place would corrupt a live process. A rename swaps
     # the directory entry and leaves the running image alone until the restart
-    # picks up the new one. Requires staging on the same filesystem as the
-    # destination, which a home-directory tempfile satisfies.
+    # picks up the new one.
     - name: Atomically install the new binary
       command: mv -f {{ signet_stage.path }}/{{ signet_asset }} {{ signet_binary }}
       changed_when: true

@@ -26,6 +26,11 @@ on:
   repository_dispatch:
     types: [signet-released]
 
+# The job token is handed to a subprocess (gh, via ansible); it only ever needs
+# to read releases.
+permissions:
+  contents: read
+
 concurrency:
   # Never let two deploys race for the same binary and unit.
   group: deploy-signet
@@ -35,6 +40,9 @@ jobs:
   deploy:
     runs-on: self-hosted
     environment: signet-prod
+    # cancel-in-progress is false, so a hung run would hold the concurrency
+    # group indefinitely without this.
+    timeout-minutes: 15
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -60,25 +68,40 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Deploying Signet $TAG"
 
-      - name: Install Ansible collections
-        run: ansible-galaxy collection install -r ansible/requirements.yml
+      # ansible/inventory.ini is gitignored, and checkout runs `git clean -ffdx`,
+      # so the repo copy is never present here. Ansible treats a missing
+      # inventory as "no hosts matched" and exits 0 — the deploy would go green
+      # having done nothing, skipping the very version check that exists to
+      # catch a stale daemon. Write our own instead, outside the workspace so
+      # the next checkout cannot remove it. The runner *is* the target host.
+      - name: Write a local inventory
+        run: |
+          printf '[server]\nlocalhost ansible_connection=local\n' \
+            > "$RUNNER_TEMP/signet-inventory.ini"
+          cat "$RUNNER_TEMP/signet-inventory.ini"
 
       # Downloads the release asset, verifies its sha256, installs it atomically,
       # restarts the unit through the scoped sudo rule, and confirms /healthz
       # reports the new version. Idempotent: a host already on the target
-      # version is left alone.
+      # version is left alone. Only builtin modules are used, so no collections
+      # are installed.
       - name: Deploy the release
         env:
           # `gh release download` needs a token; the default job token can read
           # releases from the signet repo when it is public, and SIGNET_RELEASE_TOKEN
           # overrides it for the private case.
           GH_TOKEN: ${{ secrets.SIGNET_RELEASE_TOKEN || github.token }}
+          SIGNET_VERSION: ${{ steps.tag.outputs.tag }}
         run: |
           ansible-playbook ansible/ops/update-signet.yml \
-            -i ansible/inventory.ini \
-            -e signet_version=${{ steps.tag.outputs.tag }}
+            -i "$RUNNER_TEMP/signet-inventory.ini" \
+            -e "signet_version=$SIGNET_VERSION"
 
+      # Reached only when the playbook succeeded, which means its version-aware
+      # health check already passed. Reported from the same source rather than
+      # re-probing, so the summary cannot claim more than was verified.
       - name: Report the deployed version
+        env:
+          SIGNET_VERSION: ${{ steps.tag.outputs.tag }}
         run: |
-          echo "### Signet ${{ steps.tag.outputs.tag }} deployed" >> "$GITHUB_STEP_SUMMARY"
-          curl -sf --max-time 5 http://127.0.0.1:4010/healthz >> "$GITHUB_STEP_SUMMARY" || true
+          echo "### Signet $SIGNET_VERSION deployed and verified serving" >> "$GITHUB_STEP_SUMMARY"

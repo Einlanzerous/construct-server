@@ -14,8 +14,8 @@ connector (SWY-165) over `host.docker.internal:4010`.
   host that hasn't completed Signet bring-up).
 
 - Installs a scoped `NOPASSWD` sudoers rule (`/etc/sudoers.d/signet-restart`)
-  letting `magos` restart *this unit only*, which is what lets the unprivileged
-  auto-deploy bounce the daemon.
+  letting `signet_user` restart *this unit only*, which is what lets the
+  unprivileged auto-deploy bounce the daemon.
 - Installs a released binary when `signet_version` is set (see below).
 
 ## What it does *not* do
@@ -30,14 +30,24 @@ Nor does it manage the binary unless you ask it to: with `signet_version` unset
 Set `signet_version` to a release tag to install that build:
 
 ```bash
-ansible-playbook ansible/ops/update-signet.yml -e signet_version=v1.2.0
+GH_TOKEN=<token> ansible-playbook ansible/ops/update-signet.yml \
+  -i ansible/inventory.ini -e signet_version=v1.2.0
 ```
+
+`GH_TOKEN` (or an already-authenticated `gh`) is required — the download
+otherwise fails against an empty token. Run it **on the daemon host as
+`signet_user`**; the playbook asserts both rather than assuming.
 
 The asset and its `.sha256` are downloaded with `gh`, the checksum is verified
 *before* anything moves into place, and the install is a rename rather than a
 write — the old binary is mapped by the running daemon, so truncating it in
-place would corrupt a live process. Already on the target version? Nothing
-happens.
+place would corrupt a live process. The outgoing binary is kept at
+`<binary>.prev` so a failed deploy can be reversed with one `mv`. Already on the
+target version? Nothing happens.
+
+The checksum establishes **integrity, not authenticity**: the binary and its
+`.sha256` come from the same release, so this catches a corrupt or truncated
+download, not a compromised one. Signing would be a separate piece of work.
 
 Use `ansible/ops/update-signet.yml`, **not** `site.yml --tags signet`: the
 `server` play loads `secrets.sops.yml` and hard-fails without the age key, which

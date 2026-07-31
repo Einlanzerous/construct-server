@@ -20,11 +20,13 @@
     group: "{{ signet_user }}"
     mode: "0750"
 
-# Guarded, because this role is also run by the automated deploy on a box that
-# deliberately has no sops age key. Without the guard, signet_api_token falls
-# back to its empty default and this task would overwrite a working token with a
-# blank one, taking the daemon down. Binary updates must never touch secrets:
-# an absent token means "leave whatever is there", not "clear it".
+# Guarded so an absent token means "leave whatever is there", not "clear it".
+# Without it, any run that reaches this task without secrets loaded — the empty
+# default in defaults/main.yml — would overwrite a working token with a blank
+# one and take the daemon down. The current automated deploy does not reach
+# here (it includes only binary.yml, and site.yml hard-fails earlier when sops
+# is unavailable), so this guards the paths that would otherwise be one careless
+# playbook away from silently blanking the credential.
 - name: Deploy Signet environment file (SIGNET_API_TOKEN)
   template:
     src: signet.env.j2
