@@ -68,6 +68,25 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Deploying Signet $TAG"
 
+      # The runner is a systemd service, so it never sources the user's shell
+      # profile and pip's user-install bin dir is off PATH — which is where
+      # ansible lives. deploy.yml never hit this because docker is on the system
+      # PATH; this is the first workflow here to shell out to a user-installed
+      # tool. GITHUB_PATH applies to subsequent steps, not this one.
+      - name: Put user-installed tools on PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Fail here with a clear reason rather than as `command not found` from
+      # inside the deploy step.
+      - name: Check ansible is available
+        run: |
+          if ! command -v ansible-playbook >/dev/null; then
+            echo "ansible-playbook not on PATH: $PATH" >&2
+            echo "Install it for the runner user, e.g. pip install --user ansible" >&2
+            exit 1
+          fi
+          ansible-playbook --version | head -1
+
       # ansible/inventory.ini is gitignored, and checkout runs `git clean -ffdx`,
       # so the repo copy is never present here. Ansible treats a missing
       # inventory as "no hosts matched" and exits 0 — the deploy would go green
