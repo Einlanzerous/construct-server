@@ -49,15 +49,12 @@
 # visudo check the file before it is installed, so a malformed rule can never
 # land and lock the account out of sudo.
 - name: Allow the Signet user to restart the daemon without a password
-  copy:
+  template:
+    src: signet-restart.sudoers.j2
     dest: "{{ signet_sudoers_file }}"
     owner: root
     group: root
     mode: "0440"
-    content: |
-      # {{ ansible_managed }}
-      # Scoped for the SERV-62 auto-deploy: restart only, this unit only.
-      {{ signet_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart signet, /bin/systemctl restart signet
     validate: "visudo -cf %s"
 
 - name: Deploy Signet systemd unit

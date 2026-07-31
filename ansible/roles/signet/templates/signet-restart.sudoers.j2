@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# Scoped for the SERV-62 auto-deploy: restart only, this unit only.
+# Both paths are listed because systemctl's location differs across distros and
+# sudoers matches the command by absolute path.
+{{ signet_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart signet, /bin/systemctl restart signet
