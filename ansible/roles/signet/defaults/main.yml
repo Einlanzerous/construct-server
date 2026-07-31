@@ -24,3 +24,19 @@ signet_addr: "127.0.0.1:4010"
 signet_env_dir: /etc/signet
 signet_env_file: "{{ signet_env_dir }}/signet.env"
 signet_api_token: ""
+
+# ---- binary updates (SERV-62) ------------------------------------------------
+# Release to install, e.g. "v1.2.0". Empty means "leave the binary alone": the
+# role then only wires the unit, as it did before auto-deploy existed. Set it on
+# the command line for a deploy (-e signet_version=v1.2.0).
+signet_version: ""
+signet_repo: Einlanzerous/signet
+
+# Release asset naming, from signet's release.yml build job.
+signet_asset: "signet-{{ signet_version | regex_replace('^v', '') }}-linux-amd64"
+
+# Scoped sudo rule letting the deploy restart the unit without a password. The
+# daemon is a *system* unit but its binary and vault live in the user's home, so
+# everything except the restart is unprivileged; this grants exactly the one
+# privileged verb rather than blanket sudo.
+signet_sudoers_file: /etc/sudoers.d/signet-restart

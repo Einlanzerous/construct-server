@@ -12,7 +12,11 @@ Type=simple
 User={{ signet_user }}
 Group={{ signet_user }}
 # SIGNET_API_TOKEN (bearer required by the API) + any overrides.
-EnvironmentFile={{ signet_env_file }}
+# Leading `-`: the file is only written when a token is available, so on a host
+# without the sops key it may not exist. Without the dash systemd refuses to
+# start on the missing file; with it, the daemon starts and fails with its own
+# "SIGNET_API_TOKEN must be set to serve", which names the actual problem.
+EnvironmentFile=-{{ signet_env_file }}
 Environment=SIGNET_ADDR={{ signet_addr }}
 ExecStart={{ signet_binary }} serve
 Restart=on-failure

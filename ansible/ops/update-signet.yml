@@ -1,0 +1,135 @@
+---
+# Usage:
+#   GH_TOKEN=<token> ansible-playbook ansible/ops/update-signet.yml \
+#     -i ansible/inventory.ini -e signet_version=v1.2.0
+#
+# Installs a released Signet binary and restarts the daemon. Driven by
+# .github/workflows/deploy-signet.yml on the self-hosted runner (SERV-62), and
+# safe to run by hand for the same effect.
+#
+# Deliberately NOT site.yml --tags signet: that play loads secrets.sops.yml and
+# hard-fails when they are unavailable, and the age key is intentionally absent
+# from the server. This playbook needs no secrets — it updates a binary — so it
+# stays keyless and touches nothing else.
+#
+# It also runs unprivileged. The binary and vault live in the user's home, and
+# the only privileged verb is the restart, which the role's scoped sudoers rule
+# permits without a password.
+
+- name: Update the Signet daemon
+  hosts: server
+  become: false
+  vars:
+    # We are already the user that owns the binary; do not try to sudo to it.
+    # Asserted below rather than assumed.
+    signet_binary_become: false
+
+  tasks:
+    - name: Validate signet_version is provided
+      ansible.builtin.assert:
+        that:
+          - signet_version is defined
+          - signet_version | length > 0
+        fail_msg: "signet_version is required (e.g. -e signet_version=v1.2.0)"
+
+    # Captured before the defaults are loaded: that file carries an empty
+    # signet_version, and include_vars outranks everything except extra vars
+    # (-e), role/include params, and set_fact. The documented invocation passes
+    # -e and so is already safe; this keeps a lower-precedence caller — a
+    # group_var, say — from being silently flattened into a no-op.
+    - name: Remember the requested version
+      ansible.builtin.set_fact:
+        signet_requested_version: "{{ signet_version }}"
+
+    - name: Load the signet role's defaults without applying the role
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/signet/defaults/main.yml"
+
+    - name: Re-apply the requested version over the role default
+      ansible.builtin.set_fact:
+        signet_version: "{{ signet_requested_version }}"
+
+    # This play runs unprivileged, which is only correct if the account running
+    # it is the one that owns the binary. Checked here rather than assumed:
+    # against the wrong inventory the run would otherwise fail deep in the
+    # download, or install to a path the unit's User= cannot execute.
+    - name: Confirm we are the user that owns the binary
+      ansible.builtin.assert:
+        # ansible_facts[...] rather than the ansible_-prefixed top-level fact:
+        # INJECT_FACTS_AS_VARS is deprecated and goes away in ansible-core 2.24
+        # (SERV-61 tracks that cleanup elsewhere; no reason to add to it here).
+        that: ansible_facts['user_id'] == signet_user
+        fail_msg: >-
+          Running as {{ ansible_facts['user_id'] }}, but the Signet binary is
+          owned by {{ signet_user }}. Run this on the daemon host as
+          {{ signet_user }}.
+
+    # `sudo -l <command>` asks whether the command is permitted without running
+    # it. It must name the exact command the sudoers rule grants: sudoers
+    # matches on the full argument vector, so probing with any other systemctl
+    # invocation would be denied even when the rule is installed correctly, and
+    # this guard would refuse every deploy. listpw defaults to `any`, so the
+    # presence of a NOPASSWD entry means -l does not itself demand a password.
+    - name: Confirm the scoped sudo rule is in place
+      ansible.builtin.command: sudo -n -l systemctl restart signet
+      register: signet_sudo_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail early when the deploy cannot restart the daemon
+      ansible.builtin.fail:
+        msg: >-
+          Passwordless sudo for `systemctl restart signet` is not available.
+          Apply the signet role from a privileged run first (it installs
+          {{ signet_sudoers_file }}), otherwise this deploy would install a new
+          binary and leave the old one running.
+      when: signet_sudo_check.rc != 0
+
+    - name: Stat the installed binary
+      ansible.builtin.stat:
+        path: "{{ signet_binary }}"
+      register: signet_binary_stat
+
+    - name: Install the requested release
+      ansible.builtin.include_role:
+        name: signet
+        tasks_from: binary.yml
+
+    - name: Flush handlers so the restart happens before verification
+      ansible.builtin.meta: flush_handlers
+
+    - name: Verify the new version is serving
+      block:
+        # The daemon reports its own version, so this proves the *new* code is
+        # serving rather than merely that something answers on the port. The
+        # unit is Type=simple, so `systemctl restart` returns success as soon as
+        # the process forks — and a stale process still holding the socket would
+        # answer with the old version. This check is the only thing between a
+        # failed deploy and a false green.
+        - name: Verify the daemon is serving the new version
+          ansible.builtin.uri:
+            url: "http://{{ signet_addr }}/healthz"
+            return_content: true
+          register: signet_health
+          until:
+            - signet_health.status is defined
+            - signet_health.status == 200
+            - (signet_health.json.version | default('')) == signet_version
+          retries: 10
+          delay: 3
+
+        - name: Report the deployed version
+          ansible.builtin.debug:
+            msg: "Signet {{ signet_health.json.version }} is serving on {{ signet_addr }}."
+
+      rescue:
+        - name: Explain how to get back to the previous binary
+          ansible.builtin.fail:
+            msg: >-
+              {{ signet_version }} was installed but the daemon is not serving
+              it (last seen: {{ signet_health.json.version | default('no
+              response') }}). The previous binary was kept — roll back with:
+              mv {{ signet_binary }}.prev {{ signet_binary }} &&
+              sudo systemctl restart signet.
+              If the unit will not bind, check for a stale `signet serve`
+              already holding {{ signet_addr }}.

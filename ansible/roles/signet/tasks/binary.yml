@@ -1,0 +1,107 @@
+---
+# Binary update path (SERV-62). Included only when signet_version is set, so an
+# ordinary site.yml run never touches the installed binary.
+#
+# The binary lives in signet_user's home, so nothing here needs privilege — only
+# the restart does, and that goes through the scoped sudo rule in the handler.
+# signet_binary_become lets the caller say who it already is: site.yml runs as
+# root and must drop to signet_user, while the auto-deploy already runs as that
+# user and must not try to sudo (it has no blanket rights and would hang).
+
+- name: Report the installed Signet version
+  command: "{{ signet_binary }} version"
+  register: signet_installed_version
+  changed_when: false
+  failed_when: false
+  become: "{{ signet_binary_become | default(true) }}"
+  become_user: "{{ signet_user }}"
+
+- name: Decide whether an update is needed
+  set_fact:
+    # `signet version` prints the tag it was built with, e.g. "v1.2.0". A
+    # missing or unreadable binary leaves rc != 0, which means install rather
+    # than fail.
+    signet_update_needed: >-
+      {{ signet_installed_version.rc != 0
+         or (signet_installed_version.stdout | trim) != signet_version }}
+
+- name: Note that Signet is already at the target version
+  debug:
+    msg: "Signet is already {{ signet_version }} — nothing to install."
+  when: not signet_update_needed
+
+- name: Install Signet {{ signet_version }}
+  when: signet_update_needed
+  become: "{{ signet_binary_become | default(true) }}"
+  become_user: "{{ signet_user }}"
+  block:
+    # Staged beside the destination, not in the default /tmp. The install below
+    # is a rename, which is only atomic within one filesystem; a staging dir on
+    # another mount would make mv fall back to copy-then-unlink and leave a
+    # window where the executed path holds a truncated binary.
+    - name: Create a staging directory for the release download
+      tempfile:
+        state: directory
+        suffix: signet-release
+        path: "{{ signet_binary | dirname }}"
+      register: signet_stage
+
+    - name: Download the release binary and its checksum
+      command: >-
+        gh release download {{ signet_version }}
+        --repo {{ signet_repo }}
+        --pattern {{ signet_asset }}
+        --pattern {{ signet_asset }}.sha256
+        --dir {{ signet_stage.path }}
+      environment:
+        GH_TOKEN: "{{ signet_gh_token | default(lookup('env', 'GH_TOKEN'), true) }}"
+      changed_when: true
+
+    # Checked before anything moves into place: an asset that fails its
+    # checksum must never reach the path the unit executes.
+    - name: Verify the checksum
+      command: sha256sum --check --status {{ signet_asset }}.sha256
+      args:
+        chdir: "{{ signet_stage.path }}"
+      changed_when: false
+
+    - name: Make the downloaded binary executable
+      file:
+        path: "{{ signet_stage.path }}/{{ signet_asset }}"
+        mode: "0755"
+
+    # Kept so a failed deploy has somewhere to go back to. The health check
+    # cannot roll back on its own — by the time it fails the restart has already
+    # happened — so preserving the outgoing binary is what makes recovery a one
+    # line mv instead of a re-run at the old tag.
+    - name: Keep the outgoing binary for rollback
+      command: cp -p {{ signet_binary }} {{ signet_binary }}.prev
+      when: signet_binary_stat.stat.exists
+      changed_when: true
+
+    # Rename, never truncate: the old binary is mapped by the running daemon,
+    # and writing over it in place would corrupt a live process. A rename swaps
+    # the directory entry and leaves the running image alone until the restart
+    # picks up the new one.
+    - name: Atomically install the new binary
+      command: mv -f {{ signet_stage.path }}/{{ signet_asset }} {{ signet_binary }}
+      changed_when: true
+      notify: Restart Signet
+
+    # The role stats the binary before this file runs, so on a first install
+    # that fact is stale — and both the restart handler and the enable/start
+    # task are gated on it. Refresh it so a freshly installed daemon actually
+    # gets started.
+    - name: Re-check the binary now that it is installed
+      stat:
+        path: "{{ signet_binary }}"
+      register: signet_binary_stat
+
+  always:
+    - name: Remove the staging directory
+      file:
+        path: "{{ signet_stage.path }}"
+        state: absent
+      when: signet_stage.path is defined
+      become: "{{ signet_binary_become | default(true) }}"
+      become_user: "{{ signet_user }}"

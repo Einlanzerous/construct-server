@@ -20,6 +20,13 @@
     group: "{{ signet_user }}"
     mode: "0750"
 
+# Guarded so an absent token means "leave whatever is there", not "clear it".
+# Without it, any run that reaches this task without secrets loaded — the empty
+# default in defaults/main.yml — would overwrite a working token with a blank
+# one and take the daemon down. The current automated deploy does not reach
+# here (it includes only binary.yml, and site.yml hard-fails earlier when sops
+# is unavailable), so this guards the paths that would otherwise be one careless
+# playbook away from silently blanking the credential.
 - name: Deploy Signet environment file (SIGNET_API_TOKEN)
   template:
     src: signet.env.j2
@@ -29,6 +36,29 @@
     mode: "0600"
   no_log: true
   notify: Restart Signet
+  when: signet_api_token | default("", true) | length > 0
+
+- name: Note that the API token was left untouched
+  debug:
+    msg: >-
+      signet_api_token is empty (no sops key on this host?) — leaving
+      {{ signet_env_file }} as-is rather than blanking it.
+  when: signet_api_token | default("", true) | length == 0
+
+# The deploy runs unprivileged except for this one verb. validate= makes
+# visudo check the file before it is installed, so a malformed rule can never
+# land and lock the account out of sudo.
+- name: Allow the Signet user to restart the daemon without a password
+  copy:
+    dest: "{{ signet_sudoers_file }}"
+    owner: root
+    group: root
+    mode: "0440"
+    content: |
+      # {{ ansible_managed }}
+      # Scoped for the SERV-62 auto-deploy: restart only, this unit only.
+      {{ signet_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart signet, /bin/systemctl restart signet
+    validate: "visudo -cf %s"
 
 - name: Deploy Signet systemd unit
   template:
@@ -40,6 +70,10 @@
   notify:
     - Reload systemd daemon
     - Restart Signet
+
+- name: Update the Signet binary
+  include_tasks: binary.yml
+  when: signet_version | default("", true) | length > 0
 
 - name: Flush handlers so the unit is (re)loaded before enable/start
   meta: flush_handlers

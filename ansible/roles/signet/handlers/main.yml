@@ -3,10 +3,14 @@
   systemd:
     daemon_reload: true
 
+# Restarting goes through sudo rather than the systemd module so one handler
+# serves both callers: a privileged site.yml run, where sudo is trivially
+# permitted, and the unprivileged auto-deploy on the runner, which holds only
+# the scoped NOPASSWD rule for exactly this command. The systemd module needs
+# full root and would sit waiting for a password there.
 - name: Restart Signet
-  systemd:
-    name: signet
-    state: restarted
+  command: sudo -n systemctl restart signet  # noqa command-instead-of-module
+  changed_when: true
   # Only bounce a running daemon; first-boot enable/start is handled in tasks
   # and guarded on the binary existing.
   when: signet_binary_stat.stat.exists
