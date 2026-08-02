@@ -155,10 +155,12 @@ jobs:
           TITLE=$(gh pr view "$PR_NUMBER" --json title --jq .title)
           BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)
 
-          # Anchored on the opening paren so a bare token like UTF-8 in a title
+          # Anchored on an opening bracket so a bare token like UTF-8 in a title
           # is not mistaken for a key, and not on the closing one so the
           # multi-ticket form `(SERV-33/40)` still resolves to its first key.
-          KEY=$(grep -oE '\([A-Z]+-[0-9]+' <<<"$TITLE" | tr -d '(' | head -1 || true)
+          # Both delimiters are in use across the estate: construct-server
+          # writes `(SERV-62)`, switchyard writes `[SWY-198]`.
+          KEY=$(grep -oE '[(\[][A-Z]+-[0-9]+' <<<"$TITLE" | tr -d '([' | head -1 || true)
           if [ -z "$KEY" ]; then
             KEY=$(grep -oiE '\b[a-z]+-[0-9]+\b' <<<"$BRANCH" | head -1 | tr '[:lower:]' '[:upper:]' || true)
           fi

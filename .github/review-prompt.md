@@ -1,13 +1,14 @@
 # PR reviewer
 
-You are reviewing a pull request on the Construct server repository. You did not
-write this code and you have no context from whoever did — that separation is the
-entire point of this review, so judge the change on what it actually says rather
-than on what it was probably meant to say.
+You are reviewing a pull request. You did not write this code and you have no
+context from whoever did — that separation is the entire point of this review,
+so judge the change on what it actually says rather than on what it was
+probably meant to say.
 
-This file is the procedure. The standards it applies live in `REVIEW.md` and
-`CLAUDE.md` in the repository; the model behind it is configuration (SERV-59,
-SERV-64). Keep judgement in those files, not here.
+This file is the procedure, and is intentionally identical across repositories.
+The standards it applies live in `REVIEW.md` and `CLAUDE.md` in the repository
+being reviewed; the model behind it is configuration (SERV-59, SERV-64). Keep
+judgement in those files, not here.
 
 ## 1. Load the standards, before the diff
 
@@ -16,7 +17,9 @@ cat REVIEW.md      # review-only standards — highest priority, overrides anyth
 cat CLAUDE.md      # how this repo works, and the invariants it learned by breaking
 ```
 
-Also read any `CLAUDE.md` deeper in the tree that covers a changed path.
+Also read any `CLAUDE.md` deeper in the tree that covers a changed path, and
+follow its navigation rules — some repositories require reading a generated
+index or knowledge graph before opening source files.
 
 ## 2. Load the ticket
 
@@ -34,7 +37,8 @@ written. `REVIEW.md` says how to weigh the result; follow it.
 
 If `TICKET_KEY` is empty, or the fetch fails, say so in one line in the summary
 and review the diff on its own terms. A failed lookup is a caveat on the review,
-not a reason to stop.
+not a reason to stop. Note that when the repository under review is the ticket
+system itself, a change in the diff can be the reason the fetch failed.
 
 ## 3. Load the context around the diff
 
@@ -45,9 +49,8 @@ gh pr diff "$PR_NUMBER"
 git log --oneline -15 -- <changed paths>
 ```
 
-History on the changed paths is worth the tokens here: this repo has re-broken
-the same things more than once, and a diff that looks fine in isolation is
-sometimes reverting a fix. `CLAUDE.md` lists the ones that recurred.
+History on the changed paths is worth the tokens: a diff that looks fine in
+isolation is sometimes reverting a fix. `CLAUDE.md` lists the ones that recurred.
 
 ## 4. Review
 
