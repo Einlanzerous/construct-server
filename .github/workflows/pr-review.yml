@@ -1,0 +1,257 @@
+name: PR Review
+
+# Fresh-context review of every pull request (SERV-59).
+#
+# The point of running this in CI rather than asking for it in a session is that
+# the reviewer structurally cannot share context with whatever wrote the code,
+# and it fires whether or not anyone remembers to ask for it.
+#
+# Auth is a Claude subscription token, not an API key. At current throughput
+# (800+ tickets a quarter, 1-3 review cycles each) per-token billing would run
+# into four figures a quarter for the same work the subscription already covers.
+# Swapping to `anthropic_api_key` is a one-line change if that calculus shifts.
+# SERV-64 tracks moving the backend to local gemma, which drops the cost to zero
+# and is why the reviewer itself lives in `.github/review-prompt.md` rather than
+# inline here — the prompt is the deliverable, the model behind it is config.
+#
+# Runs on the self-hosted runner so the reviewer sits on `construct_net` and can
+# reach Switchyard and Ollama directly, without negotiating the access edge.
+#
+# Triggering is risk-based rather than uniform. Reviewing every push at every
+# depth is the expensive default; instead docs-only diffs are skipped, sensitive
+# paths get a deeper pass, and re-review on push is opt-in per PR via a label.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+# The reviewer reads code and writes comments. It never needs to write contents,
+# and withholding that is what actually stops it from pushing — the instruction
+# in the prompt is belt to this braces.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+concurrency:
+  # A rapid push series should cost one review, not one per push.
+  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # `pull_request` on a self-hosted runner is the classic fork-execution hole.
+    # This repo is private and single-author so it is largely theoretical, but
+    # inheriting it silently is how it stops being theoretical later.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       startsWith(github.event.comment.body, '@claude review'))
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+            # An explicit ask overrides every skip rule below, including drafts.
+            echo "manual=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "manual=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The reviewer reads history on the changed paths to spot changes that
+          # re-break something already fixed.
+          fetch-depth: 0
+
+      - name: Check out the PR head
+        if: steps.pr.outputs.manual == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr checkout "${{ steps.pr.outputs.number }}"
+
+      - name: Triage — should this be reviewed, and how deeply
+        id: triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          MANUAL: ${{ steps.pr.outputs.manual }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          ACTION: ${{ github.event.action }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+
+          skip() { echo "review=false" >> "$GITHUB_OUTPUT"; echo "→ skipping: $1"; exit 0; }
+
+          if [ "$MANUAL" != "true" ]; then
+            if [ "$IS_DRAFT" = "true" ]; then
+              skip "draft PR (comment '@claude review' to force one)"
+            fi
+
+            # Re-reviewing on every push is the single largest cost multiplier,
+            # and most pushes are a typo fix on a PR that was already read. Opt
+            # in per PR with the label when a change is worth watching closely.
+            if [ "$ACTION" = "synchronize" ] && [[ ",$LABELS," != *",review:always,"* ]]; then
+              skip "push to a PR without the 'review:always' label"
+            fi
+          fi
+
+          FILES=$(gh pr diff "$PR_NUMBER" --name-only)
+          if [ -z "$FILES" ]; then
+            skip "empty diff"
+          fi
+
+          # Docs-only changes get nothing out of a correctness reviewer. Written
+          # as "is anything here NOT docs?" rather than a negated -q test: with
+          # -q, grep short-circuits and reports no selection even when a
+          # non-matching line exists, which silently skipped any PR that touched
+          # code and a .md file together.
+          CODE=$(grep -vE '(^docs/|\.md$)' <<<"$FILES" || true)
+          if [ -z "$CODE" ] && [ "$MANUAL" != "true" ]; then
+            skip "documentation only"
+          fi
+
+          # Paths where a mistake widens access, loses data, leaks a secret, or
+          # compromises the runner. These get the deeper pass.
+          SENSITIVE='^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml)'
+          if grep -qE "$SENSITIVE" <<<"$FILES"; then
+            echo "effort=high"   >> "$GITHUB_OUTPUT"
+            echo "model=opus"    >> "$GITHUB_OUTPUT"
+            echo "→ sensitive paths touched; reviewing at high effort"
+          else
+            echo "effort=medium" >> "$GITHUB_OUTPUT"
+            echo "model=sonnet"  >> "$GITHUB_OUTPUT"
+            echo "→ reviewing at medium effort"
+          fi
+          echo "review=true" >> "$GITHUB_OUTPUT"
+
+      # Half the job is "did this do what the ticket asked", which needs the
+      # ticket. Resolved here rather than in the prompt so it is deterministic
+      # and visible in the log. Convention is the key in the PR title —
+      # `fix(signet): ... (SERV-62)` — with the branch as a fallback. Not every
+      # PR has one (#74 did not), and that is not an error.
+      - name: Resolve the Switchyard ticket
+        id: ticket
+        if: steps.triage.outputs.review == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          TITLE=$(gh pr view "$PR_NUMBER" --json title --jq .title)
+          BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)
+
+          # Anchored on the opening paren so a bare token like UTF-8 in a title
+          # is not mistaken for a key, and not on the closing one so the
+          # multi-ticket form `(SERV-33/40)` still resolves to its first key.
+          KEY=$(grep -oE '\([A-Z]+-[0-9]+' <<<"$TITLE" | tr -d '(' | head -1 || true)
+          if [ -z "$KEY" ]; then
+            KEY=$(grep -oiE '\b[a-z]+-[0-9]+\b' <<<"$BRANCH" | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          fi
+
+          if [ -z "$KEY" ]; then
+            echo "→ no ticket key in title or branch; reviewing the diff on its own terms"
+          else
+            echo "→ ticket $KEY"
+          fi
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble the reviewer prompt
+        id: prompt
+        if: steps.triage.outputs.review == 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'text<<REVIEW_PROMPT_EOF'
+            cat .github/review-prompt.md
+            echo
+            echo "## This run"
+            echo
+            echo "- \`PR_NUMBER\` is ${PR_NUMBER}."
+            echo "- \`GITHUB_REPOSITORY\` is ${GITHUB_REPOSITORY}."
+            echo 'REVIEW_PROMPT_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # The runner is a systemd service with a bare system PATH, so anything
+      # installed under $HOME is invisible to it — the trap SERV-62 hit twice.
+      # The action bootstraps its own bun, so nothing needs to be on PATH here,
+      # but if the first run dies during setup this is where to look. gh and jq
+      # are used directly by the steps above and below.
+      - name: Preflight
+        if: steps.triage.outputs.review == 'true'
+        run: |
+          set -euo pipefail
+          for tool in gh jq curl; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "$tool is not on the runner PATH: $PATH" >&2
+              exit 1
+            fi
+          done
+          echo "gh $(gh --version | head -1), jq $(jq --version)"
+
+      - name: Review
+        if: steps.triage.outputs.review == 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          TICKET_KEY: ${{ steps.ticket.outputs.key }}
+          # Switchyard is on this host, so the reviewer reads tickets over
+          # localhost rather than negotiating the Cloudflare Access edge. The
+          # token is scoped tickets:read + comments:write — deliberately not
+          # tickets:write, so a reviewer cannot transition or edit what it reads.
+          SWITCHYARD_URL: http://localhost:4002
+          SWITCHYARD_TOKEN: ${{ secrets.SWITCHYARD_REVIEWER_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          # Edit/Write are withheld so the reviewer cannot drift into authoring.
+          # It still needs Bash to run gh and to write the verdict file.
+          claude_args: >-
+            --effort ${{ steps.triage.outputs.effort }}
+            --model ${{ steps.triage.outputs.model }}
+            --max-turns 40
+            --disallowedTools Edit,Write,NotebookEdit
+
+      - name: Gate
+        if: steps.triage.outputs.review == 'true'
+        env:
+          # Left off until the finding quality is trusted: a reviewer that wedges
+          # merges while it is still being tuned trains you to bypass it. Set the
+          # repository variable to 'true' to make Important findings blocking.
+          BLOCKING: ${{ vars.PR_REVIEW_BLOCKING || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f review-verdict.json ]; then
+            echo "::warning::Reviewer produced no verdict file; treating as inconclusive."
+            exit 0
+          fi
+
+          IMPORTANT=$(jq -r '.important // 0' review-verdict.json)
+          NIT=$(jq -r '.nit // 0' review-verdict.json)
+          echo "Findings: ${IMPORTANT} important, ${NIT} nit"
+
+          if [ "$IMPORTANT" -gt 0 ]; then
+            if [ "$BLOCKING" = "true" ]; then
+              echo "::error::${IMPORTANT} important finding(s); see the PR review."
+              exit 1
+            fi
+            echo "::warning::${IMPORTANT} important finding(s); not blocking (PR_REVIEW_BLOCKING is off)."
+          fi
