@@ -41,6 +41,7 @@ The following services are currently active:
 -   **[Interlock](https://github.com/Einlanzerous/interlock)**: City + state legislation tracker (Nuxt/Nitro SSR) serving its UI and `/api` behind single-user session auth. A `worker` sidecar handles scheduled LegiScan syncs and alerting.
 -   **[Centrifuge](https://github.com/Einlanzerous/centrifuge)**: Newsletter curation — HTTP API plus a decoupled scoring worker that calls the in-stack Ollama by service name for relevance scoring.
 -   **[Signet](https://github.com/Einlanzerous/signet)**: Credential vault + outbound GitHub-secret sync (Go, single binary). Unlike the rest of the stack it runs as a **host systemd daemon**, not a container — deployed by the `signet` ansible role and bound to `127.0.0.1:4010`. Switchyard's owner-gated Credentials surface (SWY-165) reaches it through a server-side proxy over `host.docker.internal`; the bearer token never touches the browser. Vault (master key + SQLite ledger) lives under the `magos` home, deliberately off the shared Postgres.
+-   **[Amber](https://github.com/Einlanzerous/amber)**: Claude Code transcript capture & preservation (Go, single static binary). Redacts and archives transcript data to `/mnt/ssd_storage/amber` before Claude Code's rolling retention sweep deletes it, then indexes what it archived into its own `amber` database. The archive is the source of truth and the index is rebuildable from it, so a Postgres outage degrades search without stopping capture. Reads two host paths **read-only** — `~/.claude/projects` and `~/.claude/history.jsonl`, mounted individually because `~/.claude` as a whole holds `.credentials.json`. `/readyz` on port 4008 goes 503 when capture has stalled or when uncaptured data is approaching its deletion date. Image: `ghcr.io/einlanzerous/amber`.
 
 ### 🎮 Gaming & Remote Play
 -   **[Sunshine](https://github.com/LizardByte/Sunshine)**: High-performance game streaming host for Moonlight.
@@ -119,6 +120,7 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 | lyceum | `lyceum` | `lyceum_user` | Run by the Go binary at startup |
 | interlock | `interlock` | `interlock_user` | Custom SQL migrator (`packages/db`), advisory-locked so web + worker can't race at boot |
 | centrifuge | `centrifuge` | `centrifuge_user` | `centrifuge migrate` in the entrypoint |
+| amber | `amber` | `amber_user` | In-process embedded migrator (`internal/store/migrate.go`) at boot; append-only, each file's sha256 recorded |
 | authentik | `authentik` | `authentik_user` | Django migrations on boot (`identity` profile — authored, not deployed) |
 | n8n | `n8n` | `n8n_user` | n8n auto-migrates on startup |
 
