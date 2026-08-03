@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.14.0](https://github.com/Einlanzerous/construct-server/compare/v4.13.0...v4.14.0) (2026-07-31)
+
+
+### Features
+
+* **signet:** auto-deploy the daemon on release with an approval gate (SERV-62) ([#82](https://github.com/Einlanzerous/construct-server/issues/82)) ([0498342](https://github.com/Einlanzerous/construct-server/commit/0498342f585056bcf2af4213bac39d13380eeb2a))
+
+
+### Bug Fixes
+
+* **signet:** put user-installed ansible on the runner's PATH (SERV-62) ([#85](https://github.com/Einlanzerous/construct-server/issues/85)) ([a83f022](https://github.com/Einlanzerous/construct-server/commit/a83f022f794aa4d7594b97083f5939d5bdefedc3))
+* **signet:** render the sudoers rule via template, not copy content (SERV-62) ([#84](https://github.com/Einlanzerous/construct-server/issues/84)) ([4c7b3cc](https://github.com/Einlanzerous/construct-server/commit/4c7b3cc2a6d1f8973242abc1fac95ce297fa5b5d))
+* **signet:** resolve the signet role from ansible/ops playbooks (SERV-62) ([#86](https://github.com/Einlanzerous/construct-server/issues/86)) ([fe9cb0e](https://github.com/Einlanzerous/construct-server/commit/fe9cb0e17003e282c94edb7e617d24619429fe1e))
+
 ## [4.13.0](https://github.com/Einlanzerous/construct-server/compare/v4.12.1...v4.13.0) (2026-07-27)
 
 
