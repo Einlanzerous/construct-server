@@ -23,8 +23,11 @@ index or knowledge graph before opening source files.
 
 ## 2. Load the ticket
 
-`TICKET_KEY` is set when the PR title or branch named one. When it is set, the
-ticket is the specification the diff is answerable to — read it before the code:
+`TICKET_KEY` is set when the PR title or branch named a ticket that Switchyard
+confirmed exists. It is deliberately still set when Switchyard could not be
+reached or refused the credential, so treat a failed fetch as a fetch failure to
+report — not as evidence that no ticket was linked. When it is set, the ticket
+is the specification the diff is answerable to — read it before the code:
 
 ```bash
 curl -sf -H "Authorization: Bearer $SWITCHYARD_TOKEN" \

@@ -195,13 +195,32 @@ jobs:
           fi
 
           # A branch-derived key can be a false positive: `claude/pr-review-2026`
-          # yields REVIEW-2026. Reporting a caveat that names a ticket which never
-          # existed is more misleading than reporting no key at all, so confirm it
-          # resolves before accepting it.
-          if [ -n "$KEY" ] && ! curl -sf -o /dev/null -m 10 \
-               -H "Authorization: Bearer $SWITCHYARD_TOKEN" "$SWITCHYARD_URL/v1/tickets/$KEY"; then
-            echo "→ $KEY did not resolve against Switchyard; treating as no ticket"
-            KEY=""
+          # yields REVIEW-2026, so confirm the key names a real ticket. Branch on
+          # the status, NOT on curl's exit: `curl -sf` returns 22 for both 404 and
+          # 401, so the first version of this dropped a perfectly good key when the
+          # token was wrong or Switchyard was mid-restart — which happens on every
+          # deploy of this repo, since migrations run at container start. The
+          # review then stated there was no ticket when the title named one, and
+          # skipped ticket fidelity entirely. An absent secret lands here too: it
+          # arrives as an empty string rather than unset, so `set -u` does not
+          # catch it and the request goes out as `Bearer ` and 401s — the SWY-172
+          # blank-read-as-configured shape, in the workflow instead of env.ts.
+          #
+          # Only a 404 means "this ticket does not exist". Anything else keeps the
+          # key and lets the reviewer report the fetch failure as a caveat, which
+          # .github/review-prompt.md already instructs it to do.
+          if [ -n "$KEY" ]; then
+            # curl already writes 000 when it cannot connect, so no `|| echo 000`
+            # here — that appended a second one and reported status 000000.
+            STATUS=$(curl -s -o /dev/null -m 10 -w '%{http_code}' \
+                       -H "Authorization: Bearer $SWITCHYARD_TOKEN" \
+                       "$SWITCHYARD_URL/v1/tickets/$KEY" 2>/dev/null) || true
+            [ -n "$STATUS" ] || STATUS=000
+            case "$STATUS" in
+              200) ;;
+              404) echo "→ $KEY does not exist in Switchyard; treating as no ticket"; KEY="" ;;
+              *)   echo "::warning::Switchyard returned $STATUS for $KEY — keeping the key; the reviewer will report the fetch failure." ;;
+            esac
           fi
 
           if [ -z "$KEY" ]; then
