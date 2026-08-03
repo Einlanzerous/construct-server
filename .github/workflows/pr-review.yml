@@ -1,6 +1,7 @@
 name: PR Review
 
 # Fresh-context review of every pull request (SERV-59).
+
 #
 # The point of running this in CI rather than asking for it in a session is that
 # the reviewer structurally cannot share context with whatever wrote the code,
@@ -36,8 +37,12 @@ permissions:
   issues: read
 
 concurrency:
-  # A rapid push series should cost one review, not one per push.
-  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  # A rapid push series should cost one review, not one per push — but the
+  # trigger is part of the key so a `synchronize` cannot cancel an in-flight
+  # `@claude review`. Sharing the group let a push kill a requested review whose
+  # replacement then skipped at triage, producing a green check and no review:
+  # the same silent pass the Gate step exists to prevent, through another door.
+  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -45,12 +50,20 @@ jobs:
     # `pull_request` on a self-hosted runner is the classic fork-execution hole.
     # This repo is private and single-author so it is largely theoretical, but
     # inheriting it silently is how it stops being theoretical later.
+    #
+    # The comment path needs the same guard and originally had none, which was
+    # worse: it is the only path that checks out PR code, so any commenter could
+    # have put their own review-prompt.md in the workspace and had it run with
+    # Bash on a runner holding SWITCHYARD_TOKEN. `author_association` gates who
+    # may ask; the head-repo check in the next step gates what gets checked out.
     if: >-
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request != null &&
-       startsWith(github.event.comment.body, '@claude review'))
+       startsWith(github.event.comment.body, '@claude review') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                github.event.comment.author_association))
     runs-on: self-hosted
     timeout-minutes: 30
 
@@ -62,7 +75,16 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+            N="${{ github.event.issue.number }}"
+            # The comment payload carries no head repo, so resolve it before
+            # anything can check out PR code onto this runner.
+            HEAD=$(gh pr view "$N" --json headRepositoryOwner,headRepository \
+                     --jq '"\(.headRepositoryOwner.login)/\(.headRepository.name)"')
+            if [ "$HEAD" != "$GITHUB_REPOSITORY" ]; then
+              echo "::error::PR #$N head is $HEAD, not $GITHUB_REPOSITORY — refusing to check out fork code on a self-hosted runner."
+              exit 1
+            fi
+            echo "number=$N" >> "$GITHUB_OUTPUT"
             # An explicit ask overrides every skip rule below, including drafts.
             echo "manual=true" >> "$GITHUB_OUTPUT"
           else
@@ -121,13 +143,18 @@ jobs:
           # non-matching line exists, which silently skipped any PR that touched
           # code and a .md file together.
           CODE=$(grep -vE '(^docs/|\.md$)' <<<"$FILES" || true)
-          if [ -z "$CODE" ] && [ "$MANUAL" != "true" ]; then
+          # The reviewer's own standards are .md but are not documentation.
+          STANDARDS=$(grep -E '^(REVIEW\.md|CLAUDE\.md|\.github/review-prompt\.md)$' <<<"$FILES" || true)
+          if [ -z "$CODE" ] && [ -z "$STANDARDS" ] && [ "$MANUAL" != "true" ]; then
             skip "documentation only"
           fi
 
           # Paths where a mistake widens access, loses data, leaks a secret, or
           # compromises the runner. These get the deeper pass.
-          SENSITIVE='^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml)'
+          # REVIEW.md / CLAUDE.md / review-prompt.md are the reviewer's own
+          # standards: a PR that loosens them is a governance change, not
+          # documentation, so they are sensitive rather than skippable.
+          SENSITIVE='^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|REVIEW\.md|CLAUDE\.md|\.github/review-prompt\.md)'
           if grep -qE "$SENSITIVE" <<<"$FILES"; then
             echo "effort=high"   >> "$GITHUB_OUTPUT"
             echo "model=opus"    >> "$GITHUB_OUTPUT"
@@ -150,6 +177,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          SWITCHYARD_URL: http://localhost:4002
+          SWITCHYARD_TOKEN: ${{ secrets.SWITCHYARD_REVIEWER_TOKEN }}
         run: |
           set -euo pipefail
           TITLE=$(gh pr view "$PR_NUMBER" --json title --jq .title)
@@ -163,6 +192,16 @@ jobs:
           KEY=$(grep -oE '[(\[][A-Z]+-[0-9]+' <<<"$TITLE" | tr -d '([' | head -1 || true)
           if [ -z "$KEY" ]; then
             KEY=$(grep -oiE '\b[a-z]+-[0-9]+\b' <<<"$BRANCH" | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          fi
+
+          # A branch-derived key can be a false positive: `claude/pr-review-2026`
+          # yields REVIEW-2026. Reporting a caveat that names a ticket which never
+          # existed is more misleading than reporting no key at all, so confirm it
+          # resolves before accepting it.
+          if [ -n "$KEY" ] && ! curl -sf -o /dev/null -m 10 \
+               -H "Authorization: Bearer $SWITCHYARD_TOKEN" "$SWITCHYARD_URL/v1/tickets/$KEY"; then
+            echo "→ $KEY did not resolve against Switchyard; treating as no ticket"
+            KEY=""
           fi
 
           if [ -z "$KEY" ]; then
@@ -223,12 +262,19 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           prompt: ${{ steps.prompt.outputs.text }}
-          # Edit/Write are withheld so the reviewer cannot drift into authoring.
-          # It still needs Bash to run gh and to write the verdict file.
+          # Tools must be granted explicitly: the first run denied 17 calls and
+          # produced nothing while still reporting success, because every step of
+          # the prompt is Bash (cat the standards, curl the ticket, gh for the
+          # diff and the review post) and Bash was never allowed.
+          #
+          # Edit/Write stay denied so the reviewer cannot drift into authoring,
+          # but the boundary that actually holds is the job token being
+          # contents:read — a tool list is a guardrail, not a permission model.
           claude_args: >-
             --effort ${{ steps.triage.outputs.effort }}
             --model ${{ steps.triage.outputs.model }}
             --max-turns 40
+            --allowedTools Bash,Read,Grep,Glob
             --disallowedTools Edit,Write,NotebookEdit
 
       - name: Gate
@@ -241,9 +287,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          # A missing verdict is a reviewer malfunction, not a clean review, and
+          # it is deliberately fatal regardless of PR_REVIEW_BLOCKING. The first
+          # run on switchyard exited green having posted nothing at all; a check
+          # that goes green when no review happened is worse than no check.
+          # PR_REVIEW_BLOCKING gates on *findings* — this gates on the reviewer
+          # having run.
           if [ ! -f review-verdict.json ]; then
-            echo "::warning::Reviewer produced no verdict file; treating as inconclusive."
-            exit 0
+            echo "::error::Reviewer produced no verdict file — the review did not complete."
+            echo "Check the Review step for permission denials or a truncated run." >&2
+            exit 1
           fi
 
           IMPORTANT=$(jq -r '.important // 0' review-verdict.json)
