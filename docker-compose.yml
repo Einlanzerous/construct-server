@@ -239,6 +239,10 @@ services:
       # Interlock (ITLK-18) — DB/user provisioned by db/init-db.sh. The worker's
       # migration creates pg_trgm itself (trusted extension; interlock_user owns the DB).
       - INTERLOCK_DB_PASSWORD=${INTERLOCK_DB_PASSWORD}
+      # Amber (AMBR-4) — DB/user provisioned by db/init-db.sh. Amber runs its own
+      # embedded migrator at boot and treats this database as a derived index:
+      # the archive on disk is the source of truth and can rebuild it.
+      - AMBER_DB_PASSWORD=${AMBER_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -708,6 +712,103 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 
+  # --- AMBER (Claude Code transcript capture + preservation) — AMBR-4 ---
+  # Redacts and archives Claude Code transcript data before the rolling retention
+  # sweep deletes it, and indexes what it archived into Postgres. The archive on
+  # /mnt/ssd_storage is the source of truth; the database is a derived index that
+  # `amber reindex` can rebuild from it, so a Postgres outage degrades search but
+  # does not stop capture.
+  #
+  # Like interlock-worker, this crash-loops for a few seconds on a first deploy:
+  # the `amber` database does not exist until the deploy's init-db step runs
+  # *after* `up -d`. `restart: unless-stopped` rides it out.
+  amber:
+    image: ghcr.io/einlanzerous/amber:latest
+    container_name: amber
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    # `serve` drains deliberately on SIGTERM: up to two minutes for an in-flight
+    # HTTP-triggered pass, then up to two more for a scheduled one. Docker's
+    # default is to SIGKILL after 10 seconds, which would make that drain
+    # unreachable and throw away a partly-finished pass on every deploy. The
+    # archive writes are atomic so nothing corrupts — it just has to be redone.
+    stop_grace_period: 5m
+    # `projects/` on the host is mode 0700 and owned by uid 1000, and the
+    # archive directory is owned by the same uid. Running as root would read the
+    # sources fine and then write an archive nothing else on the host can
+    # manage, so the uid is pinned rather than left to the image.
+    user: "1000:1000"
+    # The host port exists for Uptime Kuma, which is NOT on construct_net
+    # (construct-server README) and therefore cannot reach http://amber:4008.
+    # Its monitor targets http://<host>:4008/readyz. /readyz and /healthz are
+    # unauthenticated by design; the /v1 endpoints behind AMBER_API_TOKEN are the
+    # ones that read prompt text.
+    ports:
+      - "${AMBER_PORT:-4008}:4008"
+    environment:
+      - AMBER_ADDR=:4008
+      - AMBER_DATABASE_URL=postgres://amber_user:${AMBER_DB_PASSWORD}@postgres:5432/amber?sslmode=disable
+      - AMBER_API_TOKEN=${AMBER_API_TOKEN}
+      # Required — Amber refuses to start without it. Generate once with
+      # `openssl rand -hex 32` and then LEAVE IT ALONE: redaction fingerprints
+      # are salted with it, so rotating it silently makes every fingerprint
+      # already in the index incomparable with every one written after.
+      - AMBER_REDACTION_SALT=${AMBER_REDACTION_SALT}
+      # Container-side paths for the two read-only source mounts below.
+      - AMBER_PROJECTS_DIR=/sources/projects
+      - AMBER_HISTORY_FILE=/sources/history.jsonl
+      - AMBER_ARCHIVE_DIR=/archive
+      # A pass over the current corpus takes ~5 minutes, and the cost is reading
+      # and redacting everything rather than writing, so it does not fall as the
+      # corpus goes quiet. Don't shorten this without measuring.
+      - AMBER_INGEST_INTERVAL=${AMBER_INGEST_INTERVAL:-6h}
+      # Must exceed AMBER_INGEST_INTERVAL — config refuses to start otherwise,
+      # rather than letting /readyz go red between two perfectly normal runs.
+      - AMBER_STALE_AFTER=${AMBER_STALE_AFTER:-36h}
+      # This host runs cleanupPeriodDays=60. The default is 30 on purpose
+      # (guessing low only wastes a warning; guessing high loses data), so it has
+      # to be set explicitly here or every days_until_loss reads 30 days
+      # pessimistic. AMBR-5 drops the host back to 30 and deletes this line.
+      - AMBER_CLEANUP_PERIOD_DAYS=${AMBER_CLEANUP_PERIOD_DAYS:-60}
+      - AMBER_LOSS_WARN_DAYS=${AMBER_LOSS_WARN_DAYS:-7}
+    volumes:
+      # NEVER mount ~/.claude wholesale — it contains .credentials.json (live
+      # OAuth credentials). The two sources are mounted individually and
+      # read-only; Amber has no reason to write to either, and the archive is
+      # the only writable path it gets.
+      - /home/magos/.claude/projects:/sources/projects:ro
+      # Bind-mounting a single FILE pins its inode for the life of the container.
+      # Claude Code appends to history.jsonl in place, so this is correct today —
+      # but if it ever switches to an atomic write (temp file + rename), the
+      # container keeps reading the old inode and captures nothing new from it,
+      # silently and forever. Mounting the parent directory is the usual fix and
+      # is exactly what must not happen here. If history coverage ever flatlines
+      # while the host file grows, this is why; recreating the container clears
+      # it. `amber verify` against the host's line count is the check.
+      - /home/magos/.claude/history.jsonl:/sources/history.jsonl:ro
+      - /mnt/ssd_storage/amber:/archive
+    networks:
+      - construct_net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    healthcheck:
+      # /readyz is 503 until a successful ingest has been recorded, and the first
+      # pass on a cold archive takes ~5 minutes — so start_period has to be
+      # generous or every fresh deploy flags unhealthy before Amber has done
+      # anything wrong. Nothing depends_on amber's health, so `unhealthy` is a
+      # signal to look at, not a restart trigger.
+      #
+      # interval deliberately exceeds the 60s coverage cache inside /readyz. At
+      # exactly 60s every probe landed on the expiry and redid the coverage scan
+      # the cache exists to avoid — and Kuma is polling the same endpoint. At
+      # 120s this probe still recomputes, but Kuma's polls in between are served
+      # from cache instead of each triggering their own scan.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:4008/readyz"]
+      interval: 120s
+      timeout: 10s
+      retries: 3
+      start_period: 15m
   # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
   # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
   # ONLY Argosy + a deny-all catch-all; `internal` (:9080 HTTP, deliberately NOT
