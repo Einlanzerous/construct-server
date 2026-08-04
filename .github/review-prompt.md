@@ -17,7 +17,7 @@ There may be **two** copies of `CLAUDE.md`, and which one you are holding matter
 ```bash
 cat REVIEW.md                          # review-only standards, from the PR head
 cat CLAUDE.md                          # the invariants IN FORCE — from the base branch
-ls .claude-pr/ 2>/dev/null             # present when the PR edits a restored path
+ls .claude-pr/ 2>/dev/null             # the PR's copies of the restored paths
 cat .claude-pr/CLAUDE.md 2>/dev/null   # what this PR PROPOSES they become
 ```
 
