@@ -130,19 +130,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh pr checkout "${{ steps.pr.outputs.number }}"
 
-      # The reviewer reads REVIEW.md and CLAUDE.md from the workspace while the
-      # diff comes from the API, and on a self-hosted runner the workspace is a
-      # long-lived directory rather than a fresh container. Those two sources can
-      # disagree: in one run CLAUDE.md on disk was main's pre-PR stub while the
-      # diff was the PR adding the invariants, so the reviewer applied standards
-      # the PR was in the middle of introducing and nothing contradicted it. The
-      # cause was never identified; this makes the drift loud instead of silent.
-      - name: Assert the workspace matches the checked-out head
+      # Verifies the checkout itself is intact — a stale file left by a previous
+      # job on this long-lived self-hosted workspace.
+      #
+      # It deliberately does NOT try to catch the reviewer's config being swapped.
+      # claude-code-action restores CLAUDE.md from the base branch *inside* the
+      # Review step, roughly twelve seconds after this runs, so an assertion here
+      # structurally cannot observe it — an earlier version of this step claimed
+      # to guard against exactly that and never could, passing on every run while
+      # protecting nothing. That case is real and is handled where it can be: the
+      # prompt reads both the base copy and the PR's copy under .claude-pr/, and
+      # knows which one it is allowed to obey.
+      - name: Assert the checkout is clean
         run: |
           set -euo pipefail
           DIRTY=$(git status --porcelain)
           if [ -n "$DIRTY" ]; then
-            echo "::error::Workspace does not match the checked-out head — the reviewer would read the wrong standards."
+            echo "::error::Workspace does not match the checked-out head — a previous job left files behind."
             echo "$DIRTY" >&2
             exit 1
           fi
