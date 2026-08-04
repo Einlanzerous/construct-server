@@ -766,11 +766,12 @@ services:
       # Must exceed AMBER_INGEST_INTERVAL — config refuses to start otherwise,
       # rather than letting /readyz go red between two perfectly normal runs.
       - AMBER_STALE_AFTER=${AMBER_STALE_AFTER:-36h}
-      # This host runs cleanupPeriodDays=60. The default is 30 on purpose
-      # (guessing low only wastes a warning; guessing high loses data), so it has
-      # to be set explicitly here or every days_until_loss reads 30 days
-      # pessimistic. AMBR-5 drops the host back to 30 and deletes this line.
-      - AMBER_CLEANUP_PERIOD_DAYS=${AMBER_CLEANUP_PERIOD_DAYS:-60}
+      # No AMBER_CLEANUP_PERIOD_DAYS override. The host went back to
+      # cleanupPeriodDays=30 in AMBR-5, which is also Amber's built-in default,
+      # so the safe value and the true value now agree and there is nothing to
+      # state. Set it again only if the host's setting is raised — and set it to
+      # the REAL value, since guessing high reads comfortable right up until the
+      # sweep takes the file, while guessing low only costs an early warning.
       - AMBER_LOSS_WARN_DAYS=${AMBER_LOSS_WARN_DAYS:-7}
     volumes:
       # NEVER mount ~/.claude wholesale — it contains .credentials.json (live
