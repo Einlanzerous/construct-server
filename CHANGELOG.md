@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.15.0](https://github.com/Einlanzerous/construct-server/compare/v4.14.0...v4.15.0) (2026-08-04)
+
+
+### Features
+
+* **amber:** drop the AMBER_CLEANUP_PERIOD_DAYS override (AMBR-5) ([#90](https://github.com/Einlanzerous/construct-server/issues/90)) ([ac126e6](https://github.com/Einlanzerous/construct-server/commit/ac126e652459692f093f8ed70b381c71cdc04030))
+* **ci:** fresh-context PR reviewer with risk-based triggering (SERV-59) ([#87](https://github.com/Einlanzerous/construct-server/issues/87)) ([a39e842](https://github.com/Einlanzerous/construct-server/commit/a39e842306532da9872b740b73421431a4e5ef6e))
+
+
+### Bug Fixes
+
+* **ci:** reviewer reads the PR's CLAUDE.md as a proposal (SERV-67) ([#91](https://github.com/Einlanzerous/construct-server/issues/91)) ([016e847](https://github.com/Einlanzerous/construct-server/commit/016e84768cf2f0c1f0fccb5886400a91eceebcd6))
+
 ## [4.14.0](https://github.com/Einlanzerous/construct-server/compare/v4.13.0...v4.14.0) (2026-07-31)
 
 
