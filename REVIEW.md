@@ -56,8 +56,11 @@ incidents; these are the review-time questions.
 - **`db/init-db.sh` idempotency.** Anything added here runs on every deploy
   against live Postgres. Is it safe to re-run?
 - **Secrets.** Does a value land in a committed file, a build arg, an image
-  layer, or a log line? Is a new secret sourced from `PROD_ENV_FILE` on the
-  `home-server` environment rather than a repo-level secret?
+  layer, or a log line? A secret the *stack* consumes belongs in `PROD_ENV_FILE`
+  on the `home-server` environment. A credential only a workflow uses is
+  currently a repo-level secret managed by Signet — a deliberate interim state,
+  not an oversight, so don't flag it; environment scoping for CI credentials is
+  tracked separately.
 - **New public routes.** A new hostname, port, or Traefik/Caddy rule — is it
   behind Cloudflare Access, and is that deliberate? Internal reachability
   proves nothing about the public path.

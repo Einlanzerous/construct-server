@@ -31,9 +31,14 @@ anything deploys or gets versioned.
 - Deploys are GitHub Actions on the self-hosted `imperial-construct` runner.
   `deploy.yml` fires on push to `main` touching stack paths; service repos fire
   `repository_dispatch`.
-- Secrets reach the stack as `PROD_ENV_FILE`, a **GitHub Environment secret on
-  `home-server`** — not a repo-level secret. Update it with
+- Secrets the **stack** consumes reach it as `PROD_ENV_FILE`, a GitHub
+  Environment secret on `home-server` — not a repo-level secret. Update it with
   `gh secret set PROD_ENV_FILE --env home-server`.
+- Credentials only a **workflow** uses (the reviewer's tokens) are repo-level
+  and managed by Signet: `signet set --project construct-server --name X`, then
+  `signet target add --secret construct-server/X --gh-repo owner/name`, then
+  `signet sync`. Rotation happens in the vault, not per repo. Moving these onto
+  a GitHub Environment is intended but not done.
 - Text files are LF via `.gitattributes` (SERV-52). A diff that looks like a
   whole-file rewrite is usually a line-ending regression.
 

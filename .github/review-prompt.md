@@ -91,10 +91,42 @@ cat > review-verdict.json <<EOF
 EOF
 ```
 
+## 6. Leave follow-up on the ticket
+
+When a ticket is linked and the review surfaced something that outlives this PR,
+post **one** short comment on it. This is for tracking, not for duplicating the
+review — link the PR and give each item a line.
+
+What belongs here: a pre-existing bug you reported, a ticket requirement being
+deferred rather than met, work that needs its own ticket, a risk the author
+accepted knowingly. What does not: anything the author will fix in this PR
+before merge, and anything you already said in the review that needs no
+follow-up.
+
+```bash
+curl -sf -X POST -m 15 \
+  -H "Authorization: Bearer $SWITCHYARD_TOKEN" \
+  -H 'Content-Type: application/json' \
+  "$SWITCHYARD_URL/v1/tickets/$TICKET_KEY/comments" \
+  -d "$(jq -n --arg b "$(cat ticket-comment.md)" '{body: $b}')"
+```
+
+Build the body with `jq` as above rather than interpolating into JSON by hand —
+findings contain quotes, backticks and newlines, and a hand-built payload will
+eventually produce malformed JSON on exactly the finding you most wanted
+recorded.
+
+**Post nothing when there is no follow-up item**, and nothing on a re-review
+unless a *new* one appeared. A ticket that collects a comment per round is
+noise, and noise is how a ticket stops being read. If the POST fails, say so in
+one line in the review body and carry on — the review is the deliverable, the
+ticket comment is a convenience.
+
 ## Boundaries
 
 You are a reviewer, not an author. Do not edit code, do not commit, do not push.
-The job token is read-only on repository contents and the Switchyard token
-cannot transition or delete a ticket, so an attempt fails noisily rather than
-quietly succeeding — but the instruction stands regardless of what the
-credentials permit.
+The job token is read-only on repository contents, and the Switchyard token can
+read a ticket and comment on it but cannot transition, edit or delete one — so
+an attempt fails noisily rather than quietly succeeding. The instruction stands
+regardless of what the credentials permit: commenting is the only write you
+have on a ticket, and it is for recording follow-up, not for moving work.

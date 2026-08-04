@@ -42,7 +42,13 @@ concurrency:
   # `@claude review`. Sharing the group let a push kill a requested review whose
   # replacement then skipped at triage, producing a green check and no review:
   # the same silent pass the Gate step exists to prevent, through another door.
-  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
+  # The action is in the key as well as the event: `opened` and `synchronize`
+  # are both `pull_request`, so keying on the event alone still let a fixup
+  # pushed minutes after opening cancel the opening review — whose replacement
+  # then skipped at triage for lacking the label, green and unreviewed. That is
+  # the same silent pass, third variant; it was closed for the manual path and
+  # left open on the path that runs for every PR.
+  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}-${{ github.event.action }}
   cancel-in-progress: true
 
 jobs:
@@ -68,6 +74,25 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # First, because every later step depends on these. The runner is a systemd
+      # service with a bare system PATH, so anything installed under $HOME is
+      # invisible to it — the trap SERV-62 hit twice, whose lesson is to fail
+      # with a clear reason rather than as `command not found` three layers down.
+      # This step sat after four steps that already used gh and curl, so it could
+      # only ever have caught a missing jq. It is unconditional: it is three
+      # `command -v` calls, and gating it on triage would put it back after the
+      # first gh call.
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          for tool in gh jq curl; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "$tool is not on the runner PATH: $PATH" >&2
+              exit 1
+            fi
+          done
+          echo "gh $(gh --version | head -1), jq $(jq --version)"
+
       - name: Resolve the pull request
         id: pr
         env:
@@ -104,6 +129,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr checkout "${{ steps.pr.outputs.number }}"
+
+      # The reviewer reads REVIEW.md and CLAUDE.md from the workspace while the
+      # diff comes from the API, and on a self-hosted runner the workspace is a
+      # long-lived directory rather than a fresh container. Those two sources can
+      # disagree: in one run CLAUDE.md on disk was main's pre-PR stub while the
+      # diff was the PR adding the invariants, so the reviewer applied standards
+      # the PR was in the middle of introducing and nothing contradicted it. The
+      # cause was never identified; this makes the drift loud instead of silent.
+      - name: Assert the workspace matches the checked-out head
+        run: |
+          set -euo pipefail
+          DIRTY=$(git status --porcelain)
+          if [ -n "$DIRTY" ]; then
+            echo "::error::Workspace does not match the checked-out head — the reviewer would read the wrong standards."
+            echo "$DIRTY" >&2
+            exit 1
+          fi
+          echo "workspace clean at $(git rev-parse --short HEAD)"
 
       - name: Triage — should this be reviewed, and how deeply
         id: triage
@@ -190,8 +233,10 @@ jobs:
           # Both delimiters are in use across the estate: construct-server
           # writes `(SERV-62)`, switchyard writes `[SWY-198]`.
           KEY=$(grep -oE '[(\[][A-Z]+-[0-9]+' <<<"$TITLE" | tr -d '([' | head -1 || true)
+          SOURCE=title
           if [ -z "$KEY" ]; then
             KEY=$(grep -oiE '\b[a-z]+-[0-9]+\b' <<<"$BRANCH" | head -1 | tr '[:lower:]' '[:upper:]' || true)
+            SOURCE=branch
           fi
 
           # A branch-derived key can be a false positive: `claude/pr-review-2026`
@@ -219,7 +264,18 @@ jobs:
             case "$STATUS" in
               200) ;;
               404) echo "→ $KEY does not exist in Switchyard; treating as no ticket"; KEY="" ;;
-              *)   echo "::warning::Switchyard returned $STATUS for $KEY — keeping the key; the reviewer will report the fetch failure." ;;
+              *)
+                # Keeping the key on a non-200 is right for a title-derived key
+                # and wrong for a branch-name guess: `claude/pr-review-2026`
+                # yields REVIEW-2026, and with Switchyard down the reviewer would
+                # report a caveat about a ticket that never existed — which
+                # REVIEW.md explicitly forbids inventing from a branch name.
+                if [ "$SOURCE" = "branch" ]; then
+                  echo "→ Switchyard returned $STATUS and $KEY is only a branch-name guess; treating as no ticket"
+                  KEY=""
+                else
+                  echo "::warning::Switchyard returned $STATUS for $KEY — keeping the title-derived key; the reviewer will report the fetch failure."
+                fi ;;
             esac
           fi
 
@@ -247,23 +303,6 @@ jobs:
             echo "- \`GITHUB_REPOSITORY\` is ${GITHUB_REPOSITORY}."
             echo 'REVIEW_PROMPT_EOF'
           } >> "$GITHUB_OUTPUT"
-
-      # The runner is a systemd service with a bare system PATH, so anything
-      # installed under $HOME is invisible to it — the trap SERV-62 hit twice.
-      # The action bootstraps its own bun, so nothing needs to be on PATH here,
-      # but if the first run dies during setup this is where to look. gh and jq
-      # are used directly by the steps above and below.
-      - name: Preflight
-        if: steps.triage.outputs.review == 'true'
-        run: |
-          set -euo pipefail
-          for tool in gh jq curl; do
-            if ! command -v "$tool" >/dev/null; then
-              echo "$tool is not on the runner PATH: $PATH" >&2
-              exit 1
-            fi
-          done
-          echo "gh $(gh --version | head -1), jq $(jq --version)"
 
       - name: Review
         if: steps.triage.outputs.review == 'true'
