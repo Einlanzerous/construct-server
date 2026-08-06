@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.16.0](https://github.com/Einlanzerous/construct-server/compare/v4.15.0...v4.16.0) (2026-08-06)
+
+
+### Features
+
+* **drydock:** add the drydock-shell container (SERV-71) ([#92](https://github.com/Einlanzerous/construct-server/issues/92)) ([f32bd3b](https://github.com/Einlanzerous/construct-server/commit/f32bd3bdd2600aa031aafe2596264a1bbde3dc21))
+
 ## [4.15.0](https://github.com/Einlanzerous/construct-server/compare/v4.14.0...v4.15.0) (2026-08-04)
 
 
