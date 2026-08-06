@@ -810,6 +810,35 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15m
+
+  # --- DRYDOCK SHELL (web terminal multiplexer for AI CLIs) — SERV-71 ---
+  # Static Vite bundle behind nginx. The DAEMON is not here and must not be: it
+  # holds agent PTYs and spawns `claude` as the host user, with the host's repos,
+  # toolchain and ~/.claude — a container would strip all of that. It runs as the
+  # systemd user unit `drydock-daemon` on :4318 instead.
+  #
+  # So this container serves files and nothing else. The browser talks to the
+  # daemon DIRECTLY on :4318, which is why DRYDOCK_DAEMON_PORT is a port and not
+  # a URL: the image regenerates /config.js at start and the page resolves the
+  # daemon on whatever host served it, so one image works from localhost, the
+  # LAN, or Tailscale with no hostname baked in.
+  #
+  # No watchtower label on purpose — this one SHOULD auto-update, since the
+  # bundle is rebuilt and pushed on every main push that touches shell/**.
+  #
+  # And no `networks:` key, deliberately: it talks to nothing in the stack, so
+  # it stays on the project default network rather than joining construct_net
+  # where postgres and every first-party service sit. Same shape as open-webui,
+  # copyparty, uptime-kuma and aperture — publish a port, join nothing.
+  drydock-shell:
+    image: ghcr.io/einlanzerous/drydock/shell:latest
+    container_name: drydock-shell
+    restart: unless-stopped
+    ports:
+      - "5321:80"
+    environment:
+      - DRYDOCK_DAEMON_PORT=4318
+
   # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
   # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
   # ONLY Argosy + a deny-all catch-all; `internal` (:9080 HTTP, deliberately NOT
