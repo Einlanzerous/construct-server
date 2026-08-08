@@ -108,7 +108,7 @@
         # failed deploy and a false green.
         - name: Verify the daemon is serving the new version
           ansible.builtin.uri:
-            url: "http://{{ signet_addr }}/healthz"
+            url: "http://{{ signet_health_addr }}/healthz"
             return_content: true
           register: signet_health
           until:
@@ -120,7 +120,7 @@
 
         - name: Report the deployed version
           ansible.builtin.debug:
-            msg: "Signet {{ signet_health.json.version }} is serving on {{ signet_addr }}."
+            msg: "Signet {{ signet_health.json.version }} is serving on {{ signet_health_addr }}."
 
       rescue:
         - name: Explain how to get back to the previous binary
@@ -131,5 +131,10 @@
               response') }}). The previous binary was kept — roll back with:
               mv {{ signet_binary }}.prev {{ signet_binary }} &&
               sudo systemctl restart signet.
+              Check what .prev actually is first: the unit binds
+              "{{ signet_addr }}", and anything older than {{ signet_min_version }}
+              cannot parse a multi-address bind — it will fail to start entirely,
+              loopback included, rather than degrading. Pin signet_addr to a
+              single host:port before rolling back that far.
               If the unit will not bind, check for a stale `signet serve`
-              already holding {{ signet_addr }}.
+              already holding {{ signet_health_addr }}.

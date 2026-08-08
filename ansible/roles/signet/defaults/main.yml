@@ -12,9 +12,41 @@ signet_binary: "/home/{{ signet_user }}/.local/bin/signet"
 signet_config_dir: "/home/{{ signet_user }}/.config/signet"   # master.key (0400)
 signet_state_dir: "/home/{{ signet_user }}/.local/share/signet"  # signet.db + audit ledger
 
-# Loopback bind — the daemon is only ever reached from the Switchyard container
-# via host.docker.internal (host-gateway), never published to the LAN.
-signet_addr: "127.0.0.1:4010"
+# Bind addresses (SERV-65/69). Loopback alone strands every container: the
+# Switchyard backend sits on construct_net and reaches the host through
+# host.docker.internal, which `extra_hosts: host-gateway` resolves to the docker0
+# gateway — a socket bound to 127.0.0.1 refuses that connection. Both interfaces
+# are named explicitly rather than using 0.0.0.0, which would put a credential
+# vault on the LAN and Tailscale too. Multi-address support is SGNT-17 (v1.4.1);
+# an older binary treats the whole comma string as one address and fails to bind.
+#
+# Hosts must be IP literals — the daemon rejects `localhost`, because net.Listen
+# resolves a name and binds exactly one of the answers, so on a dual-stack host
+# it would serve 127.0.0.1 *or* ::1 and turn half its clients away while
+# reporting a clean start.
+#
+# Hardcoded rather than derived: 172.17.0.1 is Docker's default bridge address
+# and nothing in this repo configures otherwise (no daemon.json, no `bip`
+# anywhere in ansible/). Confirmed on the host 2026-08-08. Override here if that
+# ever changes rather than editing the unit template.
+signet_docker_gateway: "172.17.0.1"
+signet_addr: "127.0.0.1:4010,{{ signet_docker_gateway }}:4010"
+
+# `signet_addr` is a bind LIST and is not a valid URL authority. Anything that
+# needs one reachable address — notably the deploy health check in
+# ops/update-signet.yml — must use this instead. Interpolating the bind list into
+# a URL yields http://127.0.0.1:4010,172.17.0.1:4010/healthz, which resolves to a
+# host named "127.0.0.1:4010,172.17.0.1" and fails every probe, red-flagging a
+# deploy whose daemon is perfectly healthy.
+signet_health_addr: "{{ signet_addr.split(',') | first }}"
+
+# Multi-address SIGNET_ADDR landed in v1.4.1 (SGNT-17). An older binary treats
+# the whole comma string as a single address and fails to bind — and because the
+# unit is Restart=always, it burns its start limit in ~25s and lands in `failed`,
+# taking loopback down with it. That is strictly worse than the bug the
+# multi-address bind fixed, so the binary install asserts on this rather than
+# trusting the comment.
+signet_min_version: "v1.4.1"
 
 # EnvironmentFile holding SIGNET_API_TOKEN (0600, owned by signet_user). The
 # token value comes from `signet_api_token`, which should be defined in the
