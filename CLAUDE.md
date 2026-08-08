@@ -83,11 +83,24 @@ anything deploys or gets versioned.
   compose projects are bound to different files on this host; edits in the home
   directory are not necessarily what is live. Verify with `docker compose ls`
   before concluding a config change took effect.
-- **Every first-party image is `:latest`, and watchtower rolls the stack
-  Mondays at 04:00.** A merge can therefore go live unattended, and the running
-  version is not deterministic. Pinning tags is the prerequisite for everything
-  in `docs/delivery-pipeline.md` — until it lands, treat "what's deployed" as a
-  question you have to answer by inspection.
+- **First-party image tags are pinnable but still default to `latest`** (SERV-74).
+  Every first-party image reads `${<SERVICE>_TAG:-latest}`, one variable per
+  source repo — a repo's backend and frontend ship from one release and pin
+  together. The mechanism is in place; the values are not set, so `docker compose
+  pull` still resolves to whatever `latest` points at, and **"what's deployed"
+  remains a question you answer by inspection**. Setting real defaults and
+  carrying them in `PROD_ENV_FILE` is the unfinished half. The `:-` is
+  load-bearing: an unset *or empty* var interpolates to `image: …/argosy:`, which
+  is neither an error nor `latest` — see the empty-env invariant above.
+- **Watchtower is opt-in and no longer rolls first-party images** (SERV-75).
+  `WATCHTOWER_LABEL_ENABLE=true` means it monitors only containers carrying
+  `com.centurylinklabs.watchtower.enable=true` — currently four third-party
+  leaves (dozzle, uptime-kuma, datadog, and itself). It previously monitored
+  everything with per-service opt-outs as the only brake, which made a merge able
+  to go live unattended Mondays at 04:00. Adding a service does **not** opt it in;
+  `deploy.yml` is the deploy path. Watchtower will never call a reporting step, so
+  anything it rolls is invisible to the delivery ledger in
+  `docs/delivery-pipeline.md` — that is the argument against widening the list.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.

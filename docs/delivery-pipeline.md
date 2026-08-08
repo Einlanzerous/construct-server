@@ -76,9 +76,13 @@ mutate prod against those floating tags:
 
 1. `deploy.yml` on push to `main` (`docker compose pull && up -d`)
 2. `repository_dispatch: [deploy, image-updated]` from app repos
-3. **watchtower** — `docker-compose.yml:56`, schedule `0 0 4 * * 1` (Mondays 04:00),
-   cleanup + rolling restart, monitoring *every* container. Only servo-signal opts
-   out, at `docker-compose.yml:276`.
+3. **watchtower** — schedule `0 0 4 * * 1` (Mondays 04:00), cleanup + rolling
+   restart. **Closed by SERV-75.** As surveyed this was recorded as "monitoring
+   *every* container, only servo-signal opts out"; the survey was wrong on the
+   detail — 20 services carried opt-out labels — but right that the default was
+   monitor-everything, which left 12 of 29 services in scope, 4 of them
+   first-party. It is now `WATCHTOWER_LABEL_ENABLE=true`, monitoring an opt-in set
+   of four third-party leaves and no first-party image. Mutators 1 and 2 remain.
 
 The versioned artifacts already exist: `lyceum/.github/workflows/publish.yml:31`
 emits `latest`, `sha-<short>`, `{{version}}`, and `{{major}}.{{minor}}`. Compose

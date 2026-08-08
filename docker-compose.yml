@@ -114,7 +114,10 @@ services:
   dozzle:
     image: amir20/dozzle:latest
     labels:
-      # Auto-roll: log viewer; stateless leaf (SERV-75).
+      # Auto-roll: log viewer, no persistent state, nothing depends_on it (SERV-75).
+      # Caveat worth knowing: it mounts the docker socket read-write and is the only
+      # one of the four opted-in services on a floating tag, so it is the least
+      # conservative entry in this set. If the list is ever trimmed, trim this first.
       - "com.centurylinklabs.watchtower.enable=true"
     container_name: dozzle
     restart: unless-stopped
