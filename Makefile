@@ -6,7 +6,9 @@
 # pass deps=1 for a genuine cold start, where the dependencies do need to come up.
 # 0/no/false are treated as "keep it scoped" — Make's $(if) is a non-empty test, so
 # without filtering them out `deps=0` would read as "yes, bring dependencies up".
-NO_DEPS = $(if $(svc),$(if $(filter-out 0 no false,$(deps)),,--no-deps))
+# DEPS_ON is the single truthiness test, so every target agrees on what deps= means.
+DEPS_ON = $(filter-out 0 no false,$(deps))
+NO_DEPS = $(if $(svc),$(if $(DEPS_ON),,--no-deps))
 
 # Create the construct_net Docker bridge network (required before starting the stack)
 network:
@@ -41,7 +43,7 @@ force-recreate: network
 	  echo "To rebuild the whole stack deliberately: docker compose up -d --force-recreate"; \
 	  exit 1; \
 	}
-	@test -z "$(deps)" || { \
+	@test -z "$(DEPS_ON)" || { \
 	  echo "force-recreate does not accept deps= — it would force-recreate every dependency of"; \
 	  echo "$(svc), including the shared postgres. That is the SERV-63 command verbatim."; \
 	  echo "For a cold start, bring dependencies up unforced: make recreate svc=$(svc) deps=1"; \
