@@ -113,6 +113,20 @@ for svc in "${SERVICES[@]}"; do
 
   CHECKED=$((CHECKED + 1))
 
+  svc_findings=()
+
+  # Which compose file created this container (SERV-76). Every container carries the
+  # project root it was created from, so this covers all 29 services — unlike the
+  # bind-source comparison below, which can only speak for the handful that mount a
+  # relative path. Without it, a bare `docker compose up -d <svc>` run from a
+  # checkout silently rebinds the project to a second config file with no signal
+  # anywhere, which is exactly how the split identity arose and went unnoticed.
+  live_root="$(docker inspect "$cid" --format \
+    '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null || true)"
+  if [ -n "$live_root" ] && [ "$(norm_path "$live_root")" != "$(norm_path "$DEPLOY_ROOT")" ]; then
+    svc_findings+=("warn   created from a foreign root: $live_root (deploy root: $DEPLOY_ROOT)")
+  fi
+
   # Build target-keyed maps for declared and live mounts. Value = "type|source|ro".
   declare -A DECL=() LIVE=()
   while IFS=$'\t' read -r target type source ro; do
@@ -121,8 +135,6 @@ for svc in "${SERVICES[@]}"; do
   while IFS=$'\t' read -r target type source ro; do
     [ -n "$target" ] && LIVE["$(norm_path "$target")"]="$type|$(norm_path "$source")|$ro"
   done < <(live_mounts "$cid")
-
-  svc_findings=()
 
   # Declared mounts vs the live container, keyed by target (the container path).
   for target in "${!DECL[@]}"; do

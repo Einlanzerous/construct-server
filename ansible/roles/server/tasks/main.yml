@@ -84,8 +84,11 @@
 
 # --- 3. DEPLOYMENT (Clone the Repo) ---
 # Everything below targets {{ deploy_root }}, never ~/construct-server (SERV-76).
-# The home checkout is now a plain working copy with no bound compose project, which
-# also means this role no longer force-resets a directory a human edits.
+# The home checkout no longer backs the `construct-server` compose project — it is a
+# plain git working copy, which also means this role no longer force-resets a
+# directory a human edits. (It still contains the separate `argosy-acquisition`
+# project under services/; that is a different project name and does not affect the
+# construct-server identity this ticket is resolving.)
 - name: Ensure deploy root exists
   file:
     path: "{{ deploy_root }}"
@@ -179,25 +182,26 @@
     group: "{{ user_name }}"
     mode: "0755"
 
-- name: Create copyparty configuration
-  copy:
-    dest: "{{ deploy_root }}/config/copyparty.conf"
-    content: |
-      [global]
-        # e = idk
-
-      [/]
-        /w
-    owner: "{{ user_name }}"
-    group: "{{ user_name }}"
-    mode: "0644"
-
-# The copyparty mount this used to inject with `lineinfile` is committed at
-# docker-compose.yml:72, so the task had become a no-op that could only do harm:
-# editing the deployed compose file out-of-band is exactly how the two checkouts
-# were allowed to diverge (SERV-76), and it would silently re-appear the moment the
-# committed line moved or was reworded. The compose file is now only ever written by
-# git — via this role's clone, or deploy.yml's rsync.
+# Two tasks that wrote copyparty config out-of-band are deliberately gone (SERV-76).
+#
+# `Create copyparty configuration` wrote a four-line stub over
+# config/copyparty.conf. That was survivable while ansible deployed from
+# ~/construct-server and the live stack read the runner's checkout — the stub
+# landed in a directory nothing served from. Pointing this role at the deploy root
+# would have made it live, and destructively: the committed file serves
+# `/w/hdd/media`, the stub serves `/w`, and since /data is mounted at /w/hdd
+# (docker-compose.yml:71) that widens the web root from /data/media to the entire
+# host media tree, while dropping e2dsa, e2ts, no-robots and the explicit accs
+# block. copyparty would have picked it up on the bootstrap run, because its bind
+# source changes with the deploy root and it therefore recreates.
+#
+# `Patch docker-compose.yml to mount copyparty config` used `lineinfile` to inject
+# a mount that is committed at docker-compose.yml:72 — a no-op that could only
+# re-diverge the copies.
+#
+# Both configs are committed and both are now written by git alone: this role's
+# clone, or deploy.yml's rsync. Editing the deploy root out-of-band is precisely
+# how the two checkouts were allowed to drift apart in the first place.
 
 - name: Ensure construct_net Docker network exists
   community.docker.docker_network:

@@ -89,8 +89,13 @@ anything deploys or gets versioned.
   deploy root and runs compose there; ansible bootstraps the same path. Editing
   `docker-compose.yml` in a checkout changes nothing until it is merged and
   deployed — `make recreate svc=<svc>` deliberately targets the deploy root from
-  wherever you invoke it. Verify with `docker compose ls` that exactly one config
-  file is bound before concluding a change took effect.
+  wherever you invoke it. **Adoption is gradual, so `docker compose ls` reporting
+  more than one config file is expected for now, not a failed deploy**: a
+  container keeps the root it was created from until it is next recreated, and
+  nothing force-recreates the stack to hurry that along. Use
+  `./scripts/check-compose-drift.sh`, which flags every container created from a
+  foreign root, to see what is left; the list should only ever shrink. A *new*
+  root appearing in that list is the real regression.
 - **First-party image tags are pinnable but still default to `latest`** (SERV-74).
   Every first-party image reads `${<SERVICE>_TAG:-latest}`, one variable per
   source repo — a repo's backend and frontend ship from one release and pin
