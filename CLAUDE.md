@@ -61,8 +61,16 @@ anything deploys or gets versioned.
 - **Recreate containers, never restart them.** `docker restart <svc>` keeps the
   container's OLD spec, so mount, env, and image edits in `docker-compose.yml`
   never take effect — the SERV-8 `/media-ssd` drift incident (2026-06-29). Use
-  `docker compose up -d <svc>`. `scripts/check-compose-drift.sh` exists to catch
+  `make recreate svc=<svc>`. `scripts/check-compose-drift.sh` exists to catch
   the drift after the fact; it is not a substitute for getting it right.
+- **Scope a single-service recreate with `--no-deps`.** Compose follows
+  `depends_on`, and twelve services depend on `postgres` — so an action aimed at
+  one container reaches the shared database and bounces every service on the
+  box. `docker compose up -d --force-recreate purser` recreated postgres too
+  (SERV-63, 2026-08-01); it recovered only because postgres came back in about a
+  second. `make recreate svc=<svc>` and `make force-recreate svc=<svc>` bake the
+  flag in — prefer them to a bare `docker compose` invocation. `deps=1` opts back
+  in for a genuine cold start, where the dependencies *should* come up.
 - **`db/init-db.sh` must stay idempotent.** It runs on every single deploy
   against the live Postgres. Anything that isn't safe to re-run belongs in a
   service's own migrator, not here.

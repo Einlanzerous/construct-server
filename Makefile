@@ -1,4 +1,10 @@
-.PHONY: network up down recreate drift-check db-up db-shell db-check db-init
+.PHONY: network up down recreate force-recreate drift-check db-up db-shell db-check db-init
+
+# Scope a single-service action to that service (SERV-63). Compose otherwise reaches
+# into `depends_on`, so an action aimed at one container can recreate the shared
+# postgres and bounce every service on the box. Only applies when svc= is named;
+# pass deps=1 for a genuine cold start, where the dependencies do need to come up.
+NO_DEPS = $(if $(svc),$(if $(deps),,--no-deps))
 
 # Create the construct_net Docker bridge network (required before starting the stack)
 network:
@@ -15,10 +21,24 @@ down:
 # Recreate service(s) so docker-compose.yml edits (mounts/env/image) take effect.
 # ALWAYS use this after editing the compose — NEVER `docker restart`, which silently
 # keeps the old container spec (see SERV-8 / the /media-ssd drift incident).
-# Usage: make recreate            (recreate any drifted service across the stack)
-#        make recreate svc=argosy (recreate a single service)
+# Usage: make recreate                   (recreate any drifted service across the stack)
+#        make recreate svc=argosy        (recreate a single service, and only that one)
+#        make recreate svc=argosy deps=1 (cold start: bring its dependencies up too)
 recreate: network
-	docker compose up -d $(svc)
+	docker compose up -d $(NO_DEPS) $(svc)
+
+# Recreate a container whose spec did NOT change — e.g. to re-read an env_file whose
+# contents changed but whose path didn't, which compose does not always see as drift.
+# Requires svc=: --force-recreate over the whole stack is never what you want, and
+# --force-recreate without --no-deps is what bounced the shared postgres in SERV-63.
+# Usage: make force-recreate svc=purser
+force-recreate: network
+	@test -n "$(svc)" || { \
+	  echo "force-recreate requires svc=<name> — unscoped, it would recreate every container in the stack."; \
+	  echo "To rebuild the whole stack deliberately: docker compose up -d --force-recreate"; \
+	  exit 1; \
+	}
+	docker compose up -d $(NO_DEPS) --force-recreate $(svc)
 
 # Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
 # Usage: make drift-check            (check every service)

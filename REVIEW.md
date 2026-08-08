@@ -58,7 +58,11 @@ incidents; these are the review-time questions.
   unset means "use a default"? An empty value must skip loudly, not substitute.
 - **Restart vs. recreate.** Does the change alter a mount, env, or image for a
   service, and does anything in the diff or its instructions say `docker
-  restart`? It must be `docker compose up -d <svc>`.
+  restart`? It must be `make recreate svc=<svc>`.
+- **Blast radius of a compose action.** Does the diff invoke `docker compose up`
+  against a *named* service without `--no-deps`? Compose follows `depends_on`,
+  so that reaches the shared postgres and every service behind it. Scoped is the
+  default; bringing dependencies up must be the deliberate choice.
 - **`db/init-db.sh` idempotency.** Anything added here runs on every deploy
   against live Postgres. Is it safe to re-run?
 - **Secrets.** Does a value land in a committed file, a build arg, an image
