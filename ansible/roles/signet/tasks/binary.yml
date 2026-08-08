@@ -8,6 +8,27 @@
 # root and must drop to signet_user, while the auto-deploy already runs as that
 # user and must not try to sudo (it has no blanket rights and would hang).
 
+# The unit binds a comma-separated SIGNET_ADDR, which only signet_min_version and
+# later parse. An older binary reads the whole string as one address, fails to
+# bind, and — because the unit is Restart=always — burns its start limit in ~25s
+# and lands in `failed`. That takes loopback down too, which is strictly worse
+# than the container-only outage the multi-address bind was fixing. The rescue
+# path in ops/update-signet.yml advertises `mv signet.prev signet` as recovery,
+# so a downgrade into this state is reachable rather than hypothetical: assert
+# rather than trusting a comment in defaults.
+- name: Refuse to install a Signet older than the multi-address listener
+  assert:
+    that:
+      - signet_version | regex_replace('^v', '')
+        is version(signet_min_version | regex_replace('^v', ''), '>=')
+    fail_msg: >-
+      signet_version={{ signet_version }} predates {{ signet_min_version }}, which
+      introduced multi-address SIGNET_ADDR (SGNT-17). The unit binds
+      "{{ signet_addr }}"; an older binary cannot parse that and will fail to bind
+      at all, including on loopback. To deploy it anyway, also override
+      signet_addr to a single host:port in the same run.
+    quiet: true
+
 - name: Report the installed Signet version
   command: "{{ signet_binary }} version"
   register: signet_installed_version

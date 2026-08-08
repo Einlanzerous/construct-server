@@ -41,8 +41,10 @@ ExecStart={{ signet_binary }} serve
 # way twice in ten days — Jul 27→Jul 30 and Aug 3→Aug 5 — staying down for days
 # with the unit still `enabled`, taking Switchyard's Credentials and Audit
 # surfaces dark with it. A vault daemon exiting 0 on its own is never a desired
-# end state (SERV-70). Why it exits cleanly is still unexplained and tracked
-# separately; this stops the outage, it does not diagnose it.
+# end state (SERV-70). This stops the outage; it does not diagnose it — why the
+# daemon returns 0 is SGNT-19, and the probe that would have caught either outage
+# on day one is SERV-86. Note the StartLimit above deliberately allows a broken
+# unit to rest in `failed`, so that probe is what covers this now.
 Restart=always
 RestartSec=5s
 

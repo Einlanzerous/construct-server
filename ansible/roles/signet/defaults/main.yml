@@ -32,6 +32,22 @@ signet_state_dir: "/home/{{ signet_user }}/.local/share/signet"  # signet.db + a
 signet_docker_gateway: "172.17.0.1"
 signet_addr: "127.0.0.1:4010,{{ signet_docker_gateway }}:4010"
 
+# `signet_addr` is a bind LIST and is not a valid URL authority. Anything that
+# needs one reachable address — notably the deploy health check in
+# ops/update-signet.yml — must use this instead. Interpolating the bind list into
+# a URL yields http://127.0.0.1:4010,172.17.0.1:4010/healthz, which resolves to a
+# host named "127.0.0.1:4010,172.17.0.1" and fails every probe, red-flagging a
+# deploy whose daemon is perfectly healthy.
+signet_health_addr: "{{ signet_addr.split(',') | first }}"
+
+# Multi-address SIGNET_ADDR landed in v1.4.1 (SGNT-17). An older binary treats
+# the whole comma string as a single address and fails to bind — and because the
+# unit is Restart=always, it burns its start limit in ~25s and lands in `failed`,
+# taking loopback down with it. That is strictly worse than the bug the
+# multi-address bind fixed, so the binary install asserts on this rather than
+# trusting the comment.
+signet_min_version: "v1.4.1"
+
 # EnvironmentFile holding SIGNET_API_TOKEN (0600, owned by signet_user). The
 # token value comes from `signet_api_token`, which should be defined in the
 # SOPS-encrypted secrets (ansible/secrets.sops.yml). Left empty here so a plain
