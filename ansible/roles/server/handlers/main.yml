@@ -1,8 +1,10 @@
 ---
-- name: Restart Docker
-  service:
-    name: docker
-    state: restarted
+# No "Restart Docker" handler here by design (SERV-84). Its only notifier was the
+# .env copy, where a daemon restart was both redundant and incapable of the job —
+# `docker compose up -d` is what applies container config. If a task ever changes
+# genuine daemon config (daemon.json, storage driver), add the handler back with
+# that as its trigger, and a `meta: flush_handlers` before the stack starts so the
+# ordering is deliberate rather than incidental.
 
 # Optional: Reboot if drivers or kernel changed
 - name: Reboot Server
