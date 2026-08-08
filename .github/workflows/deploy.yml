@@ -42,7 +42,11 @@ jobs:
           echo "$GITHUB_PAT" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
 
       - name: Deploy Stack
-        # Pulls new images, recreates containers with config changes, removes old ones
+        # Pulls new images, recreates containers with config changes, removes old ones.
+        # Deliberately whole-stack and deliberately NOT --force-recreate: compose
+        # recreates only what actually drifted, so the blast radius already matches the
+        # intent. Do not add --force-recreate here — it would rebuild every container on
+        # the box, including the shared postgres, on every push (SERV-63).
         run: docker compose pull && docker compose up -d --remove-orphans
 
       - name: Ensure databases exist

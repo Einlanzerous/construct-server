@@ -2,13 +2,16 @@
 # check-compose-drift.sh — Detect containers running a stale spec vs docker-compose.yml
 #
 # Guardrail for the SERV-8 /media-ssd drift incident (2026-06-29): a `docker restart`
-# (instead of `docker compose up -d <svc>`) silently keeps a container's OLD config, so
+# (instead of `docker compose up -d --no-deps <svc>`) silently keeps a container's OLD config, so
 # mounts/env/image edits in docker-compose.yml never take effect. This script compares
 # each running service's LIVE mounts (docker inspect) against the mounts DECLARED in the
 # resolved compose file (docker compose config) and flags any drift.
 #
 # A missing or changed mount means the container needs to be RECREATED:
-#     docker compose up -d <service>     # never `docker restart <service>`
+#     docker compose up -d --no-deps <service>   # never `docker restart <service>`
+#
+# --no-deps keeps the recreate scoped to the service you named (SERV-63) — without it
+# compose follows depends_on and can bounce the shared postgres for the whole stack.
 #
 # Usage:
 #   ./scripts/check-compose-drift.sh [service ...]
@@ -166,7 +169,8 @@ done
 
 echo
 if [ "$DRIFT" -eq 1 ]; then
-  err "DRIFT DETECTED — recreate the affected service(s): docker compose up -d <service>"
+  err "DRIFT DETECTED — recreate the affected service(s): make recreate svc=<service>"
+  err "(or: docker compose up -d --no-deps <service> — --no-deps keeps it to that service)"
   err "(never 'docker restart <service>' after a compose edit — it keeps the old spec)"
   exit 1
 fi

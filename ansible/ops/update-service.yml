@@ -36,9 +36,13 @@
       become_user: "{{ user_name }}"
       changed_when: false
 
+    # --no-deps scopes the recreate to this service (SERV-63). Without it compose
+    # reaches into depends_on, so updating one image can recreate the shared postgres
+    # and bounce every service on the box. This is the update path — the dependencies
+    # are already running — so nothing here needs them brought up.
     - name: "Recreate container if image changed - {{ service_name }}"
       ansible.builtin.command:
-        cmd: "docker compose up -d {{ service_name }}"
+        cmd: "docker compose up -d --no-deps {{ service_name }}"
         chdir: "/home/{{ user_name }}/construct-server"
       become_user: "{{ user_name }}"
       changed_when: false

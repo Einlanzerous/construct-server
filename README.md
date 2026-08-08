@@ -142,7 +142,8 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 | `make network` | Create the `construct_net` Docker bridge network |
 | `make up` | Create network + start full stack |
 | `make down` | Stop full stack |
-| `make recreate [svc=<name>]` | **Recreate** service(s) after a compose edit (see [Operations](#-operations--runbook)) |
+| `make recreate [svc=<name>] [deps=1]` | **Recreate** service(s) after a compose edit — scoped to `svc` alone unless `deps=1` (see [Operations](#-operations--runbook)) |
+| `make force-recreate svc=<name>` | Recreate one container whose spec did **not** change (e.g. to re-read an `env_file`) |
 | `make drift-check [svc=<name>]` | Detect containers running a stale spec vs `docker-compose.yml` |
 | `make db-up` | Start only the postgres service |
 | `make db-shell` | Open a psql shell to postgres |
@@ -162,7 +163,7 @@ takes effect:
 ```bash
 make recreate svc=argosy
 # or directly:
-docker compose up -d argosy           # `up -d` detects config drift and recreates
+docker compose up -d --no-deps argosy   # `up -d` detects config drift and recreates
 ```
 
 `docker compose up -d` is safe to run repeatedly: it recreates only the services whose
@@ -175,7 +176,35 @@ touch it).
 > `docker restart`ed afterward, so it never gained the mount. Every SSD-Library title
 > (Futurama, 24, …) 503'd then 404'd with `open /media-ssd/shows/...: no such file or directory`,
 > even though the host SSD was healthy and the DB had valid rows. The fix was a single
-> `docker compose up -d argosy`, which detected the drift and reattached the mount.
+> recreate of `argosy` — today `make recreate svc=argosy` — which detected the drift and
+> reattached the mount.
+
+### ⚠️ Recreating one service: keep it to one service
+
+Compose actions follow `depends_on`. Every service with a database declares
+`depends_on: postgres` — nine in the default stack, eleven counting the `identity`
+profile — so a command aimed at **one** container can reach the shared database and
+bounce the entire stack. `--no-deps` scopes it to the service you named — `make recreate svc=<name>` and
+`make force-recreate svc=<name>` both bake the flag in, so the safe form is the shortest
+one to type.
+
+```bash
+make recreate svc=purser              # compose edit — mounts, env, image, ports
+make force-recreate svc=purser        # spec unchanged, but force a fresh container
+make recreate svc=purser deps=1       # cold start: dependencies SHOULD come up
+```
+
+Use `deps=1` (or plain `make up`) when the dependency genuinely isn't running yet —
+`--no-deps` will happily start a service into a missing database.
+
+> **Why this matters — the postgres bounce (SERV-63, 2026-08-01):** `docker compose up -d
+> --force-recreate purser` also recreated `postgres`, because `--force-recreate`
+> propagates to dependencies. Every dependent absorbed it — argosy logged
+> `terminating connection due to administrator command (57P01)` and reconnected on a 1s
+> backoff, the rest logged nothing — so nothing needed repair. But that depended on
+> postgres restarting in about a second and nothing being mid-transaction. Widen the
+> startup window with a migration, WAL replay, or a larger dataset and the same command is
+> an outage. The intent was one container; the reach was every service on the box.
 
 ### Checking for drift
 
