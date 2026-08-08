@@ -177,7 +177,7 @@ jobs:
           # code and a .md file together.
           CODE=$(grep -vE '(^docs/|\.md$)' <<<"$FILES" || true)
           # The reviewer's own standards are .md but are not documentation.
-          STANDARDS=$(grep -E '^(REVIEW\.md|CLAUDE\.md|\.github/review-prompt\.md)$' <<<"$FILES" || true)
+          STANDARDS=$(grep -E '^(REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md)$' <<<"$FILES" || true)
           if [ -z "$CODE" ] && [ -z "$STANDARDS" ] && [ "$MANUAL" != "true" ]; then
             skip "documentation only"
           fi
@@ -187,7 +187,7 @@ jobs:
           # REVIEW.md / CLAUDE.md / review-prompt.md are the reviewer's own
           # standards: a PR that loosens them is a governance change, not
           # documentation, so they are sensitive rather than skippable.
-          SENSITIVE='^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|REVIEW\.md|CLAUDE\.md|\.github/review-prompt\.md)'
+          SENSITIVE='^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md)'
           if grep -qE "$SENSITIVE" <<<"$FILES"; then
             echo "effort=high"   >> "$GITHUB_OUTPUT"
             echo "model=opus"    >> "$GITHUB_OUTPUT"
