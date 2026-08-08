@@ -68,6 +68,19 @@
     - Reload systemd daemon
     - Restart Signet
 
+# SIGNET_ADDR and Restart=always were hot-fixed onto the host as a drop-in while
+# SERV-65/69/70 were open; the template above now carries both. Removing it makes
+# the template the single source of truth — a drop-in silently outranks the unit,
+# so leaving it means the next person edits the template and watches nothing
+# change.
+- name: Remove the superseded signet.service drop-in
+  file:
+    path: /etc/systemd/system/signet.service.d/override.conf
+    state: absent
+  notify:
+    - Reload systemd daemon
+    - Restart Signet
+
 - name: Update the Signet binary
   include_tasks: binary.yml
   when: signet_version | default("", true) | length > 0

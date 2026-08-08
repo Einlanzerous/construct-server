@@ -6,6 +6,23 @@ Description=Signet credential vault + sync daemon
 Documentation=https://github.com/Einlanzerous/signet
 After=network-online.target
 Wants=network-online.target
+# SIGNET_ADDR names the docker0 gateway, which does not exist until dockerd has
+# created the bridge. The daemon deliberately refuses to start if any listed
+# address fails to bind — half-listening is the failure SGNT-17 exists to
+# prevent — so without this ordering a reboot that wins the race against Docker
+# takes Signet down entirely, loopback included (SERV-65).
+After=docker.service
+Wants=docker.service
+
+# Restart=always below means a genuinely broken config (missing
+# SIGNET_API_TOKEN, an unbindable address) would otherwise retry forever: the
+# systemd defaults are a 5-restart burst inside 10s, but RestartSec=5s spaces
+# five attempts over ~25s so the limit never trips. The journal shows this
+# reaching restart counter 58 on 2026-07-26. A 5-minute window makes the burst
+# land inside it, so a broken unit ends in `failed` where it can be seen, while
+# the days-apart clean exits this daemon actually suffers still restart (SERV-70).
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -19,7 +36,14 @@ Group={{ signet_user }}
 EnvironmentFile=-{{ signet_env_file }}
 Environment=SIGNET_ADDR={{ signet_addr }}
 ExecStart={{ signet_binary }} serve
-Restart=on-failure
+# `always`, not `on-failure`: this daemon's observed failure mode is a CLEAN exit
+# (status=0/SUCCESS), which on-failure does not cover by definition. It died that
+# way twice in ten days — Jul 27→Jul 30 and Aug 3→Aug 5 — staying down for days
+# with the unit still `enabled`, taking Switchyard's Credentials and Audit
+# surfaces dark with it. A vault daemon exiting 0 on its own is never a desired
+# end state (SERV-70). Why it exits cleanly is still unexplained and tracked
+# separately; this stops the outage, it does not diagnose it.
+Restart=always
 RestartSec=5s
 
 # Hardening — the vault (key + DB) is the only thing this daemon should touch.
