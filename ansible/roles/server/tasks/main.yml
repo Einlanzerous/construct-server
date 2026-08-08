@@ -141,8 +141,10 @@
 # restarts containers with their OLD spec, so it cannot deliver an env change —
 # the same "recreate, never restart" invariant as SERV-8, one level up. What
 # actually applies this file is `Start Docker Stack` below, via
-# `docker compose up -d`. The previous handler also fired at end of play, i.e.
-# *after* that task, and bounced every compose project on the host to no effect.
+# `docker compose up -d`. The old handler fired later in the same play anyway —
+# the signet role's `meta: flush_handlers` flushes the whole play's queue, and
+# site.yml runs signet after server — so it landed after that task had already
+# done the work, and bounced every compose project on the host to no effect.
 - name: Copy .env file to server
   copy:
     src: "{{ playbook_dir }}/../.env"
