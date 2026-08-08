@@ -24,8 +24,6 @@ services:
     group_add:
       - "44"   # video
       - "993"  # render (host GID — name lookup fails in ollama:rocm image)
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
     networks:
       - default
       - construct_net
@@ -43,12 +41,13 @@ services:
       - open-webui:/app/backend/data
     depends_on:
       - ollama
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- WATCHTOWER (Auto-Update) ---
   watchtower:
     image: containrrr/watchtower
+    labels:
+      # Auto-roll: keeps itself current (SERV-75).
+      - "com.centurylinklabs.watchtower.enable=true"
     container_name: watchtower
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -57,6 +56,14 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_ROLLING_RESTART=true
       - DOCKER_API_VERSION=1.44
+      # Monitor ONLY containers carrying watchtower.enable=true (SERV-75). Watchtower
+      # defaults to monitoring everything, which made it a third uncoordinated mutator
+      # of prod alongside deploy.yml and repository_dispatch — a merge could go live
+      # unattended, with no deploy record and no actor, and it will never call a
+      # reporting step, so the delivery ledger could not even see it happen. Opting in
+      # is the safe direction: a service added tomorrow is not auto-rolled by default.
+      # No first-party image is listed; deploy.yml owns those.
+      - WATCHTOWER_LABEL_ENABLE=true
     restart: unless-stopped
 
   # --- FILE SHARING ---
@@ -76,6 +83,9 @@ services:
   # --- OBSERVABILITY (Datadog + Dozzle) ---
   datadog:
     image: datadog/agent:7
+    labels:
+      # Auto-roll: agent; tag-pinned to major 7 (SERV-75).
+      - "com.centurylinklabs.watchtower.enable=true"
     container_name: datadog
     restart: unless-stopped
     pid: host
@@ -103,6 +113,9 @@ services:
   # --- Container Logging (Dozzle) ---
   dozzle:
     image: amir20/dozzle:latest
+    labels:
+      # Auto-roll: log viewer; stateless leaf (SERV-75).
+      - "com.centurylinklabs.watchtower.enable=true"
     container_name: dozzle
     restart: unless-stopped
     ports:
@@ -113,6 +126,9 @@ services:
   # --- MONITORING (Uptime Kuma) ---
   uptime-kuma:
     image: louislam/uptime-kuma:1
+    labels:
+      # Auto-roll: monitoring; tag-pinned to major 1 (SERV-75).
+      - "com.centurylinklabs.watchtower.enable=true"
     container_name: uptime-kuma
     restart: always
     ports:
@@ -276,8 +292,6 @@ services:
       - /home/magos/imperium-loop/PRINCIPLES.md:/data/principles/PRINCIPLES.md:ro
     networks:
       - construct_net
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- HUMAN-IN-THE-LOOP (Autosavant Discord bot) ---
   autosavant-bot:
@@ -299,8 +313,6 @@ services:
       - autosavant_state:/data
     networks:
       - construct_net
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- APP SERVICES ---
   cook_book:
@@ -370,8 +382,6 @@ services:
       - construct_net
     depends_on:
       - postgres
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- TASK MANAGEMENT (Switchyard) ---
   # Backend (API only). Service name `switchyard` so agent URLs
@@ -439,10 +449,6 @@ services:
       start_period: 15s
     depends_on:
       - postgres
-    labels:
-      # Watchtower runs Mondays at 04:00 with rolling restart — opt out so deploys
-      # are explicit. (Suspected source of the prior password-drift bug.)
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # Frontend (Vue static + tiny Bun passthrough for /v1/* and /healthz).
   switchyard-frontend:
@@ -459,8 +465,6 @@ services:
     depends_on:
       switchyard:
         condition: service_healthy
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- NEWSLETTER CURATION (Centrifuge) ---
   # Single image carrying the HTTP API and the decoupled scoring worker.
@@ -494,8 +498,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # Vue reading UI for Centrifuge: nginx serves the SPA and proxies /api and
   # /feed.xml to the centrifuge backend (same-origin, no CORS). CENTRIFUGE_UPSTREAM
@@ -520,8 +522,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- LYCEUM (self-hosted ebook reader + sync) — LYCM-61 ---
   # One Go binary serving the JSON API *and* the embedded Vue reader SPA
@@ -593,8 +593,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- PURSER (cross-service provisioning & invite service) — SERV-33 ---
   # One command onboards a person into multiple services: creates their Switchyard
@@ -648,8 +646,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- INTERLOCK (city + state legislation tracker) — ITLK-18 ---
   # Nuxt/Nitro SSR app: serves the UI and its /api behind single-user session auth
@@ -688,8 +684,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # The headless poller + normalizer + alerter. No host port. `restart: unless-stopped`
   # + the persisted fetch_cursor gives crash-resume, and it also rides out the first-boot
@@ -713,8 +707,6 @@ services:
       - construct_net
     depends_on:
       - postgres
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- AMBER (Claude Code transcript capture + preservation) — AMBR-4 ---
   # Redacts and archives Claude Code transcript data before the rolling retention
@@ -795,8 +787,6 @@ services:
       - /mnt/ssd_storage/amber:/archive
     networks:
       - construct_net
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
     healthcheck:
       # /readyz is 503 until a successful ingest has been recorded, and the first
       # pass on a cold archive takes ~5 minutes — so start_period has to be
@@ -881,8 +871,6 @@ services:
       - traefik_access_logs:/var/log/traefik
     networks:
       - construct_net
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- CROWDSEC (SERV-27) — behavioral IPS for the open WAN path ---
   # Parses Traefik's JSON access log (shared volume, read-only) with the
@@ -904,8 +892,6 @@ services:
       - traefik_access_logs:/var/log/traefik:ro
     networks:
       - construct_net
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- CLOUDFLARE TUNNEL (cloudflared) — SERV-23 ---
   # Dashboard-managed (token) tunnel. Runs ON construct_net so it can reach Traefik's
@@ -929,8 +915,6 @@ services:
       - construct_net
     depends_on:
       - traefik
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # --- IDENTITY (Authentik) — SERV-19 ---
   # Self-hosted IdP and source of truth for the hybrid edge. Uses the shared
@@ -981,8 +965,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   authentik-worker:
     image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG:-stable}
@@ -1012,8 +994,6 @@ services:
       - authentik-redis
     networks:
       - construct_net
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   # Dedicated Redis for Authentik (nothing else in the stack uses one).
   authentik-redis:
@@ -1032,8 +1012,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
 volumes:
   open-webui:
