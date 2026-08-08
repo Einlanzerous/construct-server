@@ -18,9 +18,43 @@ jobs:
   deploy:
     runs-on: self-hosted
     environment: home-server
+    env:
+      # The stack is deployed from a fixed path, NOT from this checkout (SERV-76).
+      # `_work/` is a CI scratch directory shared by every self-hosted workflow in
+      # this repo — deploy.yml, deploy-signet.yml and pr-review.yml all check out
+      # here, and actions/checkout resets it on every run. Because pr-review.yml
+      # fires on `pull_request`, this directory frequently holds an *unmerged* PR
+      # merge ref. Binding the live compose project to it meant "what is deployed"
+      # depended on which workflow ran last. Ansible deploys to the same fixed path.
+      DEPLOY_ROOT: /opt/construct-server
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Verify deploy root exists
+        # Fail loudly rather than creating it here: /opt is root-owned and the
+        # runner has a bare system PATH with no login shell, so a mkdir would need
+        # sudo semantics this job deliberately does not have. Ansible owns creating
+        # and chowning the directory (`ansible/roles/server`), which is also what
+        # populates it on a cold host. A missing root should read as "the host was
+        # never bootstrapped", not as a confusing compose error three steps later.
+        run: |
+          if [ ! -d "$DEPLOY_ROOT" ]; then
+            echo "Error: deploy root $DEPLOY_ROOT does not exist."
+            echo "Bootstrap the host first: ansible-playbook ansible/site.yml"
+            exit 1
+          fi
+
+      - name: Sync stack files to deploy root
+        # Only the files the running stack actually reads. --delete is per-directory
+        # so a removed config file does not linger, and .env is never in a synced
+        # directory — it is written by the next step and must survive this.
+        run: |
+          rsync -a --delete ./config/    "$DEPLOY_ROOT/config/"
+          rsync -a --delete ./db/        "$DEPLOY_ROOT/db/"
+          rsync -a --delete ./aperture/  "$DEPLOY_ROOT/aperture/"
+          rsync -a --delete ./scripts/   "$DEPLOY_ROOT/scripts/"
+          rsync -a docker-compose.yml Makefile "$DEPLOY_ROOT/"
 
       - name: Restore Secrets
         env:
@@ -30,15 +64,16 @@ jobs:
             echo "Error: PROD_ENV_FILE secret is missing or empty!"
             exit 1
           fi
-          echo "$PROD_ENV_FILE" > .env
+          echo "$PROD_ENV_FILE" > "$DEPLOY_ROOT/.env"
+          chmod 600 "$DEPLOY_ROOT/.env"
 
       - name: Ensure construct_net network exists
         run: docker network create construct_net 2>/dev/null || true
 
       - name: Log in to GitHub Container Registry
         run: |
-          GITHUB_USER=$(grep '^GITHUB_USER=' .env | cut -d'=' -f2)
-          GITHUB_PAT=$(grep '^GITHUB_PAT=' .env | cut -d'=' -f2)
+          GITHUB_USER=$(grep '^GITHUB_USER=' "$DEPLOY_ROOT/.env" | cut -d'=' -f2)
+          GITHUB_PAT=$(grep '^GITHUB_PAT=' "$DEPLOY_ROOT/.env" | cut -d'=' -f2)
           echo "$GITHUB_PAT" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
 
       - name: Deploy Stack
@@ -47,10 +82,16 @@ jobs:
         # recreates only what actually drifted, so the blast radius already matches the
         # intent. Do not add --force-recreate here — it would rebuild every container on
         # the box, including the shared postgres, on every push (SERV-63).
+        #
+        # Running from the deploy root is what resolves the relative bind mounts
+        # (./config, ./db, ./aperture) against it rather than against this checkout,
+        # and what binds the compose project to a stable path.
+        working-directory: ${{ env.DEPLOY_ROOT }}
         run: docker compose pull && docker compose up -d --remove-orphans
 
       - name: Ensure databases exist
         # Idempotent — creates any missing users/databases without affecting existing ones
+        working-directory: ${{ env.DEPLOY_ROOT }}
         run: sleep 5 && docker compose exec -T -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres postgres bash < ./db/init-db.sh
 
       - name: Prune Images

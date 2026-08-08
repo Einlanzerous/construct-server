@@ -82,23 +82,34 @@
     group: "{{ user_name }}"
     mode: "0755"
 
+# --- 3. DEPLOYMENT (Clone the Repo) ---
+# Everything below targets {{ deploy_root }}, never ~/construct-server (SERV-76).
+# The home checkout is now a plain working copy with no bound compose project, which
+# also means this role no longer force-resets a directory a human edits.
+- name: Ensure deploy root exists
+  file:
+    path: "{{ deploy_root }}"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: "0755"
+
+- name: Clone Construct Monorepo
+  become_user: "{{ user_name }}"
+  git:
+    repo: "{{ repo_url | default('https://github.com/Einlanzerous/construct-server.git') }}"
+    dest: "{{ deploy_root }}"
+    version: main
+    force: true
+
 - name: Ensure aperture directory is owned by user
   file:
-    path: "/home/{{ user_name }}/construct-server/aperture"
+    path: "{{ deploy_root }}/aperture"
     state: directory
     recurse: true
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
     mode: "0755"
-
-# --- 3. DEPLOYMENT (Clone the Repo) ---
-- name: Clone Construct Monorepo
-  become_user: "{{ user_name }}"
-  git:
-    repo: "{{ repo_url | default('https://github.com/Einlanzerous/construct-server.git') }}"
-    dest: "/home/{{ user_name }}/construct-server"
-    version: main
-    force: true
 
 - name: Read .env file contents
   set_fact:
@@ -148,15 +159,21 @@
 - name: Copy .env file to server
   copy:
     src: "{{ playbook_dir }}/../.env"
-    dest: "/home/{{ user_name }}/construct-server/.env"
+    dest: "{{ deploy_root }}/.env"
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
     mode: "0600"
-    force: true
+    # force: false because this is the BOOTSTRAP copy only (SERV-76). Now that this
+    # role and deploy.yml write the same file, the previous `force: true` would have
+    # made every ansible run silently overwrite the deployed .env with whatever is in
+    # the local ansible/../.env — a different and staler source than the PROD_ENV_FILE
+    # environment secret that CLAUDE.md names as authoritative (SERV-48). Steady-state
+    # secret changes belong in `gh secret set PROD_ENV_FILE --env home-server`.
+    force: false
 
 - name: Ensure config directory exists
   file:
-    path: "/home/{{ user_name }}/construct-server/config"
+    path: "{{ deploy_root }}/config"
     state: directory
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
@@ -164,7 +181,7 @@
 
 - name: Create copyparty configuration
   copy:
-    dest: "/home/{{ user_name }}/construct-server/config/copyparty.conf"
+    dest: "{{ deploy_root }}/config/copyparty.conf"
     content: |
       [global]
         # e = idk
@@ -175,12 +192,12 @@
     group: "{{ user_name }}"
     mode: "0644"
 
-- name: Patch docker-compose.yml to mount copyparty config
-  lineinfile:
-    path: "/home/{{ user_name }}/construct-server/docker-compose.yml"
-    insertafter: "      - /data:/w/hdd"
-    line: "      - ./config/copyparty.conf:/cfg/copyparty.conf"
-    state: present
+# The copyparty mount this used to inject with `lineinfile` is committed at
+# docker-compose.yml:72, so the task had become a no-op that could only do harm:
+# editing the deployed compose file out-of-band is exactly how the two checkouts
+# were allowed to diverge (SERV-76), and it would silently re-appear the moment the
+# committed line moved or was reworded. The compose file is now only ever written by
+# git — via this role's clone, or deploy.yml's rsync.
 
 - name: Ensure construct_net Docker network exists
   community.docker.docker_network:
@@ -190,7 +207,7 @@
 
 - name: Load .env variables
   slurp:
-    src: "/home/{{ user_name }}/construct-server/.env"
+    src: "{{ deploy_root }}/.env"
   register: env_file_raw
 
 - name: Parse .env into facts
@@ -207,7 +224,7 @@
   become_user: "{{ user_name }}"
   ansible.builtin.command: docker compose up -d
   args:
-    chdir: "/home/{{ user_name }}/construct-server"
+    chdir: "{{ deploy_root }}"
   register: docker_stack_start
   changed_when: "'Running' not in docker_stack_start.stdout"
 

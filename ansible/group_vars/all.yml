@@ -1,2 +1,17 @@
 ---
 repo_url: "https://github.com/Einlanzerous/construct-server.git"
+
+# Where the live stack is deployed from (SERV-76).
+#
+# Deliberately NOT the user's home checkout. Before SERV-76 the server role deployed
+# from ~/construct-server while GitHub Actions deployed from the runner's `_work`
+# checkout, so `docker compose ls` bound the construct-server project to two config
+# files at once and "what is running" depended on which system had acted last. The
+# `_work` path could never be the answer either: actions/checkout resets it on every
+# run and pr-review.yml regularly points it at an unmerged PR merge ref.
+#
+# Ownership split: ansible BOOTSTRAPS this path (clone + a first .env) on a cold host;
+# .github/workflows/deploy.yml owns it in steady state and re-syncs the stack files on
+# every deploy. Defined here rather than in the server role so the ops/ playbooks,
+# which do not consume that role, resolve the same value.
+deploy_root: /opt/construct-server
