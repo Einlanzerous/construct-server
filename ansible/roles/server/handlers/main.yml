@@ -1,8 +1,14 @@
 ---
-- name: Restart Docker
-  service:
-    name: docker
-    state: restarted
+# No "Restart Docker" handler here by design (SERV-84). Its only notifier was the
+# .env copy, where a daemon restart was both redundant and incapable of the job —
+# `docker compose up -d` is what applies container config.
+#
+# If a task ever changes genuine daemon config (daemon.json, storage driver), add
+# the handler back with that as its trigger, and flush it deliberately. Note the
+# signet role already calls `meta: flush_handlers`, which flushes the entire
+# play's queue rather than just its own role's — so a handler notified here gets
+# flushed at whatever point signet happens to run, which is after this role. Pin
+# the timing you want instead of inheriting that.
 
 # Optional: Reboot if drivers or kernel changed
 - name: Reboot Server
