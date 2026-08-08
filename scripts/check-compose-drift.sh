@@ -2,7 +2,7 @@
 # check-compose-drift.sh — Detect containers running a stale spec vs docker-compose.yml
 #
 # Guardrail for the SERV-8 /media-ssd drift incident (2026-06-29): a `docker restart`
-# (instead of `docker compose up -d <svc>`) silently keeps a container's OLD config, so
+# (instead of `docker compose up -d --no-deps <svc>`) silently keeps a container's OLD config, so
 # mounts/env/image edits in docker-compose.yml never take effect. This script compares
 # each running service's LIVE mounts (docker inspect) against the mounts DECLARED in the
 # resolved compose file (docker compose config) and flags any drift.

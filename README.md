@@ -176,13 +176,15 @@ touch it).
 > `docker restart`ed afterward, so it never gained the mount. Every SSD-Library title
 > (Futurama, 24, …) 503'd then 404'd with `open /media-ssd/shows/...: no such file or directory`,
 > even though the host SSD was healthy and the DB had valid rows. The fix was a single
-> `docker compose up -d argosy`, which detected the drift and reattached the mount.
+> recreate of `argosy` — today `make recreate svc=argosy` — which detected the drift and
+> reattached the mount.
 
 ### ⚠️ Recreating one service: keep it to one service
 
-Compose actions follow `depends_on`. Twelve services declare `depends_on: postgres`, so a
-command aimed at **one** container can reach the shared database and bounce the entire
-stack. `--no-deps` scopes it to the service you named — `make recreate svc=<name>` and
+Compose actions follow `depends_on`. Every service with a database declares
+`depends_on: postgres` — nine in the default stack, eleven counting the `identity`
+profile — so a command aimed at **one** container can reach the shared database and
+bounce the entire stack. `--no-deps` scopes it to the service you named — `make recreate svc=<name>` and
 `make force-recreate svc=<name>` both bake the flag in, so the safe form is the shortest
 one to type.
 

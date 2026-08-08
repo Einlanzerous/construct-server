@@ -4,7 +4,9 @@
 # into `depends_on`, so an action aimed at one container can recreate the shared
 # postgres and bounce every service on the box. Only applies when svc= is named;
 # pass deps=1 for a genuine cold start, where the dependencies do need to come up.
-NO_DEPS = $(if $(svc),$(if $(deps),,--no-deps))
+# 0/no/false are treated as "keep it scoped" — Make's $(if) is a non-empty test, so
+# without filtering them out `deps=0` would read as "yes, bring dependencies up".
+NO_DEPS = $(if $(svc),$(if $(filter-out 0 no false,$(deps)),,--no-deps))
 
 # Create the construct_net Docker bridge network (required before starting the stack)
 network:
@@ -29,8 +31,9 @@ recreate: network
 
 # Recreate a container whose spec did NOT change — e.g. to re-read an env_file whose
 # contents changed but whose path didn't, which compose does not always see as drift.
-# Requires svc=: --force-recreate over the whole stack is never what you want, and
-# --force-recreate without --no-deps is what bounced the shared postgres in SERV-63.
+# Always scoped: --force-recreate is the flag that propagates into depends_on, so this
+# target hardcodes --no-deps and accepts neither an empty svc= nor deps=. Both would
+# reconstruct the SERV-63 command, which force-recreated the shared postgres.
 # Usage: make force-recreate svc=purser
 force-recreate: network
 	@test -n "$(svc)" || { \
@@ -38,7 +41,13 @@ force-recreate: network
 	  echo "To rebuild the whole stack deliberately: docker compose up -d --force-recreate"; \
 	  exit 1; \
 	}
-	docker compose up -d $(NO_DEPS) --force-recreate $(svc)
+	@test -z "$(deps)" || { \
+	  echo "force-recreate does not accept deps= — it would force-recreate every dependency of"; \
+	  echo "$(svc), including the shared postgres. That is the SERV-63 command verbatim."; \
+	  echo "For a cold start, bring dependencies up unforced: make recreate svc=$(svc) deps=1"; \
+	  exit 1; \
+	}
+	docker compose up -d --no-deps --force-recreate $(svc)
 
 # Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
 # Usage: make drift-check            (check every service)
