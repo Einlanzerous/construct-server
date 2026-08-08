@@ -22,7 +22,9 @@ anything deploys or gets versioned.
 - `agent/rules/`, `bakeoff/` — local-model rules and the model bakeoff harness.
 - `PRINCIPLES.md` — **cross-repo** estate defaults (languages, stack, release
   types, code quality). Unlike this file, it is not about this repo; it holds the
-  standards every project inherits. Salvaged from imperium-loop (SERV-83).
+  standards every project inherits. **Read it before starting work here**, and
+  prefer this file where the two disagree — repo invariants outrank estate
+  defaults. Salvaged from imperium-loop (SERV-83).
 - `creds/` — gitignored. Real credentials live here on the host and never in git.
 
 ## Conventions
