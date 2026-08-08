@@ -139,7 +139,7 @@ services:
 
   # --- DASHBOARD (Aperture) ---
   aperture-backend:
-    image: ghcr.io/einlanzerous/aperture/backend:latest
+    image: ghcr.io/einlanzerous/aperture/backend:${APERTURE_TAG:-latest}
     container_name: aperture-backend
     restart: unless-stopped
     ports:
@@ -167,7 +167,7 @@ services:
           - backend
 
   aperture-frontend:
-    image: ghcr.io/einlanzerous/aperture/frontend:latest
+    image: ghcr.io/einlanzerous/aperture/frontend:${APERTURE_TAG:-latest}
     container_name: aperture-frontend
     restart: unless-stopped
     ports:
@@ -204,7 +204,8 @@ services:
       # LOOP-24: provider toggle for The High Review. Default is claude (the
       # workflow's gate node also defaults to claude when unset, this just
       # makes the var visible in `docker exec n8n env` for debugging). Flip
-      # to gemini in ~/construct-server/.env to swap back without code edits.
+      # to gemini via the PROD_ENV_FILE environment secret to swap back without
+      # code edits — editing a checkout's .env does not reach the deployed stack.
       - HIGH_REVIEW_PROVIDER=${HIGH_REVIEW_PROVIDER:-claude}
       - SWITCHYARD_TOKEN=${SWITCHYARD_API_TOKEN}
       - SWITCHYARD_TOKEN_N8N_VOX_DICTATE=${SWITCHYARD_TOKEN_N8N_VOX_DICTATE}
@@ -316,7 +317,7 @@ services:
 
   # --- APP SERVICES ---
   cook_book:
-    image: ghcr.io/einlanzerous/cook_book:latest
+    image: ghcr.io/einlanzerous/cook_book:${COOK_BOOK_TAG:-latest}
     container_name: cook_book
     restart: unless-stopped
     ports:
@@ -334,7 +335,7 @@ services:
   # published by the argosy repo). Needs /dev/dri for hardware transcoding and
   # the media library mounted read-only.
   argosy:
-    image: ghcr.io/einlanzerous/argosy:latest
+    image: ghcr.io/einlanzerous/argosy:${ARGOSY_TAG:-latest}
     container_name: argosy
     restart: unless-stopped
     ports:
@@ -388,7 +389,7 @@ services:
   # (`http://switchyard:4002/v1/...`) resolve on construct_net.
   # No host port — only the frontend exposes one.
   switchyard:
-    image: ghcr.io/einlanzerous/switchyard/backend:latest
+    image: ghcr.io/einlanzerous/switchyard/backend:${SWITCHYARD_TAG:-latest}
     container_name: switchyard
     restart: unless-stopped
     environment:
@@ -452,7 +453,7 @@ services:
 
   # Frontend (Vue static + tiny Bun passthrough for /v1/* and /healthz).
   switchyard-frontend:
-    image: ghcr.io/einlanzerous/switchyard/frontend:latest
+    image: ghcr.io/einlanzerous/switchyard/frontend:${SWITCHYARD_TAG:-latest}
     container_name: switchyard-frontend
     restart: unless-stopped
     ports:
@@ -473,7 +474,7 @@ services:
   # the first-boot race where that DB isn't created until the deploy's init-db
   # step runs after `up -d`. Scoring calls the in-stack ollama by service name.
   centrifuge-backend:
-    image: ghcr.io/einlanzerous/centrifuge/backend:latest
+    image: ghcr.io/einlanzerous/centrifuge/backend:${CENTRIFUGE_TAG:-latest}
     container_name: centrifuge-backend
     restart: unless-stopped
     ports:
@@ -505,7 +506,7 @@ services:
   # survives the backend restarting. Built+pushed from the same release as the
   # backend (CTFG-38).
   centrifuge-frontend:
-    image: ghcr.io/einlanzerous/centrifuge/frontend:latest
+    image: ghcr.io/einlanzerous/centrifuge/frontend:${CENTRIFUGE_TAG:-latest}
     container_name: centrifuge-frontend
     restart: unless-stopped
     ports:
@@ -529,7 +530,7 @@ services:
   # blobs on a named volume; folder-ingest watches the acquisition books library
   # read-only. Native apps (Android/Windows) + the browser reader all hit :4005.
   lyceum:
-    image: ghcr.io/einlanzerous/lyceum:latest
+    image: ghcr.io/einlanzerous/lyceum:${LYCEUM_TAG:-latest}
     container_name: lyceum
     restart: unless-stopped
     ports:
@@ -601,7 +602,7 @@ services:
   # hostname. Reuses the Switchyard bootstrap admin token (SERV-35 tracks a
   # dedicated one). See github.com/Einlanzerous/purser.
   purser:
-    image: ghcr.io/einlanzerous/purser:latest
+    image: ghcr.io/einlanzerous/purser:${PURSER_TAG:-latest}
     container_name: purser
     restart: unless-stopped
     ports:
@@ -654,7 +655,7 @@ services:
   # router + cloudflared + CF Access — is ITLK-19; until then the host port is how you
   # reach it. Flip INTERLOCK_AUTH_COOKIE_SECURE=true once it's served over HTTPS.
   interlock-web:
-    image: ghcr.io/einlanzerous/interlock/web:latest
+    image: ghcr.io/einlanzerous/interlock/web:${INTERLOCK_TAG:-latest}
     container_name: interlock-web
     restart: unless-stopped
     ports:
@@ -690,7 +691,7 @@ services:
   # race where the interlock DB isn't created until the deploy's init-db step runs after
   # `up -d` (the worker crash-loops for a few seconds, then migrates and polls).
   interlock-worker:
-    image: ghcr.io/einlanzerous/interlock/worker:latest
+    image: ghcr.io/einlanzerous/interlock/worker:${INTERLOCK_TAG:-latest}
     container_name: interlock-worker
     restart: unless-stopped
     environment:
@@ -719,7 +720,7 @@ services:
   # the `amber` database does not exist until the deploy's init-db step runs
   # *after* `up -d`. `restart: unless-stopped` rides it out.
   amber:
-    image: ghcr.io/einlanzerous/amber:latest
+    image: ghcr.io/einlanzerous/amber:${AMBER_TAG:-latest}
     container_name: amber
     restart: unless-stopped
     depends_on:
@@ -825,7 +826,7 @@ services:
   # where postgres and every first-party service sit. Same shape as open-webui,
   # copyparty, uptime-kuma and aperture — publish a port, join nothing.
   drydock-shell:
-    image: ghcr.io/einlanzerous/drydock/shell:latest
+    image: ghcr.io/einlanzerous/drydock/shell:${DRYDOCK_TAG:-latest}
     container_name: drydock-shell
     restart: unless-stopped
     ports:
