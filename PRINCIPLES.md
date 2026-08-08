@@ -140,10 +140,16 @@ that just rename a canonical one** ("Building" for "In Progress", "PR Open" for
 "In Progress", "Shipped" for "Closed"). The base five are sufficient; renames
 fragment the surface without adding signal.
 
-**PR state is tracked separately, not as a status.** Name the PR
-`{ticket_key}: {summary}` and the branch `{type}/{slug}-{key}`. Switchyard's
-auto-attach picks the key out of the title/branch and links the external ref; the
-poller then observes merge and fires
+**PR state is tracked separately, not as a status.** Title the PR per §3 —
+a conventional-commit subject carrying the ticket key, e.g.
+`fix(signet): render the sudoers rule via template (SERV-62)` — and name the branch
+`{type}/{slug}-{key}`. Do **not** prefix the title with the bare key
+(`SERV-62: …`): squash-merge makes the PR title the commit subject, so a
+non-conventional title means release-please skips the release and the deploy
+silently does not happen. Auto-attach reads the key from anywhere in the title or
+branch, so the prefix buys nothing and costs a release.
+
+Auto-attach links the external ref; the poller then observes merge and fires
 `ticket.external_ref_state_changed`, which the close-on-merge rule converts into a
 transition to `Closed` with `resolution: done`. **The ticket stays `In Progress` the
 whole time the PR is open** — there is no "PR Open" status and there shouldn't be.

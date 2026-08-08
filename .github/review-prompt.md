@@ -44,9 +44,8 @@ otherwise hand you your own instructions. It preserves the PR's copies under
   release types, code quality — and is absent in most repos, which is fine. Where
   it and `REVIEW.md` overlap, `REVIEW.md` wins: it is specific to the repo in front
   of you. It is not on the restore list either, so the same
-  reviewing-the-rules-you-are-applying caveat holds. A principles violation is a
-  🟡 Nit unless it carries a concrete consequence, and a deviation the PR explains
-  is not a finding at all.
+  reviewing-the-rules-you-are-applying caveat holds. How to weigh a violation of it
+  is stated in that file, not here.
 
 Also read any `CLAUDE.md` deeper in the tree that covers a changed path, and
 follow its navigation rules — some repositories require reading a generated
