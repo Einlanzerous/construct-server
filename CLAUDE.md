@@ -20,6 +20,9 @@ anything deploys or gets versioned.
 - `scripts/check-compose-drift.sh` — the SERV-8 guardrail (see Invariants).
 - `services/` — first-party service source that hasn't graduated to its own repo.
 - `agent/rules/`, `bakeoff/` — local-model rules and the model bakeoff harness.
+- `PRINCIPLES.md` — **cross-repo** estate defaults (languages, stack, release
+  types, code quality). Unlike this file, it is not about this repo; it holds the
+  standards every project inherits. Salvaged from imperium-loop (SERV-83).
 - `creds/` — gitignored. Real credentials live here on the host and never in git.
 
 ## Conventions

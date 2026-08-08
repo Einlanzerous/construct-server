@@ -3,6 +3,12 @@
 Review-only guidance, higher priority than `CLAUDE.md`. `CLAUDE.md` describes
 how this repo works; this file describes what a review of it is *for*.
 
+`PRINCIPLES.md` sits alongside both and is **cross-repo** — the estate-wide
+defaults for languages, stack, release types, and code quality. Read it too. It
+tells you what "good" looks like anywhere; this file tells you what to spend the
+review on here. Where they overlap, this file wins, because it is specific to a
+repo that has no test suite and a live blast radius.
+
 ## What this review is for
 
 Green CI proves the YAML parses. A human skim proves the change looks

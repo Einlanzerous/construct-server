@@ -17,6 +17,7 @@ There may be **two** copies of `CLAUDE.md`, and which one you are holding matter
 ```bash
 cat REVIEW.md                          # review-only standards, from the PR head
 cat CLAUDE.md                          # the invariants IN FORCE — from the base branch
+cat PRINCIPLES.md 2>/dev/null          # cross-repo estate defaults, if this repo carries them
 ls .claude-pr/ 2>/dev/null             # the PR's copies of the restored paths
 cat .claude-pr/CLAUDE.md 2>/dev/null   # what this PR PROPOSES they become
 ```
@@ -39,6 +40,13 @@ otherwise hand you your own instructions. It preserves the PR's copies under
   When `REVIEW.md` is itself in this diff you are applying rules the PR is
   changing — say so in one line in the summary, and judge the change on its
   merits rather than through it.
+- **`PRINCIPLES.md` is cross-repo estate policy** — languages, stack defaults,
+  release types, code quality — and is absent in most repos, which is fine. Where
+  it and `REVIEW.md` overlap, `REVIEW.md` wins: it is specific to the repo in front
+  of you. It is not on the restore list either, so the same
+  reviewing-the-rules-you-are-applying caveat holds. A principles violation is a
+  🟡 Nit unless it carries a concrete consequence, and a deviation the PR explains
+  is not a finding at all.
 
 Also read any `CLAUDE.md` deeper in the tree that covers a changed path, and
 follow its navigation rules — some repositories require reading a generated
