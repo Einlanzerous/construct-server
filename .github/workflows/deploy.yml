@@ -77,23 +77,37 @@ jobs:
         # So the fallback stays (a fresh host with no pins still starts), and prod is
         # protected by asserting here instead. Fail loudly and name the offenders,
         # rather than deploying something whose version nobody chose.
+        #
+        # Assert on compose's OWN resolution, not on a grep of .env. An earlier version
+        # of this step read the raw text after `=`, which disagrees with compose in
+        # three ways: compose strips surrounding quotes, so `PURSER_TAG=""` is two
+        # characters to a shell test but the empty string to compose (it floated purser
+        # to `:latest` while this step reported success); compose takes the LAST
+        # duplicate key where a grep takes the first; and a hardcoded variable list goes
+        # quietly stale the day an eleventh service is added. Reading `config --images`
+        # in the deploy root, against the same .env compose will use, cannot disagree
+        # with compose by construction.
+        #
+        # Scoped to ghcr.io/einlanzerous deliberately: several third-party images
+        # (dozzle, cloudflared, n8n, semaphore) sit on `:latest` legitimately, and an
+        # unscoped check would fail every deploy on them.
+        working-directory: ${{ env.DEPLOY_ROOT }}
         run: |
-          missing=()
-          for v in APERTURE_TAG ARGOSY_TAG AMBER_TAG CENTRIFUGE_TAG COOK_BOOK_TAG \
-                   DRYDOCK_TAG INTERLOCK_TAG LYCEUM_TAG PURSER_TAG SWITCHYARD_TAG; do
-            val="$(grep -m1 "^${v}=" "$DEPLOY_ROOT/.env" 2>/dev/null | cut -d= -f2- || true)"
-            [ -n "$val" ] || missing+=("$v")
-          done
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "Error: these first-party image tags are unset or empty in PROD_ENV_FILE:"
-            printf '  - %s\n' "${missing[@]}"
+          images="$(docker compose config --images)"
+          firstparty="$(printf '%s\n' "$images" | grep '^ghcr\.io/einlanzerous/' || true)"
+          # `:latest` = floated back to the fallback; a bare trailing `:` = an empty var
+          # interpolated in, which is neither an error nor `latest`.
+          unpinned="$(printf '%s\n' "$firstparty" | grep -E ':(latest)?$' || true)"
+          if [ -n "$unpinned" ]; then
+            echo "Error: these first-party images are not pinned to a version:"
+            printf '%s\n' "$unpinned" | sed 's/^/  - /'
             echo
-            echo "Each would silently fall back to ':latest', making the deployed version"
-            echo "nondeterministic again (SERV-88). Restore them with:"
+            echo "Each resolves to a floating or empty tag, making the deployed version"
+            echo "nondeterministic again (SERV-88). Fix the matching <SERVICE>_TAG with:"
             echo "  gh secret set PROD_ENV_FILE --env home-server"
             exit 1
           fi
-          echo "All 10 first-party image tags are pinned."
+          echo "All $(printf '%s\n' "$firstparty" | grep -c .) first-party images are pinned."
 
       - name: Ensure construct_net network exists
         run: docker network create construct_net 2>/dev/null || true

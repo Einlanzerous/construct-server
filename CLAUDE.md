@@ -102,14 +102,25 @@ anything deploys or gets versioned.
   pin together, so 10 variables cover 14 images. Services with release-please
   versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so patch releases
   still flow in on a `docker compose pull` and nothing else does; argosy and
-  drydock have no semver and are pinned to a sha. Change a version by editing the
-  secret (`gh secret set PROD_ENV_FILE --env home-server`), never by editing a
+  drydock publish no semver and are pinned to a sha. Change a version by editing
+  the secret (`gh secret set PROD_ENV_FILE --env home-server`), never by editing a
   checkout's `.env` — that is not what the stack reads.
-  The `:-latest` fallback is a bootstrap convenience and a hazard in prod: a var
-  dropped from the secret would not fail, it would silently float that service
-  back to `latest`. `deploy.yml` therefore asserts all 10 are non-empty and fails
-  loudly if not — the empty-env invariant applied one level up. Do not "fix" a
-  failing deploy by deleting that check.
+  **`AMBER_TAG` and `PURSER_TAG` are sha pins on purpose, and are not mistakes to
+  tidy up** (SERV-89). Both services *do* publish semver, but neither was running
+  it: amber runs an image older than its `0.5.0` release, purser a `main` build
+  newer than `0.13.0`. They are pinned to what was actually running so that
+  pinning moved no versions. "Correcting" `AMBER_TAG` to `0.5` upgrades amber onto
+  a release it has never run, and the same edit on purser rolls it *backwards*
+  across `0.13.0`, discarding shipped work. SERV-89 reconciles both deliberately.
+  The `:-latest` fallback is a bootstrap convenience and a hazard in prod, and
+  both halves matter. It cannot simply be deleted: an unset **or empty** var
+  interpolates to `image: …/argosy:`, which is neither an error nor `latest`, and
+  a fresh host with no pins would stop starting. But left unguarded, a var dropped
+  from the secret does not fail either — it silently floats that service back to
+  `latest`. So the fallback stays *and* `deploy.yml` asserts on `docker compose
+  config --images`, failing loudly if any first-party image resolves to `:latest`
+  or a bare `:`. The two guard different things; neither supersedes the other, and
+  a failing deploy is not fixed by deleting the check.
 - **Watchtower is opt-in and no longer rolls first-party images** (SERV-75).
   `WATCHTOWER_LABEL_ENABLE=true` means it monitors only containers carrying
   `com.centurylinklabs.watchtower.enable=true` — currently four third-party

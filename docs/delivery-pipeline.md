@@ -82,7 +82,13 @@ Pinning also made the drift legible for the first time. Two services were not
 where anyone thought: **amber** was running an image *older* than its own `0.5.0`
 release, and **purser** a main-branch build *newer* than `0.13.0`. Both are pinned
 to what they were actually running, so the change moved no versions; reconciling
-them is a deliberate decision rather than a side effect.
+them is a deliberate decision rather than a side effect, tracked as **SERV-89**.
+
+So four of the ten pins are shas, not two: argosy and drydock because they publish
+no semver at all, amber and purser because their releases are not what they run.
+Only the first pair is the "no semver" case — the second is drift held in place on
+purpose, and reading it as an inconsistency to tidy up is how someone
+accidentally rolls purser backwards.
 
 One float is kept on purpose: major.minor means patch releases still land on a
 `docker compose pull`, so security fixes do not need a secret edit. Exact-version
