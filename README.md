@@ -105,7 +105,7 @@ Previously on the roadmap, now in active use: Copyparty, Switchyard (which repla
     ```
 
 ### 🔄 Automation & CI/CD
--   **[Watchtower](https://containrrr.dev/watchtower/)**: Automatically updates running Docker containers (excludes AI stack and local-build images like Servo-Signal and Autosavant).
+-   **[Watchtower](https://containrrr.dev/watchtower/)**: Auto-updates a deliberately small opt-in set of third-party containers, Mondays at 04:00 (SERV-75). It monitors only containers labelled `com.centurylinklabs.watchtower.enable=true` — currently dozzle, uptime-kuma, datadog and itself. No first-party image is auto-rolled; `deploy.yml` owns those.
 -   **[GitHub Actions Runner](https://github.com/actions/runner)**: Self-hosted runner for deploying changes to this server automatically.
 -   **[Semaphore UI](https://semaphoreui.com)**: Modern UI for running Ansible playbooks.
 
