@@ -25,10 +25,12 @@
 
 set -euo pipefail
 
-# Resolve repo root from this script's location so compose finds docker-compose.yml
-# regardless of the caller's working directory.
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+# Compare against the DEPLOYED compose file, not this script's own checkout (SERV-76).
+# Resolving relative to $BASH_SOURCE used to mean the answer depended on which copy
+# you invoked: the runner's copy lives in the `_work` CI scratch directory, which
+# actions/checkout resets on every run and which pr-review.yml regularly points at an
+# unmerged PR merge ref. Drift was therefore measured against whatever CI last built.
+DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/construct-server}"
 
 err() { printf '%s\n' "$*" >&2; }
 
@@ -39,7 +41,15 @@ for dep in docker jq; do
   command -v "$dep" >/dev/null 2>&1 || { err "ERROR: required dependency '$dep' not found in PATH"; exit 2; }
 done
 
-cd "$REPO_ROOT"
+if [ ! -f "$DEPLOY_ROOT/docker-compose.yml" ]; then
+  err "ERROR: no docker-compose.yml at DEPLOY_ROOT=$DEPLOY_ROOT"
+  err "The stack deploys from a fixed path (SERV-76). Bootstrap the host with"
+  err "  ansible-playbook ansible/site.yml"
+  err "or point this at another root: DEPLOY_ROOT=/path/to/root $0"
+  exit 2
+fi
+
+cd "$DEPLOY_ROOT"
 
 # Resolved compose config (env-substituted, short syntax normalized to long form).
 COMPOSE_JSON="$(docker compose config --format json 2>/dev/null)" || {
@@ -103,6 +113,20 @@ for svc in "${SERVICES[@]}"; do
 
   CHECKED=$((CHECKED + 1))
 
+  svc_findings=()
+
+  # Which compose file created this container (SERV-76). Every container carries the
+  # project root it was created from, so this covers all 29 services — unlike the
+  # bind-source comparison below, which can only speak for the handful that mount a
+  # relative path. Without it, a bare `docker compose up -d <svc>` run from a
+  # checkout silently rebinds the project to a second config file with no signal
+  # anywhere, which is exactly how the split identity arose and went unnoticed.
+  live_root="$(docker inspect "$cid" --format \
+    '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null || true)"
+  if [ -n "$live_root" ] && [ "$(norm_path "$live_root")" != "$(norm_path "$DEPLOY_ROOT")" ]; then
+    svc_findings+=("warn   created from a foreign root: $live_root (deploy root: $DEPLOY_ROOT)")
+  fi
+
   # Build target-keyed maps for declared and live mounts. Value = "type|source|ro".
   declare -A DECL=() LIVE=()
   while IFS=$'\t' read -r target type source ro; do
@@ -111,8 +135,6 @@ for svc in "${SERVICES[@]}"; do
   while IFS=$'\t' read -r target type source ro; do
     [ -n "$target" ] && LIVE["$(norm_path "$target")"]="$type|$(norm_path "$source")|$ro"
   done < <(live_mounts "$cid")
-
-  svc_findings=()
 
   # Declared mounts vs the live container, keyed by target (the container path).
   for target in "${!DECL[@]}"; do
@@ -133,8 +155,13 @@ for svc in "${SERVICES[@]}"; do
       svc_findings+=("DRIFT  read-only flag mismatch: $target (declared: $d_ro | live: $l_ro)")
       DRIFT=1
     fi
-    # bind source differences are often just deploy-directory / path-normalization
-    # quirks (e.g. CI-runner checkout vs local clone), so surface them as warnings.
+    # A bind source difference means the container was created from a different
+    # deploy directory than the one we are comparing against. During the SERV-76
+    # cutover that is expected and is the adoption progress indicator: containers
+    # still carry sources under the old roots (~/construct-server or the runner's
+    # `_work` checkout) until each one is next recreated, at which point it picks
+    # up $DEPLOY_ROOT. Warning rather than drift, because the mount is present and
+    # correct — only its host-side path is stale.
     if [ "$d_type" = "bind" ] && [ "$l_type" = "bind" ] && [ "$d_source" != "$l_source" ]; then
       svc_findings+=("warn   bind source differs: $target (declared: $d_source | live: $l_source)")
     fi

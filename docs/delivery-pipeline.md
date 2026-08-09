@@ -70,9 +70,15 @@ Plus an orphaned `lyceum-dev-pg` (`postgres:16-alpine`, up 2 weeks).
 
 ### Version state is nondeterministic
 
-Every first-party image in `docker-compose.yml` is `:latest` — aperture, cook_book,
-argosy, switchyard, centrifuge, lyceum, purser, interlock. Three independent things
-mutate prod against those floating tags:
+As surveyed, every first-party image in `docker-compose.yml` was a hardcoded
+`:latest` — aperture, cook_book, argosy, switchyard, centrifuge, lyceum, purser,
+interlock. **Half-closed by SERV-74:** all 14 now read `${<SERVICE>_TAG:-latest}`,
+so a version *can* be pinned, but the defaults are still `latest` and
+`PROD_ENV_FILE` does not carry them — so the images still resolve to whatever
+`latest` points at, and version state is still nondeterministic. **SERV-88** owns
+setting real values, and is what actually closes this section.
+
+Three independent things mutated prod against those floating tags:
 
 1. `deploy.yml` on push to `main` (`docker compose pull && up -d`)
 2. `repository_dispatch: [deploy, image-updated]` from app repos
@@ -89,18 +95,35 @@ emits `latest`, `sha-<short>`, `{{version}}`, and `{{major}}.{{minor}}`. Compose
 simply never consumes them. **Pinning tags is the prerequisite for everything else
 in this document.**
 
-### The stack has a split identity
+### The stack had a split identity — resolved by SERV-76
 
-`docker compose ls` reports the `construct-server` project bound to two config files:
+As surveyed, `docker compose ls` reported the `construct-server` project bound to
+two config files at once:
 
 ```
 /home/magos/runners/construct-server/_work/construct-server/construct-server/docker-compose.yml
 /home/magos/construct-server/docker-compose.yml
 ```
 
-Deploys run from the runner's checkout, so edits in `~/construct-server` are not
-necessarily what is live. There are also two other compose projects on the box
-(`argosy-acquisition`, `interlock`) that no environment model currently knows about.
+24 containers came from the first, 5 from the second. The cause was two independent
+deploy systems pointed at two directories: `deploy.yml` at the runner's checkout,
+and the ansible server role at the home checkout.
+
+This document's original framing — "deploys run from the runner's checkout" — was
+the wrong resolution, and SERV-76 rejected it on evidence. That `_work` directory is
+CI scratch shared by `deploy.yml`, `deploy-signet.yml` and `pr-review.yml`;
+`actions/checkout` resets it every run, and since `pr-review.yml` fires on
+`pull_request` it regularly holds an *unmerged* PR merge ref. It cannot be a source
+of truth for anything.
+
+Both systems now deploy from **`/opt/construct-server`**: ansible bootstraps it,
+`deploy.yml` owns it in steady state. Adoption is gradual — a container keeps the
+root it was created from until next recreated — so expect more than one path in
+`docker compose ls` until the stack cycles. `check-compose-drift.sh` reports what is
+outstanding.
+
+There are still two other compose projects on the box (`argosy-acquisition`,
+`interlock`) that no environment model knows about.
 
 ## Shape: expand, don't build
 

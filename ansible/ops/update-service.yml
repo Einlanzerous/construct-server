@@ -32,7 +32,7 @@
     - name: Pull latest image for {{ service_name }}
       ansible.builtin.command:
         cmd: "docker compose pull {{ service_name }}"
-        chdir: "/home/{{ user_name }}/construct-server"
+        chdir: "{{ deploy_root }}"
       become_user: "{{ user_name }}"
       changed_when: false
 
@@ -43,7 +43,7 @@
     - name: "Recreate container if image changed - {{ service_name }}"
       ansible.builtin.command:
         cmd: "docker compose up -d --no-deps {{ service_name }}"
-        chdir: "/home/{{ user_name }}/construct-server"
+        chdir: "{{ deploy_root }}"
       become_user: "{{ user_name }}"
       changed_when: false
 
