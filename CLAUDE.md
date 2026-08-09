@@ -96,15 +96,31 @@ anything deploys or gets versioned.
   `./scripts/check-compose-drift.sh`, which flags every container created from a
   foreign root, to see what is left; the list should only ever shrink. A *new*
   root appearing in that list is the real regression.
-- **First-party image tags are pinnable but still default to `latest`** (SERV-74).
-  Every first-party image reads `${<SERVICE>_TAG:-latest}`, one variable per
-  source repo — a repo's backend and frontend ship from one release and pin
-  together. The mechanism is in place; the values are not set, so `docker compose
-  pull` still resolves to whatever `latest` points at, and **"what's deployed"
-  remains a question you answer by inspection**. Setting real defaults and
-  carrying them in `PROD_ENV_FILE` is the unfinished half. The `:-` is
-  load-bearing: an unset *or empty* var interpolates to `image: …/argosy:`, which
-  is neither an error nor `latest` — see the empty-env invariant above.
+- **First-party image tags are pinned, and `PROD_ENV_FILE` holds the values**
+  (SERV-74, SERV-88). Every first-party image reads `${<SERVICE>_TAG:-latest}`,
+  one variable per source repo — backend and frontend ship from one release and
+  pin together, so 10 variables cover 14 images. Services with release-please
+  versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so patch releases
+  still flow in on a `docker compose pull` and nothing else does; argosy and
+  drydock publish no semver and are pinned to a sha. Change a version by editing
+  the secret (`gh secret set PROD_ENV_FILE --env home-server`), never by editing a
+  checkout's `.env` — that is not what the stack reads.
+  **`AMBER_TAG` and `PURSER_TAG` are sha pins on purpose, and are not mistakes to
+  tidy up** (SERV-89). Both services *do* publish semver, but neither was running
+  it: amber runs an image older than its `0.5.0` release, purser a `main` build
+  newer than `0.13.0`. They are pinned to what was actually running so that
+  pinning moved no versions. "Correcting" `AMBER_TAG` to `0.5` upgrades amber onto
+  a release it has never run, and the same edit on purser rolls it *backwards*
+  across `0.13.0`, discarding shipped work. SERV-89 reconciles both deliberately.
+  The `:-latest` fallback is a bootstrap convenience and a hazard in prod, and
+  both halves matter. It cannot simply be deleted: an unset **or empty** var
+  interpolates to `image: …/argosy:`, which is neither an error nor `latest`, and
+  a fresh host with no pins would stop starting. But left unguarded, a var dropped
+  from the secret does not fail either — it silently floats that service back to
+  `latest`. So the fallback stays *and* `deploy.yml` asserts on `docker compose
+  config --images`, failing loudly if any first-party image resolves to `:latest`
+  or a bare `:`. The two guard different things; neither supersedes the other, and
+  a failing deploy is not fixed by deleting the check.
 - **Watchtower is opt-in and no longer rolls first-party images** (SERV-75).
   `WATCHTOWER_LABEL_ENABLE=true` means it monitors only containers carrying
   `com.centurylinklabs.watchtower.enable=true` — currently four third-party
