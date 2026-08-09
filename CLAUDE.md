@@ -105,13 +105,19 @@ anything deploys or gets versioned.
   drydock publish no semver and are pinned to a sha. Change a version by editing
   the secret (`gh secret set PROD_ENV_FILE --env home-server`), never by editing a
   checkout's `.env` — that is not what the stack reads.
-  **`AMBER_TAG` and `PURSER_TAG` are sha pins on purpose, and are not mistakes to
-  tidy up** (SERV-89). Both services *do* publish semver, but neither was running
-  it: amber runs an image older than its `0.5.0` release, purser a `main` build
-  newer than `0.13.0`. They are pinned to what was actually running so that
-  pinning moved no versions. "Correcting" `AMBER_TAG` to `0.5` upgrades amber onto
-  a release it has never run, and the same edit on purser rolls it *backwards*
-  across `0.13.0`, discarding shipped work. SERV-89 reconciles both deliberately.
+  Only argosy and drydock are sha-pinned; every other first-party service tracks
+  major.minor (amber and purser were the last two exceptions, reconciled by
+  SERV-89).
+  **A `sha-<short>` tag and a release tag can be different images from the same
+  commit.** The publish workflow runs once on the push to `main` and again on the
+  release tag, so it builds the same source twice, seconds apart, and the two
+  digests differ. SERV-88 read that digest difference as purser running *ahead* of
+  its release; it was not — `sha-2156151` and `0.13.0` both carried
+  `org.opencontainers.image.revision=2156151434…`. **Compare the `revision` label,
+  not the digest, before concluding anything about what code is deployed.** A
+  digest comparison alone will invent version drift that does not exist, which
+  matters for the delivery ledger and for rollback, where "is this the same code"
+  is the whole question.
   The `:-latest` fallback is a bootstrap convenience and a hazard in prod, and
   both halves matter. It cannot simply be deleted: an unset **or empty** var
   interpolates to `image: …/argosy:`, which is neither an error nor `latest`, and
