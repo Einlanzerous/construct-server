@@ -96,15 +96,20 @@ anything deploys or gets versioned.
   `./scripts/check-compose-drift.sh`, which flags every container created from a
   foreign root, to see what is left; the list should only ever shrink. A *new*
   root appearing in that list is the real regression.
-- **First-party image tags are pinnable but still default to `latest`** (SERV-74).
-  Every first-party image reads `${<SERVICE>_TAG:-latest}`, one variable per
-  source repo — a repo's backend and frontend ship from one release and pin
-  together. The mechanism is in place; the values are not set, so `docker compose
-  pull` still resolves to whatever `latest` points at, and **"what's deployed"
-  remains a question you answer by inspection**. Setting real defaults and
-  carrying them in `PROD_ENV_FILE` is the unfinished half. The `:-` is
-  load-bearing: an unset *or empty* var interpolates to `image: …/argosy:`, which
-  is neither an error nor `latest` — see the empty-env invariant above.
+- **First-party image tags are pinned, and `PROD_ENV_FILE` holds the values**
+  (SERV-74, SERV-88). Every first-party image reads `${<SERVICE>_TAG:-latest}`,
+  one variable per source repo — backend and frontend ship from one release and
+  pin together, so 10 variables cover 14 images. Services with release-please
+  versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so patch releases
+  still flow in on a `docker compose pull` and nothing else does; argosy and
+  drydock have no semver and are pinned to a sha. Change a version by editing the
+  secret (`gh secret set PROD_ENV_FILE --env home-server`), never by editing a
+  checkout's `.env` — that is not what the stack reads.
+  The `:-latest` fallback is a bootstrap convenience and a hazard in prod: a var
+  dropped from the secret would not fail, it would silently float that service
+  back to `latest`. `deploy.yml` therefore asserts all 10 are non-empty and fails
+  loudly if not — the empty-env invariant applied one level up. Do not "fix" a
+  failing deploy by deleting that check.
 - **Watchtower is opt-in and no longer rolls first-party images** (SERV-75).
   `WATCHTOWER_LABEL_ENABLE=true` means it monitors only containers carrying
   `com.centurylinklabs.watchtower.enable=true` — currently four third-party

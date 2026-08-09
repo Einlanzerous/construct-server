@@ -67,6 +67,34 @@ jobs:
           echo "$PROD_ENV_FILE" > "$DEPLOY_ROOT/.env"
           chmod 600 "$DEPLOY_ROOT/.env"
 
+      - name: Verify first-party image tags are pinned
+        # The `:-latest` default in docker-compose.yml is a bootstrap convenience, and
+        # once real pins exist it becomes a hazard: a tag var dropped from
+        # PROD_ENV_FILE would not fail, it would silently float that service back to
+        # `latest` and quietly undo SERV-88. That is the empty-environment-variable
+        # invariant exactly — an unset value must never be treated as a value.
+        #
+        # So the fallback stays (a fresh host with no pins still starts), and prod is
+        # protected by asserting here instead. Fail loudly and name the offenders,
+        # rather than deploying something whose version nobody chose.
+        run: |
+          missing=()
+          for v in APERTURE_TAG ARGOSY_TAG AMBER_TAG CENTRIFUGE_TAG COOK_BOOK_TAG \
+                   DRYDOCK_TAG INTERLOCK_TAG LYCEUM_TAG PURSER_TAG SWITCHYARD_TAG; do
+            val="$(grep -m1 "^${v}=" "$DEPLOY_ROOT/.env" 2>/dev/null | cut -d= -f2- || true)"
+            [ -n "$val" ] || missing+=("$v")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Error: these first-party image tags are unset or empty in PROD_ENV_FILE:"
+            printf '  - %s\n' "${missing[@]}"
+            echo
+            echo "Each would silently fall back to ':latest', making the deployed version"
+            echo "nondeterministic again (SERV-88). Restore them with:"
+            echo "  gh secret set PROD_ENV_FILE --env home-server"
+            exit 1
+          fi
+          echo "All 10 first-party image tags are pinned."
+
       - name: Ensure construct_net network exists
         run: docker network create construct_net 2>/dev/null || true
 
@@ -86,6 +114,12 @@ jobs:
         # Running from the deploy root is what resolves the relative bind mounts
         # (./config, ./db, ./aperture) against it rather than against this checkout,
         # and what binds the compose project to a stable path.
+        #
+        # `pull` stays, and is no longer the blunt instrument it was under `:latest`
+        # (SERV-88). First-party images are pinned to major.minor, so a pull fetches
+        # patch releases under the pin and nothing else — which is the one bit of
+        # float we kept deliberately, so security fixes still land without a secret
+        # edit. Services with no semver are pinned to a sha, where pull is a no-op.
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: docker compose pull && docker compose up -d --remove-orphans
 

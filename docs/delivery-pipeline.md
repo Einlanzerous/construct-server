@@ -72,11 +72,22 @@ Plus an orphaned `lyceum-dev-pg` (`postgres:16-alpine`, up 2 weeks).
 
 As surveyed, every first-party image in `docker-compose.yml` was a hardcoded
 `:latest` — aperture, cook_book, argosy, switchyard, centrifuge, lyceum, purser,
-interlock. **Half-closed by SERV-74:** all 14 now read `${<SERVICE>_TAG:-latest}`,
-so a version *can* be pinned, but the defaults are still `latest` and
-`PROD_ENV_FILE` does not carry them — so the images still resolve to whatever
-`latest` points at, and version state is still nondeterministic. **SERV-88** owns
-setting real values, and is what actually closes this section.
+interlock. **Closed by SERV-74 + SERV-88.** All 14 read `${<SERVICE>_TAG:-latest}`
+and `PROD_ENV_FILE` carries real values: major.minor for the services with
+release-please versions, a sha for argosy and drydock, which publish no semver.
+Verified by deploying twice from `main` with no merge in between and diffing the
+running digests — identical, and the second deploy recreated nothing.
+
+Pinning also made the drift legible for the first time. Two services were not
+where anyone thought: **amber** was running an image *older* than its own `0.5.0`
+release, and **purser** a main-branch build *newer* than `0.13.0`. Both are pinned
+to what they were actually running, so the change moved no versions; reconciling
+them is a deliberate decision rather than a side effect.
+
+One float is kept on purpose: major.minor means patch releases still land on a
+`docker compose pull`, so security fixes do not need a secret edit. Exact-version
+pinning is what `promote.yml` (SERV-78) makes practical, since it can write the
+version rather than a human remembering to.
 
 Three independent things mutated prod against those floating tags:
 
