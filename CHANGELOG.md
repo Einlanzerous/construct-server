@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.16.1](https://github.com/Einlanzerous/construct-server/compare/v4.16.0...v4.16.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* **ansible:** stop bouncing the Docker daemon on every .env change (SERV-84) ([#98](https://github.com/Einlanzerous/construct-server/issues/98)) ([4b8542f](https://github.com/Einlanzerous/construct-server/commit/4b8542fd1b8397c149061c778242c3b08fc762cf))
+* **compose:** scope single-service recreates with --no-deps (SERV-63) ([#100](https://github.com/Einlanzerous/construct-server/issues/100)) ([b119e92](https://github.com/Einlanzerous/construct-server/commit/b119e9247b114c68cb79de1238e6e05ff8f1044d))
+* **compose:** scope watchtower to opt-in and pin first-party tags (SERV-75, SERV-74) ([#102](https://github.com/Einlanzerous/construct-server/issues/102)) ([ca80feb](https://github.com/Einlanzerous/construct-server/commit/ca80feb9ed72db892c44c14a0bf55d2dafc5fd15))
+* **deploy:** deploy from /opt/construct-server, not two checkouts (SERV-76) ([#101](https://github.com/Einlanzerous/construct-server/issues/101)) ([04e5122](https://github.com/Einlanzerous/construct-server/commit/04e5122730f5d9c9ef5e58d347198fda0f1dbb02))
+* **signet:** bind the docker bridge and restart on clean exit (SERV-69, SERV-70) ([#99](https://github.com/Einlanzerous/construct-server/issues/99)) ([3d8c694](https://github.com/Einlanzerous/construct-server/commit/3d8c694f99ff05ad9f62a240be8ff9e6b644ea82))
+* **switchyard:** give the external-ref poller its own scoped PAT (SERV-4) ([#94](https://github.com/Einlanzerous/construct-server/issues/94)) ([87d71d0](https://github.com/Einlanzerous/construct-server/commit/87d71d08be132837d51d093b591008ef3badadbb))
+
 ## [4.16.0](https://github.com/Einlanzerous/construct-server/compare/v4.15.0...v4.16.0) (2026-08-06)
 
 
