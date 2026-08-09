@@ -97,13 +97,49 @@
     group: "{{ user_name }}"
     mode: "0755"
 
-- name: Clone Construct Monorepo
+# Two systems can populate the deploy root and only one of them uses git, so
+# establish which we are looking at before touching it (SERV-76).
+- name: Check whether the deploy root is a git checkout
+  stat:
+    path: "{{ deploy_root }}/.git"
+  register: deploy_root_git
+
+- name: Check whether the deploy root is already populated
+  stat:
+    path: "{{ deploy_root }}/docker-compose.yml"
+  register: deploy_root_compose
+
+# `git clone` refuses a non-empty destination outright — `force: true` does not
+# help, it only discards modifications inside an existing repo. So on a host where
+# deploy.yml rsynced the stack files in first, an unguarded clone fails hard and
+# takes the whole server role with it. That is not hypothetical: merging SERV-76
+# fires no deploy, but a `repository_dispatch` from any service repo can, so which
+# system reaches an empty root first is a race. Worse, deploy.yml's own
+# missing-root error tells the operator to run this playbook.
+#
+# Clone when the root is genuinely cold; update when it is already ours; stand
+# aside when deploy.yml owns the content, which is the documented split anyway —
+# ansible bootstraps, deploy.yml owns steady state.
+- name: Clone or update Construct Monorepo
   become_user: "{{ user_name }}"
   git:
     repo: "{{ repo_url | default('https://github.com/Einlanzerous/construct-server.git') }}"
     dest: "{{ deploy_root }}"
     version: main
     force: true
+  when: deploy_root_git.stat.exists or not deploy_root_compose.stat.exists
+
+# Skip loudly rather than silently (CLAUDE.md). A populated non-git deploy root is
+# a supported state, not a fault — but it means this play is not what is keeping
+# the stack files current, and an operator debugging a stale file needs to know
+# that before they go looking for a bug in this role.
+- name: Report that the deploy root is managed by deploy.yml, not this play
+  debug:
+    msg: >-
+      {{ deploy_root }} is populated but is not a git checkout, so the repo clone
+      was skipped. deploy.yml rsyncs the stack files there on every deploy and is
+      the authority for their contents; this play only bootstraps a cold host.
+  when: not deploy_root_git.stat.exists and deploy_root_compose.stat.exists
 
 - name: Ensure aperture directory is owned by user
   file:
