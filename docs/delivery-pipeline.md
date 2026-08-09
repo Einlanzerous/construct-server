@@ -78,17 +78,28 @@ release-please versions, a sha for argosy and drydock, which publish no semver.
 Verified by deploying twice from `main` with no merge in between and diffing the
 running digests — identical, and the second deploy recreated nothing.
 
-Pinning also made the drift legible for the first time. Two services were not
-where anyone thought: **amber** was running an image *older* than its own `0.5.0`
-release, and **purser** a main-branch build *newer* than `0.13.0`. Both are pinned
-to what they were actually running, so the change moved no versions; reconciling
-them is a deliberate decision rather than a side effect, tracked as **SERV-89**.
+Pinning also made drift legible for the first time, and **SERV-89** then resolved
+it — with one correction worth carrying forward.
 
-So four of the ten pins are shas, not two: argosy and drydock because they publish
-no semver at all, amber and purser because their releases are not what they run.
-Only the first pair is the "no semver" case — the second is drift held in place on
-purpose, and reading it as an inconsistency to tidy up is how someone
-accidentally rolls purser backwards.
+**amber** really was behind: it ran `v0.4.1` while `0.5.0` existed, because
+watchtower used to roll it forward and SERV-75 correctly stopped that. Now pinned
+to `0.5`, a deliberate one-commit upgrade.
+
+**purser was never ahead of its release.** SERV-88 inferred that from a digest
+mismatch between `sha-2156151` and `0.13.0`, and the inference was wrong: both
+images carry `org.opencontainers.image.revision=2156151434…`. They are the *same
+commit*, built twice — once by the push-to-`main` publish and once by the
+release-tag publish, eight seconds apart. Non-reproducible builds, identical
+source.
+
+That is a trap this document should name, because the whole delivery design turns
+on "which version is in which environment". **A digest comparison alone will invent
+version drift that does not exist.** Compare the `revision` label. It matters most
+exactly where the stakes are highest — the deployments ledger (SWY-185/191) and
+rollback (SERV-79), where "is this the same code" is the entire question.
+
+So two of the ten pins are shas — argosy and drydock, the genuine no-semver cases
+— and everything else tracks major.minor.
 
 One float is kept on purpose: major.minor means patch releases still land on a
 `docker compose pull`, so security fixes do not need a secret edit. Exact-version
