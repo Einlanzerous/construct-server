@@ -208,7 +208,6 @@ http:
       rule: "Host(`lyceum.zerogravity.industries`)"
       service: lyceum
 
-
   services:
     argosy:
       loadBalancer:
@@ -228,7 +227,6 @@ http:
         # on :4005 — no separate frontend, so route the tunneled host straight at it.
         servers:
           - url: "http://lyceum:4005"
-
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.

@@ -10,11 +10,20 @@
 #   2. Dev containers are not attached to construct_net, so they have no route to
 #      any prod service — including the prod Postgres.
 #   3. Every published dev port is bound to loopback, never 0.0.0.0.
-#   4. postgres-dev is not on construct_net, so no prod container can reach the
-#      dev database either.
+#   4. NOTHING from outside the dev project is attached to construct_dev_net.
 #
-# Checks 1 and 3 are static and always run. Checks 2 and 4 need the dev project
-# up and are skipped (not failed) when it is down.
+# Check 4 is the one that matters most and was missing until review caught it.
+# Checks 2 and 3 are dev-side: they enumerate containers labelled with the dev
+# project and ask what networks they are on. The regression this repo has already
+# made once is the mirror image — a PROD container (Traefik) joining the DEV
+# network — and that container is outside the dev-project filter, so every
+# dev-side check passes while an unauthenticated route into prod's HTTP tier is
+# live. Check 4 looks at the network's membership instead of the project's, which
+# is the only angle that sees it.
+#
+# Checks 1 and 4 need only the network and the config, so they run whether or not
+# the dev project is up. Checks 2 and 3 need running dev containers and are
+# skipped (not failed) when there are none.
 #
 # Usage:
 #   ./scripts/check-dev-isolation.sh
@@ -54,7 +63,12 @@ if bad:
     print(f"  FAIL  dev routers on the PUBLIC entrypoint: {', '.join(bad)}")
     sys.exit(1)
 n = sum(1 for name in routers if "dev" in name)
-print(f"  ok    {n} dev router(s), none on the public entrypoint")
+if n == 0:
+    # Vacuously true today: SERV-77 shipped no dev routers, because the network
+    # path they needed was the one that had to be removed. SERV-93 adds them back.
+    print("  ok    no dev routers defined yet (vacuous until SERV-93)")
+else:
+    print(f"  ok    {n} dev router(s), none on the public entrypoint")
 PY
 else
   echo "  SKIP  $ROUTERS not found"; SKIPPED=$((SKIPPED + 1))
@@ -75,7 +89,7 @@ else
   done
   if [ "${#leaked[@]}" -gt 0 ]; then
     echo "  FAIL  dev containers attached to construct_net: ${leaked[*]}"
-    echo "        Dev must have no route to prod. Traefik is the only crossing point."
+    echo "        Dev must have no route to prod. Nothing belongs on both networks."
     FAIL=1
   else
     echo "  ok    ${#DEV_CONTAINERS[@]} dev container(s), none on construct_net"
@@ -100,6 +114,32 @@ if [ "${#DEV_CONTAINERS[@]}" -gt 0 ]; then
     FAIL=1
   else
     echo "  ok    all published dev ports are loopback-bound"
+  fi
+fi
+
+# --- 4. Nothing foreign is attached to the dev network ----------------------
+# Deliberately asks the NETWORK who is on it, rather than asking the dev project
+# what it is attached to. Those are different questions, and only this one sees a
+# prod container reaching into dev.
+DEV_NET="${DEV_NET:-construct_dev_net}"
+if ! docker network inspect "$DEV_NET" >/dev/null 2>&1; then
+  echo "  SKIP  network '$DEV_NET' does not exist — run: make dev-network"
+  SKIPPED=$((SKIPPED + 1))
+else
+  foreign=()
+  while read -r cname; do
+    [ -z "$cname" ] && continue
+    proj="$(docker inspect "$cname" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+    [ "$proj" = "$DEV_PROJECT" ] || foreign+=("$cname(project=${proj:-none})")
+  done < <(docker network inspect "$DEV_NET" --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}' 2>/dev/null || true)
+  if [ "${#foreign[@]}" -gt 0 ]; then
+    echo "  FAIL  non-dev containers attached to $DEV_NET: ${foreign[*]}"
+    echo "        Anything on both networks reopens the route dev must not have:"
+    echo "        Traefik's internal entrypoint has no source restriction and the"
+    echo "        prod routers on it have no auth middleware (SERV-25). See SERV-93."
+    FAIL=1
+  else
+    echo "  ok    nothing outside '$DEV_PROJECT' is attached to $DEV_NET"
   fi
 fi
 

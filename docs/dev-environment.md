@@ -32,8 +32,12 @@ Four properties, each asserted by `make dev-verify-isolation` rather than assume
    credential. Prod cannot reach `postgres-dev` either.
 3. **Dev ports are loopback-bound.** Reachable from this host, refused from the
    LAN — verified against the host's own LAN address.
-4. **Nothing is on both networks.** There is no bridge at all, which is what
-   makes property 1 true rather than merely intended.
+4. **Nothing from outside the dev project is attached to `construct_dev_net`.**
+   There is no bridge at all, which is what makes property 1 true rather than
+   merely intended — and this is checked from the *network's* side, by asking who
+   is attached to it, because the regression worth catching is a **prod**
+   container reaching into dev. A dev-side check cannot see that: the offending
+   container is not in the dev project, so it falls outside the filter.
 
 That last one was not the original design, and the reason it changed is worth
 knowing before anyone re-adds the bridge.

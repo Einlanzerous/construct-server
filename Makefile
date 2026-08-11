@@ -134,8 +134,13 @@ dev-root:
 	  exit 1; \
 	}
 
-# The dev network is external and shared with Traefik, which joins it as a second
-# attachment so it can route the dev. hostnames. Nothing else crosses.
+# The dev network is external and belongs to the dev project alone. NOTHING from
+# the prod project should ever be attached to it — an earlier revision of SERV-77
+# put Traefik on both so it could route dev. hostnames, and that handed every dev
+# container an unauthenticated route into prod Switchyard and Lyceum: the internal
+# entrypoint has no source restriction and those routers have no auth middleware
+# (SERV-25 unimplemented). `make dev-verify-isolation` fails if anything foreign
+# joins. Giving dev an edge without reopening that is SERV-93.
 dev-network:
 	docker network create construct_dev_net 2>/dev/null || echo "construct_dev_net already exists"
 
