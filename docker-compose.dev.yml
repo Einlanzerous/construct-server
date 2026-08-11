@@ -1,0 +1,271 @@
+# Dev environment — the second compose project (SERV-77).
+#
+# Project name `construct-server-dev`, its own network, its own Postgres. Run it
+# with the Makefile's dev-* targets, never with a bare `docker compose` — the
+# targets pin the project name, the env file and the deploy root, and getting any
+# of the three wrong is how dev and prod get confused for each other.
+#
+# WHY THIS FILE IS EXPLICIT RATHER THAN `extends:` FROM docker-compose.yml
+# `extends` looked right — dev would track prod automatically — but it merges the
+# wrong keys. Verified against compose v5.0.0: `networks` is a UNION, not a
+# replacement, and `depends_on` is inherited too. A dev service extending prod's
+# would therefore drag in `construct_net` and a dependency on the prod `postgres`,
+# which is exactly the isolation this ticket exists to create. Defining dev
+# explicitly is the cost of keeping dev off the prod network.
+#
+# The obvious downside is drift: a key added to a prod service is not added here.
+# `scripts/check-dev-parity.sh` (make dev-parity) reports env keys that prod has
+# and dev does not, so the drift is detectable rather than silent.
+#
+# WHAT IS DELIBERATELY *NOT* IN DEV
+#   - Signet     — no SIGNET_API_TOKEN, so the connector self-disables. Dev must
+#                  not hold a handle on the credential vault.
+#   - CF Access  — no CF_ACCESS_* , so SSO stays off and login falls back to token
+#                  paste. Dev is reached through Access at the edge, not by
+#                  trusting an Access JWT internally.
+#   - GitHub     — no webhook secret, no poller PAT. Dev must never act on, or
+#                  write back to, real tickets and PRs.
+
+name: construct-server-dev
+
+services:
+  # --- DEV DATABASE ---
+  # Deliberately a separate server rather than extra databases inside the shared
+  # prod Postgres. SERV-77 asks for "a dev migration running against a prod
+  # database" to be structurally impossible: separate roles in one server enforce
+  # that with grants, a separate server enforces it with topology — there is no
+  # route and no credential from here to prod's data.
+  #
+  # It also keeps dev deploys away from the shared Postgres, whose recreation
+  # bounces every database-backed service on the box (SERV-63).
+  postgres-dev:
+    image: postgres:16-alpine
+    container_name: postgres-dev
+    restart: unless-stopped
+    # Loopback only. Dev's database is reachable from this host for a psql shell
+    # and from nowhere else; it is not on construct_net, so no prod container can
+    # route to it either.
+    ports:
+      - "127.0.0.1:${DEV_POSTGRES_PORT:-55432}:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      # db/init-db.sh runs *inside* this container and reads each role's password
+      # from its environment, so every dev service's password has to be here too —
+      # mirroring what the prod postgres does. Without them the script hits its
+      # empty-password guard and skips the role rather than blanking it, which is
+      # the right behaviour but leaves the service unable to connect.
+      #
+      # Only the four dev services are listed. The prod-only roles the shared
+      # script also tries to create (cook_book, centrifuge, authentik, interlock,
+      # amber) have no password here and are skipped loudly — correct, since they
+      # are not part of the dev slice.
+      - SWITCHYARD_DB_PASSWORD=${SWITCHYARD_DB_PASSWORD}
+      - ARGOSY_DB_PASSWORD=${ARGOSY_DB_PASSWORD}
+      - LYCEUM_DB_PASSWORD=${LYCEUM_DB_PASSWORD}
+      - PURSER_DB_PASSWORD=${PURSER_DB_PASSWORD}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - construct_dev_net
+
+  # --- SWITCHYARD (dev) ---
+  switchyard-dev:
+    # Dev tracks HEAD on purpose (IDEA-19 step 2), which is the one place a
+    # floating tag is correct — the point of dev is to run what just merged. The
+    # SERV-88 pinning guard runs only against the prod deploy root, so this does
+    # not trip it.
+    image: ghcr.io/einlanzerous/switchyard/backend:latest
+    container_name: switchyard-dev
+    restart: unless-stopped
+    environment:
+      - PORT=4002
+      - DATABASE_URL=postgres://switchyard_user:${SWITCHYARD_DB_PASSWORD}@postgres-dev:5432/switchyard?sslmode=disable
+      # Same variable purser-dev uses for its link to this service, deliberately:
+      # two vars for one URL means pointing dev at a tunnel hostname later updates
+      # one of them and leaves this service still advertising loopback in its own
+      # links. One var, one answer.
+      - PUBLIC_URL=${DEV_SWITCHYARD_PUBLIC_URL:-http://localhost:14002}
+      - UPLOAD_DIR=/data/uploads
+      - BOOTSTRAP_TOKEN=${SWITCHYARD_BOOTSTRAP_TOKEN}
+      - EXTERNAL_REF_KEY_PREFIX=*
+      # No GITHUB_TOKEN / GITHUB_WEBHOOK_SECRET: the poller logs "polling
+      # disabled" and the webhook receiver 503s, which is what dev should do.
+      # A dev Switchyard that closes real tickets on PR merge is a bug, not a
+      # feature. No SIGNET_API_TOKEN, no CF_ACCESS_*: see the header.
+    volumes:
+      - switchyard_dev_uploads:/data/uploads
+    depends_on:
+      postgres-dev:
+        condition: service_healthy
+    networks:
+      - construct_dev_net
+
+  switchyard-frontend-dev:
+    image: ghcr.io/einlanzerous/switchyard/frontend:latest
+    container_name: switchyard-frontend-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DEV_SWITCHYARD_PORT:-14002}:4002"
+    environment:
+      - PORT=4002
+      - BACKEND_URL=http://switchyard-dev:4002
+    depends_on:
+      - switchyard-dev
+    networks:
+      - construct_dev_net
+
+  # --- ARGOSY (dev) ---
+  argosy-dev:
+    image: ghcr.io/einlanzerous/argosy:latest
+    container_name: argosy-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DEV_ARGOSY_PORT:-18096}:8096"
+    environment:
+      - ARGOSY_ADDR=:8096
+      - ARGOSY_DATABASE_URL=postgres://argosy_user:${ARGOSY_DB_PASSWORD}@postgres-dev:5432/argosy?sslmode=disable
+      - ARGOSY_MEDIA_DIR=/media
+      - ARGOSY_ARTWORK_DIR=/artwork
+      - ARGOSY_SUBTITLE_DIR=/subtitles
+      - ARGOSY_TRANSCODE_DIR=/transcode
+      # Scanning is off by default in dev (0 disables the periodic sweep). Two
+      # scanners walking the same library on a schedule is wasted IO for no test
+      # value; trigger one by hand via POST /api/v1/scan when a change needs it.
+      - ARGOSY_SCAN_INTERVAL=${DEV_ARGOSY_SCAN_INTERVAL:-0}
+      - ARGOSY_ADMIN_USERNAME=${ARGOSY_ADMIN_USERNAME:-admin}
+      - ARGOSY_ADMIN_PASSWORD=${ARGOSY_ADMIN_PASSWORD}
+      - ARGOSY_PROVISION_TOKEN=${ARGOSY_PROVISION_TOKEN}
+      - ARGOSY_DISABLE_MDNS=1
+      - TMDB_API_READ_ACCESS_KEY=${TMDB_API_READ_ACCESS_KEY}
+      - TMDB_API_KEY=${TMDB_API_KEY}
+    volumes:
+      - argosy_dev_artwork:/artwork
+      - argosy_dev_subtitles:/subtitles
+      - argosy_dev_transcode:/transcode
+      # Same libraries as prod, READ-ONLY — dev gets realistic metadata to scan
+      # without a copy of the media. Read-only is what makes sharing them safe;
+      # do not drop :ro to let dev write here.
+      - ${ARGOSY_MEDIA_DIR_HOST:-/data/media}:/media:ro
+      - /mnt/ssd_storage/media:/media-ssd:ro
+    devices:
+      - /dev/dri
+    group_add:
+      - "44"
+      - "993"
+    depends_on:
+      postgres-dev:
+        condition: service_healthy
+    networks:
+      - construct_dev_net
+
+  # --- LYCEUM (dev) ---
+  lyceum-dev:
+    image: ghcr.io/einlanzerous/lyceum:latest
+    container_name: lyceum-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DEV_LYCEUM_PORT:-14005}:4005"
+    environment:
+      - LYCEUM_ADDR=:4005
+      - LYCEUM_DATABASE_URL=postgres://lyceum_user:${LYCEUM_DB_PASSWORD}@postgres-dev:5432/lyceum?sslmode=disable
+      - LYCEUM_DATA_DIR=/data/blobs
+      - LYCEUM_AUTH=${DEV_LYCEUM_AUTH:-false}
+      # Cover fetch off: it reaches out to Apple Books/iTunes per book, which is
+      # outbound traffic a dev instance has no reason to generate.
+      #
+      # (Folder ingest is also off, but by OMITTING LYCEUM_BOOKS_WATCH_DIR rather
+      # than by this line — see EXPECTED_ABSENT in scripts/check-dev-parity.sh.
+      # The books mount is shared read-only with prod, and two ingesters racing
+      # over the same directory is not a useful thing to test.)
+      - LYCEUM_COVER_FETCH=false
+    volumes:
+      - lyceum_dev_data:/data/blobs
+      - ${LYCEUM_BOOKS_DIR_HOST:-/data/media/books}:/books:ro
+    depends_on:
+      postgres-dev:
+        condition: service_healthy
+    networks:
+      - construct_dev_net
+
+  # --- PURSER (dev) ---
+  # The reason lyceum and argosy are in this project at all: purser is the service
+  # that calls everything else, so its peer URLs are the contract under test
+  # (SERV-81). Every one of them points at a dev peer — a dev purser that
+  # provisions accounts in prod would be the worst possible outcome of this ticket.
+  purser-dev:
+    image: ghcr.io/einlanzerous/purser:latest
+    container_name: purser-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DEV_PURSER_PORT:-14006}:4006"
+    environment:
+      - PURSER_ADDR=:4006
+      - PURSER_DATABASE_URL=postgres://purser_user:${PURSER_DB_PASSWORD}@postgres-dev:5432/purser?sslmode=disable
+      - PURSER_API_TOKEN=${PURSER_API_TOKEN}
+      # BASE_URL is the internal API endpoint purser calls; URL is the
+      # user-facing link it puts in invites. Prod sets both and they differ, so
+      # dev must too — setting only BASE_URL leaves the public links unset and
+      # purser would fall back to whatever its default is. The parity check
+      # caught exactly that when this file was first written.
+      #
+      # The URL values default to the loopback ports because those work today.
+      # Once the dev tunnel hostnames exist (see the Cloudflare steps in
+      # docs/dev-environment.md), point them at those in DEV_ENV_FILE — one env
+      # change per service, no compose edit.
+      - PURSER_SWITCHYARD_BASE_URL=http://switchyard-dev:4002
+      - PURSER_SWITCHYARD_URL=${DEV_SWITCHYARD_PUBLIC_URL:-http://localhost:14002}
+      - PURSER_LYCEUM_BASE_URL=http://lyceum-dev:4005
+      - PURSER_LYCEUM_URL=${DEV_LYCEUM_PUBLIC_URL:-http://localhost:14005}
+      - PURSER_ARGOSY_BASE_URL=http://argosy-dev:8096
+      - PURSER_ARGOSY_URL=${DEV_ARGOSY_PUBLIC_URL:-http://localhost:18096}
+      - PURSER_ARGOSY_PROVISION_TOKEN=${ARGOSY_PROVISION_TOKEN}
+      - PURSER_LYCEUM_OWNER_TOKEN=${PURSER_LYCEUM_OWNER_TOKEN}
+      - PURSER_SWITCHYARD_TOKEN=${SWITCHYARD_BOOTSTRAP_TOKEN}
+      # No PURSER_CF_* — the Cloudflare Access connector talks to the real
+      # Zero Trust tenant, which has no dev equivalent. Blank => `--to cloudflare`
+      # reports Unavailable, which is the honest answer in dev.
+    depends_on:
+      postgres-dev:
+        condition: service_healthy
+      switchyard-dev:
+        condition: service_started
+    networks:
+      - construct_dev_net
+
+volumes:
+  postgres_dev_data:
+  switchyard_dev_uploads:
+  argosy_dev_artwork:
+  argosy_dev_subtitles:
+  argosy_dev_transcode:
+  lyceum_dev_data:
+
+networks:
+  # Nothing crosses between the dev and prod projects. Created by
+  # `make dev-network`; only this project references it.
+  #
+  # An earlier revision attached prod's Traefik here as a second network so it
+  # could route dev. hostnames. That was withdrawn: Traefik's `internal`
+  # entrypoint (:9080) listens on every interface it has, with no source
+  # restriction — only header stripping — and the prod switchyard and lyceum
+  # routers sit on it with no auth middleware, because the Cloudflare Access JWT
+  # validation their comments promise is still unimplemented (SERV-25). Access is
+  # enforced at Cloudflare's edge, so a request arriving at :9080 from inside
+  # Docker is authenticated by nothing. Verified: a container on a
+  # Traefik-attached network gets HTTP 200 from prod switchyard just by setting
+  # the Host header.
+  #
+  # Attaching Traefik here would therefore have handed every dev container — all
+  # of them deliberately running :latest, i.e. the untested code this project
+  # exists to exercise — an unauthenticated route into prod's HTTP tier. Dev is
+  # reached on its loopback ports instead. Giving dev its own edge is SERV-93.
+  construct_dev_net:
+    external: true
