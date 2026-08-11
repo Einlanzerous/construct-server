@@ -1,5 +1,5 @@
 .PHONY: network up down recreate force-recreate drift-check db-up db-shell db-check db-init deploy-root \
-        dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-pull dev-ps dev-logs \
+        dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
@@ -173,7 +173,25 @@ dev-down: dev-root
 # database out from under every other dev service.
 # Usage: make dev-recreate svc=switchyard-dev
 dev-recreate: dev-root dev-network
-	$(DEV_COMPOSE) up -d $(if $(svc),$(if $(DEPS_ON),,--no-deps)) $(svc)
+	$(DEV_COMPOSE) up -d $(NO_DEPS) $(svc)
+
+# Dev's counterpart to force-recreate: rebuild a container whose spec did NOT
+# change, e.g. to re-read a changed dev .env. Same guards as the prod target for
+# the same reason (SERV-63) — unscoped or with deps=, --force-recreate propagates
+# into depends_on and takes postgres-dev down under every other dev service.
+# Usage: make dev-force-recreate svc=purser-dev
+dev-force-recreate: dev-root dev-network
+	@test -n "$(svc)" || { \
+	  echo "dev-force-recreate requires svc=<name> — unscoped it recreates the whole dev stack,"; \
+	  echo "including postgres-dev, which every other dev service depends on."; \
+	  exit 1; \
+	}
+	@test -z "$(DEPS_ON)" || { \
+	  echo "dev-force-recreate does not accept deps= — it would force-recreate postgres-dev too."; \
+	  echo "For a cold start: make dev-up"; \
+	  exit 1; \
+	}
+	$(DEV_COMPOSE) up -d --no-deps --force-recreate $(svc)
 
 dev-pull: dev-root
 	$(DEV_COMPOSE) pull

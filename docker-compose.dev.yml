@@ -88,7 +88,11 @@ services:
     environment:
       - PORT=4002
       - DATABASE_URL=postgres://switchyard_user:${SWITCHYARD_DB_PASSWORD}@postgres-dev:5432/switchyard?sslmode=disable
-      - PUBLIC_URL=${SWITCHYARD_PUBLIC_URL:-http://localhost:14002}
+      # Same variable purser-dev uses for its link to this service, deliberately:
+      # two vars for one URL means pointing dev at a tunnel hostname later updates
+      # one of them and leaves this service still advertising loopback in its own
+      # links. One var, one answer.
+      - PUBLIC_URL=${DEV_SWITCHYARD_PUBLIC_URL:-http://localhost:14002}
       - UPLOAD_DIR=/data/uploads
       - BOOTSTRAP_TOKEN=${SWITCHYARD_BOOTSTRAP_TOKEN}
       - EXTERNAL_REF_KEY_PREFIX=*
@@ -174,8 +178,13 @@ services:
       - LYCEUM_DATABASE_URL=postgres://lyceum_user:${LYCEUM_DB_PASSWORD}@postgres-dev:5432/lyceum?sslmode=disable
       - LYCEUM_DATA_DIR=/data/blobs
       - LYCEUM_AUTH=${DEV_LYCEUM_AUTH:-false}
-      # Folder ingest is OFF in dev: the watch dir is a shared read-only mount,
-      # and two ingesters racing on it is a contract test's worst nightmare.
+      # Cover fetch off: it reaches out to Apple Books/iTunes per book, which is
+      # outbound traffic a dev instance has no reason to generate.
+      #
+      # (Folder ingest is also off, but by OMITTING LYCEUM_BOOKS_WATCH_DIR rather
+      # than by this line — see EXPECTED_ABSENT in scripts/check-dev-parity.sh.
+      # The books mount is shared read-only with prod, and two ingesters racing
+      # over the same directory is not a useful thing to test.)
       - LYCEUM_COVER_FETCH=false
     volumes:
       - lyceum_dev_data:/data/blobs
@@ -240,9 +249,23 @@ volumes:
   lyceum_dev_data:
 
 networks:
-  # External so Traefik (in the prod project) can join it as a second attachment
-  # and route the dev. hostnames. That is the ONLY thing crossing between the two
-  # projects — dev services are not on construct_net and cannot reach prod at all.
-  # Created by `make dev-network`.
+  # Nothing crosses between the dev and prod projects. Created by
+  # `make dev-network`; only this project references it.
+  #
+  # An earlier revision attached prod's Traefik here as a second network so it
+  # could route dev. hostnames. That was withdrawn: Traefik's `internal`
+  # entrypoint (:9080) listens on every interface it has, with no source
+  # restriction — only header stripping — and the prod switchyard and lyceum
+  # routers sit on it with no auth middleware, because the Cloudflare Access JWT
+  # validation their comments promise is still unimplemented (SERV-25). Access is
+  # enforced at Cloudflare's edge, so a request arriving at :9080 from inside
+  # Docker is authenticated by nothing. Verified: a container on a
+  # Traefik-attached network gets HTTP 200 from prod switchyard just by setting
+  # the Host header.
+  #
+  # Attaching Traefik here would therefore have handed every dev container — all
+  # of them deliberately running :latest, i.e. the untested code this project
+  # exists to exercise — an unauthenticated route into prod's HTTP tier. Dev is
+  # reached on its loopback ports instead. Giving dev its own edge is SERV-93.
   construct_dev_net:
     external: true

@@ -32,14 +32,34 @@ Four properties, each asserted by `make dev-verify-isolation` rather than assume
    credential. Prod cannot reach `postgres-dev` either.
 3. **Dev ports are loopback-bound.** Reachable from this host, refused from the
    LAN — verified against the host's own LAN address.
-4. **No dev router on the public entrypoint.** Dev routers exist only on
-   `internal`. Traefik runs no Docker provider, so a dev service cannot expose
-   itself with a label even by accident; routing is the committed allowlist in
-   `config/traefik/dynamic/routers.yml`.
+4. **Nothing is on both networks.** There is no bridge at all, which is what
+   makes property 1 true rather than merely intended.
 
-The single crossing point is Traefik, which joins `construct_dev_net` as a second
-network attachment so it can route the dev hostnames. It bridges routing and
-nothing else.
+That last one was not the original design, and the reason it changed is worth
+knowing before anyone re-adds the bridge.
+
+An earlier revision attached prod's Traefik to `construct_dev_net` as a second
+network so it could route `<svc>-dev.` hostnames. Review caught that this hands
+dev an **unauthenticated route into prod's HTTP tier**. Traefik's `internal`
+entrypoint (`:9080`) listens on every interface it has with no source
+restriction — only header stripping — and the prod `switchyard` and `lyceum`
+routers sit on it with no auth middleware, because the Cloudflare Access JWT
+validation their comments promise is still unimplemented (SERV-25). Access is
+enforced at *Cloudflare's* edge, so a request arriving at `:9080` from inside
+Docker is authenticated by nothing:
+
+```
+$ docker exec crowdsec wget -S -O /dev/null \
+    --header 'Host: switchyard.zerogravity.industries' http://traefik:9080/
+  HTTP/1.1 200 OK
+```
+
+Every dev container runs `:latest` — the untested code this project exists to
+exercise — so that route is exactly the wrong one to open. Note the database
+isolation was never affected: neither Postgres is behind Traefik.
+
+Dev is therefore reached on loopback, and giving it a real edge is **SERV-93**,
+which has to answer the auth question rather than route around it.
 
 ## Secrets
 
@@ -108,18 +128,21 @@ Keys dev deliberately omits are listed with a reason in
 
 ## Not done yet
 
-**The dev tunnel hostnames.** The Traefik routers for
-`<svc>-dev.zerogravity.industries` are committed and on the `internal` entrypoint,
-but they are inert: `cloudflared` here runs a dashboard-managed token tunnel
-(`tunnel --no-autoupdate run`, no config file), so hostname→origin ingress and the
-Access applications live in the Cloudflare Zero Trust dashboard, not in this repo.
+**Dev has no edge — SERV-93.** No `<svc>-dev.` hostnames, and no Traefik routers
+for them; the ones drafted here were removed rather than left committed, because
+without a network path they could not work and dead routing config is worse than
+none.
 
-To activate, in the dashboard:
+Two things have to be decided together there, which is why it is its own ticket:
 
-1. Add a public hostname per service on the tunnel, pointing at
-   `http://traefik:9080` — the same origin the prod internal routers use.
-2. Add an Access application for each, restricted to whoever should reach dev.
-3. Set `DEV_*_PUBLIC_URL` in `DEV_ENV_FILE` to the new hostnames.
+- **Auth.** Whatever routes dev must not reopen the hole above. Either the prod
+  `internal` routers gain a source restriction and dev gets its own Traefik, or
+  SERV-25 lands and the internal entrypoint stops relying on network position for
+  its security.
+- **The tunnel.** `cloudflared` runs a dashboard-managed token tunnel
+  (`tunnel --no-autoupdate run`, no config file), so hostname→origin ingress and
+  the Access applications live in the Zero Trust dashboard, not in this repo. A
+  dev edge either shares that tunnel or gets its own.
 
 Until then dev is reached on its loopback ports, which is why they exist.
 

@@ -37,6 +37,7 @@ for dep in docker python3; do
 done
 
 FAIL=0
+SKIPPED=0
 
 # --- 1. No dev router on the public entrypoint -------------------------------
 # Parsed structurally rather than grepped: a grep for "public" near "dev" would
@@ -56,13 +57,14 @@ n = sum(1 for name in routers if "dev" in name)
 print(f"  ok    {n} dev router(s), none on the public entrypoint")
 PY
 else
-  echo "  SKIP  $ROUTERS not found"
+  echo "  SKIP  $ROUTERS not found"; SKIPPED=$((SKIPPED + 1))
 fi
 
 # --- 2 & 4. Dev containers are not on construct_net --------------------------
 mapfile -t DEV_CONTAINERS < <(docker ps -a --filter "label=com.docker.compose.project=$DEV_PROJECT" --format '{{.Names}}' 2>/dev/null || true)
 if [ "${#DEV_CONTAINERS[@]}" -eq 0 ]; then
   echo "  SKIP  dev project '$DEV_PROJECT' is not running — network checks need it up"
+  SKIPPED=$((SKIPPED + 2))  # the attachment check and the port check
 else
   leaked=()
   for c in "${DEV_CONTAINERS[@]}"; do
@@ -106,5 +108,12 @@ if [ "$FAIL" -eq 1 ]; then
   err "DEV ISOLATION VIOLATED — see the failures above."
   exit 1
 fi
-echo "Dev isolation holds."
+if [ "$SKIPPED" -gt 0 ]; then
+  # Never print the unqualified success line when a property went untested. This
+  # script is cited as the thing that asserts isolation, so a green line standing
+  # for "parsed a YAML file and skipped the rest" is worse than no line at all.
+  echo "PARTIAL — $SKIPPED isolation propert(y/ies) NOT checked; bring dev up and re-run."
+  exit 0
+fi
+echo "Dev isolation holds (all properties checked)."
 exit 0

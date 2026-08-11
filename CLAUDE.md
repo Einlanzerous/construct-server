@@ -146,10 +146,15 @@ anything deploys or gets versioned.
   the **prod** file, so use the `make dev-*` targets, which pin the project name,
   compose file and env file together. Never copy the prod `.env` into dev: purser
   provisions real accounts across four services, so a dev purser with prod
-  credentials does not fail safely — it succeeds, against production. Traefik is
-  the only thing on both networks, and it bridges routing alone. Isolation is
-  asserted by `make dev-verify-isolation`; dev-vs-prod config drift is reported by
-  `make dev-parity`.
+  credentials does not fail safely — it succeeds, against production. **Nothing
+  is on both networks**, which is what makes "dev cannot reach prod" true rather
+  than merely intended. Do not attach Traefik to `construct_dev_net` to route
+  dev hostnames: its `internal` entrypoint has no source restriction and the prod
+  routers on it have no auth middleware (SERV-25 is unimplemented), so any
+  container that can reach `traefik:9080` gets prod Switchyard and Lyceum by
+  setting a Host header — Cloudflare Access is enforced at Cloudflare's edge, not
+  here. Giving dev an edge is SERV-93. Isolation is asserted by
+  `make dev-verify-isolation`; dev-vs-prod config drift by `make dev-parity`.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.
