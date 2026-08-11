@@ -13,6 +13,9 @@ anything deploys or gets versioned.
 ## Layout
 
 - `docker-compose.yml` — the whole stack, ~30 services, single file.
+- `docker-compose.dev.yml` — the `construct-server-dev` project (SERV-77): a second,
+  isolated copy of switchyard/argosy/lyceum/purser with its own Postgres and
+  network. See `docs/dev-environment.md`; drive it with the `make dev-*` targets.
 - `config/` — Traefik, CrowdSec, and Copyparty config mounted into containers.
 - `caddy/`, edge routing — public 443 paths and Cloudflare Access.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
@@ -136,6 +139,17 @@ anything deploys or gets versioned.
   `deploy.yml` is the deploy path. Watchtower will never call a reporting step, so
   anything it rolls is invisible to the delivery ledger in
   `docs/delivery-pipeline.md` — that is the argument against widening the list.
+- **Dev is a separate compose project, and never points at prod** (SERV-77). It
+  runs from `/opt/construct-server-dev` with its own Postgres, its own network
+  (`construct_dev_net`) and its own secrets (`DEV_ENV_FILE` on the
+  `home-server-dev` environment). A bare `docker compose` in this repo resolves to
+  the **prod** file, so use the `make dev-*` targets, which pin the project name,
+  compose file and env file together. Never copy the prod `.env` into dev: purser
+  provisions real accounts across four services, so a dev purser with prod
+  credentials does not fail safely — it succeeds, against production. Traefik is
+  the only thing on both networks, and it bridges routing alone. Isolation is
+  asserted by `make dev-verify-isolation`; dev-vs-prod config drift is reported by
+  `make dev-parity`.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.

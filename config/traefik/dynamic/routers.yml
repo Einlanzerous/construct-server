@@ -208,6 +208,47 @@ http:
       rule: "Host(`lyceum.zerogravity.industries`)"
       service: lyceum
 
+    # ------------- INTERNAL entrypoint: the dev tier (SERV-77) -------------
+    # `internal` ONLY, never `public`. Dev must not be reachable from the WAN
+    # edge; the check for these is that the public path FAILS, which the
+    # public-catchall deny-all above already guarantees for any host not
+    # explicitly routed on `public`.
+    #
+    # These routers are INERT until the matching public hostnames exist on the
+    # Cloudflare side. cloudflared here runs a dashboard-managed token tunnel
+    # (`tunnel --no-autoupdate run`, no config file), so the hostname→origin
+    # ingress rules and the Access applications live in the Zero Trust dashboard,
+    # not in this repo. Until those are added, dev is reached on its loopback
+    # ports instead — see docs/dev-environment.md. Committing the routers now
+    # means the repo half is reviewed and ready rather than done in a hurry later.
+    #
+    # Naming follows the existing `lyceum-direct` precedent — a suffixed
+    # single-label host — rather than `dev.<svc>.`, which would need a
+    # second-level wildcard certificate the DNS-01 setup does not issue.
+    switchyard-dev:
+      entryPoints:
+        - internal
+      rule: "Host(`switchyard-dev.zerogravity.industries`)"
+      service: switchyard-dev
+
+    lyceum-dev:
+      entryPoints:
+        - internal
+      rule: "Host(`lyceum-dev.zerogravity.industries`)"
+      service: lyceum-dev
+
+    argosy-dev:
+      entryPoints:
+        - internal
+      rule: "Host(`argosy-dev.zerogravity.industries`)"
+      service: argosy-dev
+
+    purser-dev:
+      entryPoints:
+        - internal
+      rule: "Host(`purser-dev.zerogravity.industries`)"
+      service: purser-dev
+
   services:
     argosy:
       loadBalancer:
@@ -227,6 +268,32 @@ http:
         # on :4005 — no separate frontend, so route the tunneled host straight at it.
         servers:
           - url: "http://lyceum:4005"
+
+    # --- dev tier (SERV-77) ---
+    # These resolve over `construct_dev_net`, which Traefik joins as a second
+    # network attachment. Dev services are NOT on construct_net, so this is the
+    # only path between the two projects — routing, and nothing else.
+    switchyard-dev:
+      loadBalancer:
+        # Same shape as prod: the frontend serves the SPA and proxies /v1 to the
+        # backend, so the tunneled host points at the frontend, not the backend.
+        servers:
+          - url: "http://switchyard-frontend-dev:4002"
+
+    lyceum-dev:
+      loadBalancer:
+        servers:
+          - url: "http://lyceum-dev:4005"
+
+    argosy-dev:
+      loadBalancer:
+        servers:
+          - url: "http://argosy-dev:8096"
+
+    purser-dev:
+      loadBalancer:
+        servers:
+          - url: "http://purser-dev:4006"
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.

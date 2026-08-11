@@ -875,6 +875,11 @@ services:
       - traefik_access_logs:/var/log/traefik
     networks:
       - construct_net
+      # Second attachment so the dev tier's routers can resolve (SERV-77).
+      # This is the ONLY link between the prod and dev projects: dev services
+      # are not on construct_net and have no route to anything here. Traefik
+      # bridges them at the routing layer and nowhere else.
+      - construct_dev_net
 
   # --- CROWDSEC (SERV-27) — behavioral IPS for the open WAN path ---
   # Parses Traefik's JSON access log (shared volume, read-only) with the
@@ -1043,4 +1048,7 @@ volumes:
 
 networks:
   construct_net:
+    external: true
+  # Created by `make dev-network`; owned by the dev project (SERV-77).
+  construct_dev_net:
     external: true
