@@ -46,16 +46,37 @@ RAW_DIR="$RESULTS_DIR/judge-raw-${out_short}"
 mkdir -p "$RAW_DIR"
 printf "prompt\tgenerator\tgrade\trationale\n" > "$OUT"
 
-# Discover generators by globbing all .md files for the first prompt's claude pair, then taking
-# every *.SLUG.md that shares the prompt prefix.
-first_prompt=""
-for f in "$RESULTS_DIR"/*.claude.md; do
+# Pick an anchor generator, used ONLY to enumerate prompt names and generator slugs
+# (the rubric grades absolutely, so no answer is a reference). Prefer claude when it's
+# present, which keeps A1 ordering identical to the historical reports; otherwise fall
+# back to any generator so SKIP_CLAUDE=1 runs are still gradeable.
+anchor_slug=""
+for f in "$RESULTS_DIR"/*.md; do
   [[ -f "$f" ]] || continue
-  first_prompt=$(basename "$f" .claude.md)
+  base=$(basename "$f" .md)
+  [[ "$base" == *.* ]] || continue
+  slug="${base##*.}"
+  if [[ "$slug" == "claude" ]]; then
+    anchor_slug="claude"
+    break
+  fi
+  [[ -z "$anchor_slug" ]] && anchor_slug="$slug"
+done
+if [[ -z "$anchor_slug" ]]; then
+  echo "no generator outputs (*.<slug>.md) found in $RESULTS_DIR" >&2
+  exit 1
+fi
+
+# Discover generators by globbing all .md files for the first prompt's anchor pair, then
+# taking every *.SLUG.md that shares the prompt prefix.
+first_prompt=""
+for f in "$RESULTS_DIR"/*."$anchor_slug".md; do
+  [[ -f "$f" ]] || continue
+  first_prompt=$(basename "$f" ".$anchor_slug.md")
   break
 done
 if [[ -z "$first_prompt" ]]; then
-  echo "no *.claude.md found in $RESULTS_DIR" >&2
+  echo "no *.$anchor_slug.md found in $RESULTS_DIR" >&2
   exit 1
 fi
 
@@ -75,11 +96,11 @@ echo "→ generators: ${GENS[*]}"
 echo "→ judge: $JUDGE_MODEL"
 echo "→ output: $OUT"
 
-# Discover prompt names from claude responses
+# Discover prompt names from the anchor generator's responses
 prompt_names=()
-for f in "$RESULTS_DIR"/*.claude.md; do
+for f in "$RESULTS_DIR"/*."$anchor_slug".md; do
   [[ -f "$f" ]] || continue
-  base=$(basename "$f" .claude.md)
+  base=$(basename "$f" ".$anchor_slug.md")
   prompt_names+=("$base")
 done
 
