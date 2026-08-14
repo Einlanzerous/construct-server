@@ -201,6 +201,52 @@ free a bit of VRAM during sequential judging. Anything that wants 128K for
 model adds ~9 GB of KV cache, which will spill to system RAM and tank
 throughput. Stay at 64K unless a specific call genuinely needs more.
 
+### A generator must not be the judge
+
+The local judge is usually a model that is *also* in the lineup. That was
+tolerable while Claude was a generator too, because Claude anchored the field
+from outside and the rankings agreed anyway. It stops being tolerable the moment
+the lineup shrinks or Claude is skipped: with two generators and one of them
+judging, you are asking a competitor to score itself against its only rival.
+
+This bit on 2026-08-13 (`SKIP_CLAUDE=1`, muse-glimmer:30b vs gemma4:31b, judged
+by gemma4:31b). It produced the first judge-ranking disagreement in the
+benchmark's history. The judge **never issued a grade below B across all 16
+grades**, despite its own rubric saying a buggy answer is a D or F — and it
+**never once graded itself down**, scoring itself higher than the Claude judge on
+6 of 8 prompts and tying on the rest, while grading its opponent lower on 3 of 8.
+Two of its calls were mechanically checkable and both were wrong in its own
+favour: it gave a B to a handler that does not compile (two unused imports) and
+an A to a test suite that fails.
+
+**Rules of thumb:**
+
+- Prefer a judge that is not in the lineup. If the lineup is all of your local
+  models, pull one purely to judge.
+- If a generator must judge, say so explicitly in the report and treat every
+  grade it gives itself as unverified.
+- Where a grade is mechanically checkable, check it (below) — that outranks both
+  judges.
+
+### Verify what you can actually run
+
+Grades used to be "from reading". For Go and TS prompts they usually don't have
+to be. On 2026-08-13, dropping prompt 01 into a scratch module and prompt 03's
+test file against the real `ParseRef` settled two contested grades in under a
+minute:
+
+```bash
+go build ./...   # 01: caught two unused imports = compile failure
+go test ./...    # 03: caught an assertion that Sscanf makes pass, not fail
+```
+
+Prompts 01–04 are mechanically checkable as written; 05–07 would need a `tsc`
+pass; 08 is a design doc and can't be. A run-verified failure outranks any judge
+grade, local or Claude. Note the recurring trap: `fmt.Sscanf("12a34", "%d", &n)`
+reads `12` and returns **nil** — it does not reject trailing garbage. Models
+keep asserting the opposite (`gemma4:12b` in June, `gemma4:31b` in August), which
+makes prompt 03 a reliable discriminator worth keeping.
+
 ### Three judges, one truth
 
 When running >1 local judge, run them sequentially — each judge holds the
