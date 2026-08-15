@@ -73,10 +73,21 @@ Plus an orphaned `lyceum-dev-pg` (`postgres:16-alpine`, up 2 weeks).
 As surveyed, every first-party image in `docker-compose.yml` was a hardcoded
 `:latest` — aperture, cook_book, argosy, switchyard, centrifuge, lyceum, purser,
 interlock. **Closed by SERV-74 + SERV-88.** All 14 read `${<SERVICE>_TAG:-latest}`
-and `PROD_ENV_FILE` carries real values: major.minor for the services with
-release-please versions, a sha for argosy and drydock, which publish no semver.
-Verified by deploying twice from `main` with no merge in between and diffing the
-running digests — identical, and the second deploy recreated nothing.
+against real values: major.minor for the services with release-please versions, a
+sha for argosy and drydock, which publish no semver. Verified by deploying twice
+from `main` with no merge in between and diffing the running digests — identical,
+and the second deploy recreated nothing.
+
+Those values started out in the `PROD_ENV_FILE` secret and **SERV-96 moved them to
+a tracked `versions.env`**, which is what makes steps 8 and 9 below implementable.
+An image tag is not a credential, and a promote that has to edit an environment
+secret needs a credential no workflow can be given — `secrets` is not a
+`permissions:` scope, so `GITHUB_TOKEN` cannot do it, and the fine-grained PAT
+grant that could 403'd in SGNT-29 while `signet sync --check` reported it healthy.
+A promote that edits a tracked file needs `contents: write`. It also gives step 9's
+"last-good version" an index before the ledger exists: `git log -p versions.env`.
+`scripts/render-env.sh` merges the secret and the pins into the deployed `.env`, so
+the stack still reads one complete environment file.
 
 Pinning also made drift legible for the first time, and **SERV-89** then resolved
 it — with one correction worth carrying forward.

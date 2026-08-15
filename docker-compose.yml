@@ -837,6 +837,38 @@ services:
     environment:
       - DRYDOCK_DAEMON_PORT=4318
 
+  # --- ESTATE WIKI (SERV-101) — generated, served read-only ---
+  # A static site and nothing more: no database, no auth surface, no state. The
+  # content is GENERATED from this file, versions.env and each repo's own docs by
+  # `wiki/generate`, built by deploy.yml, and rsynced to $DEPLOY_ROOT/wiki/site.
+  # That is the whole design — the generator is the product, this container is a
+  # file server for its output.
+  #
+  # A wiki app (Docmost, Outline, BookStack) was the obvious alternative and was
+  # rejected: it buys editing and full-text search at the cost of another stateful
+  # service, another database and another auth surface — and the first hand-edit of
+  # a generated page reintroduces exactly the drift this tier exists to prevent.
+  # Search here is a build-time index shipped with the bundle, so it costs nothing
+  # at runtime.
+  #
+  # No published port, deliberately. Like switchyard's backend, this is reachable
+  # only from construct_net, so the ONLY route in is the tunneled Traefik router on
+  # the unpublished `internal` entrypoint, gated by Cloudflare Access. There is no
+  # host binding to bypass that with.
+  #
+  # The mount is read-only and the site is rebuilt on every deploy, so a change made
+  # inside the container does not survive and could not be written in the first
+  # place.
+  wiki:
+    image: nginx:1.27-alpine
+    container_name: wiki
+    restart: unless-stopped
+    volumes:
+      - ./wiki/site:/usr/share/nginx/html:ro
+      - ./config/wiki/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - construct_net
+
   # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
   # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
   # ONLY Argosy + a deny-all catch-all; `internal` (:9080 HTTP, deliberately NOT

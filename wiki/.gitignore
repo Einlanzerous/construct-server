@@ -1,0 +1,14 @@
+# Everything the generator produces. The corpus is rebuilt from the stack
+# definition on every run, so committing it would only create a second thing that
+# can be wrong (SERV-101).
+docs/*
+!docs/.vitepress/
+docs/.vitepress/*
+!docs/.vitepress/config.ts
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+
+# Per-repo docs cache, filled by `npm run fetch`.
+.repo-docs/
+
+node_modules/

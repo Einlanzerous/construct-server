@@ -21,6 +21,9 @@ anything deploys or gets versioned.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
 - `scripts/check-compose-drift.sh` — the SERV-8 guardrail (see Invariants).
+- `wiki/` — the generated estate wiki (SERV-101). A TypeScript generator plus a
+  VitePress renderer; `wiki/docs/` is **generated and wiped on every run**. Design
+  of record in `docs/estate-wiki.md`; see also the invariant below.
 - `services/` — first-party service source that hasn't graduated to its own repo.
 - `agent/rules/`, `bakeoff/` — local-model rules and the model bakeoff harness.
 - `PRINCIPLES.md` — **cross-repo** estate defaults (languages, stack, release
@@ -99,15 +102,25 @@ anything deploys or gets versioned.
   `./scripts/check-compose-drift.sh`, which flags every container created from a
   foreign root, to see what is left; the list should only ever shrink. A *new*
   root appearing in that list is the real regression.
-- **First-party image tags are pinned, and `PROD_ENV_FILE` holds the values**
-  (SERV-74, SERV-88). Every first-party image reads `${<SERVICE>_TAG:-latest}`,
-  one variable per source repo — backend and frontend ship from one release and
-  pin together, so 10 variables cover 14 images. Services with release-please
-  versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so patch releases
-  still flow in on a `docker compose pull` and nothing else does; argosy and
-  drydock publish no semver and are pinned to a sha. Change a version by editing
-  the secret (`gh secret set PROD_ENV_FILE --env home-server`), never by editing a
-  checkout's `.env` — that is not what the stack reads.
+- **First-party image tags are pinned, and tracked `versions.env` holds the values**
+  (SERV-74, SERV-88, SERV-96). Every first-party image reads
+  `${<SERVICE>_TAG:-latest}`, one variable per source repo — backend and frontend
+  ship from one release and pin together, so 10 variables cover 14 images. Services
+  with release-please versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so
+  patch releases still flow in on a `docker compose pull` and nothing else does;
+  argosy and drydock publish no semver and are pinned to a sha. **Change a version by
+  editing `versions.env` and merging it** — not with `gh secret set`, which is where
+  these lived until SERV-96, and not by editing a deployed or checkout `.env`.
+  An image tag is not a credential, and keeping the pins in git is what gives
+  promote/rollback (SERV-78, SERV-79) something they can write: a workflow can commit
+  with `contents: write`, but no `permissions:` scope lets it edit a secret at all —
+  `secrets` is not one of them. It also makes a version change a reviewable diff and
+  gives rollback its index for free (`git log -p versions.env`).
+  The deployed `.env` is still the one complete environment compose reads:
+  `scripts/render-env.sh` merges the secret and `versions.env` into it, so the
+  Makefile targets, `check-compose-drift.sh` and a bare `docker compose` on the box
+  all resolve the same values. The pins land below a marker comment in that file and
+  are **regenerated every deploy** — editing them on the host is lost without warning.
   Only argosy and drydock are sha-pinned; every other first-party service tracks
   major.minor (amber and purser were the last two exceptions, reconciled by
   SERV-89).
@@ -125,7 +138,7 @@ anything deploys or gets versioned.
   both halves matter. It cannot simply be deleted: an unset **or empty** var
   interpolates to `image: …/argosy:`, which is neither an error nor `latest`, and
   a fresh host with no pins would stop starting. But left unguarded, a var dropped
-  from the secret does not fail either — it silently floats that service back to
+  from `versions.env` does not fail either — it silently floats that service back to
   `latest`. So the fallback stays *and* `deploy.yml` asserts on `docker compose
   config --images`, failing loudly if any first-party image resolves to `:latest`
   or a bare `:`. The two guard different things; neither supersedes the other, and
@@ -155,6 +168,19 @@ anything deploys or gets versioned.
   setting a Host header — Cloudflare Access is enforced at Cloudflare's edge, not
   here. Giving dev an edge is SERV-93. Isolation is asserted by
   `make dev-verify-isolation`; dev-vs-prod config drift by `make dev-parity`.
+- **The wiki is generated, and its generator must never read a resolved
+  environment** (SERV-101). `wiki/docs/` is wiped and rewritten on every run, so a
+  hand-written page there is deleted without warning — anything a person wants to
+  write belongs in the relevant repo's `CLAUDE.md`, or in tier 2 (IDEA-21). The
+  generator parses the **raw** `docker-compose.yml` and never `docker compose
+  config`, never a `.env`: the resolved view interpolates every variable, so
+  reading it would publish the contents of `PROD_ENV_FILE` onto a Markdown page.
+  The tracked compose file holds no secret by construction, which is the entire
+  safety argument — env tables therefore show variable *names*, and values only
+  where the tracked file spells one out. It also parses raw in order to keep
+  **comments**, which are the best documentation in that file and which
+  `docker compose config` discards. Build it in a container (`make wiki-build`), not
+  against host node.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.

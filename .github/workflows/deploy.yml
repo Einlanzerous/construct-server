@@ -13,6 +13,10 @@ on:
       - 'aperture/**'
       - 'db/**'
       - 'caddy/**'
+      # versions.env is what a version change edits (SERV-96), and promote/rollback
+      # (SERV-78, SERV-79) will commit it — so a push that repoints a tag has to be
+      # able to reach the box on its own.
+      - 'versions.env'
 
 jobs:
   deploy:
@@ -54,9 +58,23 @@ jobs:
           rsync -a --delete ./db/        "$DEPLOY_ROOT/db/"
           rsync -a --delete ./aperture/  "$DEPLOY_ROOT/aperture/"
           rsync -a --delete ./scripts/   "$DEPLOY_ROOT/scripts/"
-          rsync -a docker-compose.yml Makefile "$DEPLOY_ROOT/"
+          rsync -a docker-compose.yml Makefile versions.env "$DEPLOY_ROOT/"
 
       - name: Restore Secrets
+        # The deployed environment comes from two sources with different homes (SERV-96):
+        # PROD_ENV_FILE carries the credentials, and versions.env — tracked in git —
+        # carries the first-party image pins, which are not secrets. Keeping the pins in
+        # a file makes a version change a reviewable commit instead of an unlogged secret
+        # edit, and gives promote/rollback (SERV-78, SERV-79) something they can actually
+        # write: GITHUB_TOKEN has no `secrets` permission, so repointing a tag inside the
+        # secret would need a PAT with environment-secret write (the grant that 403'd in
+        # SGNT-29), while writing a file needs `contents: write`.
+        #
+        # render-env.sh merges them into ONE file rather than compose reading two via
+        # --env-file, so the deployed .env stays the complete environment: a bare
+        # `docker compose up -d` on the box, the Makefile targets and
+        # check-compose-drift.sh all keep resolving the same values without knowing
+        # versions.env exists. See that script's header for the rest of the reasoning.
         env:
           PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
         run: |
@@ -64,15 +82,15 @@ jobs:
             echo "Error: PROD_ENV_FILE secret is missing or empty!"
             exit 1
           fi
-          echo "$PROD_ENV_FILE" > "$DEPLOY_ROOT/.env"
+          printf '%s\n' "$PROD_ENV_FILE" | ./scripts/render-env.sh - versions.env "$DEPLOY_ROOT/.env"
           chmod 600 "$DEPLOY_ROOT/.env"
 
       - name: Verify first-party image tags are pinned
         # The `:-latest` default in docker-compose.yml is a bootstrap convenience, and
-        # once real pins exist it becomes a hazard: a tag var dropped from
-        # PROD_ENV_FILE would not fail, it would silently float that service back to
-        # `latest` and quietly undo SERV-88. That is the empty-environment-variable
-        # invariant exactly — an unset value must never be treated as a value.
+        # once real pins exist it becomes a hazard: a tag var dropped from versions.env
+        # would not fail, it would silently float that service back to `latest` and
+        # quietly undo SERV-88. That is the empty-environment-variable invariant exactly
+        # — an unset value must never be treated as a value.
         #
         # So the fallback stays (a fresh host with no pins still starts), and prod is
         # protected by asserting here instead. Fail loudly and name the offenders,
@@ -103,14 +121,28 @@ jobs:
             printf '%s\n' "$unpinned" | sed 's/^/  - /'
             echo
             echo "Each resolves to a floating or empty tag, making the deployed version"
-            echo "nondeterministic again (SERV-88). Fix the matching <SERVICE>_TAG with:"
-            echo "  gh secret set PROD_ENV_FILE --env home-server"
+            echo "nondeterministic again (SERV-88). Fix the matching <SERVICE>_TAG in"
+            echo "versions.env and merge it — the pins are tracked in git, not in the"
+            echo "PROD_ENV_FILE secret (SERV-96)."
             exit 1
           fi
           echo "All $(printf '%s\n' "$firstparty" | grep -c .) first-party images are pinned."
 
       - name: Ensure construct_net network exists
         run: docker network create construct_net 2>/dev/null || true
+
+      - name: Ensure the wiki bind source exists
+        # The wiki service mounts $DEPLOY_ROOT/wiki/site, which is generated content
+        # and therefore not in the repo — wiki.yml creates it. If compose gets there
+        # first, the Docker daemon creates the missing bind source as ROOT, and every
+        # subsequent rsync from wiki.yml (running as the runner user) fails against
+        # it, permanently.
+        #
+        # Ansible claims this path on a cold host; this covers the ordering race on a
+        # warm one, since nothing sequences these two workflows. mkdir -p is a no-op
+        # when it already exists and cannot fix a directory already owned by root —
+        # which is why the ansible task is the real guard, and this is the cheap one.
+        run: mkdir -p "$DEPLOY_ROOT/wiki/site"
 
       - name: Log in to GitHub Container Registry
         run: |

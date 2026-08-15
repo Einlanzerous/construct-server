@@ -1,4 +1,11 @@
+# Every .env variant, not just `.env`. The bare pattern left `.env.bak-*`,
+# `.env.prod` and anything else a hand-rolled backup is called one `git add -A`
+# away from being committed — and a credential that reaches a commit is a
+# rotation, not a revert (SERV-31). The examples are opted back in explicitly.
 .env
+.env.*
+!.env.example
+!.env.dev.example
 ollama/
 webui/
 

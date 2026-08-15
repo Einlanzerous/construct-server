@@ -210,9 +210,49 @@
     # secret changes belong in `gh secret set PROD_ENV_FILE --env home-server`.
     force: false
 
+# The deployed environment has two sources (SERV-96): credentials, from the secret on
+# a CI deploy or from the bootstrap copy above on a cold host; and the first-party
+# image pins, from the tracked versions.env. This reconciles the pin block into the
+# deployed .env.
+#
+# It reads deploy_root's OWN .env rather than the local one, which is what keeps the
+# `force: false` property above intact — this task never pulls credentials from the
+# staler local copy, it only rewrites the block below render-env.sh's marker, and it
+# is idempotent against a file it already rendered. Without it a cold host would start
+# prod on the `:-latest` fallback: exactly what that fallback exists for, but not
+# something worth doing silently when the pins are sitting right there in the clone.
+- name: Reconcile first-party image pins into the deployed .env
+  become_user: "{{ user_name }}"
+  command:
+    argv:
+      - "{{ deploy_root }}/scripts/render-env.sh"
+      - "{{ deploy_root }}/.env"
+      - "{{ deploy_root }}/versions.env"
+      - "{{ deploy_root }}/.env"
+  register: pin_render
+  changed_when: pin_render.stdout == "updated"
+
 - name: Ensure config directory exists
   file:
     path: "{{ deploy_root }}/config"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: "0755"
+
+# The wiki's bind source (SERV-101). It is NOT in the repo — the site is generated,
+# so only wiki.yml's publish step creates it — which means on a cold host `Start
+# Docker Stack` below reaches a missing bind source first and the Docker daemon
+# creates it itself, as ROOT. Every later `rsync` from wiki.yml then runs as the
+# runner user (uid 1000) into a root-owned directory and fails, and keeps failing,
+# until someone chowns it by hand — which the runner deliberately cannot do.
+#
+# So claim it here, before compose ever sees it. Creating it empty is harmless:
+# nginx starts fine with nothing to serve and /healthz returns 503 until the first
+# wiki build lands, which is the honest answer to "is the bundle there".
+- name: Ensure the wiki site directory exists and is owned by user
+  file:
+    path: "{{ deploy_root }}/wiki/site"
     state: directory
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
