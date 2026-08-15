@@ -44,6 +44,15 @@ service to the stack adds it to the wiki with no second edit. Only repos that sh
 no image at all (`construct-server`, `signet`) are named explicitly, in
 `wiki/generate/sources/repos.ts`.
 
+**Not ingested yet: switchyard's `graphify-out/graph.json`.** SERV-101 lists it
+among the available sources — 4,939 nodes and 9,831 edges of code graph, already
+CI-refreshed — and it is deliberately deferred rather than forgotten. It covers one
+repo out of twelve, it is a different kind of content from everything else here
+(symbol-level, not estate-level), and rendering it usefully means a graph view
+rather than a Markdown page. Worth revisiting once there is a second repo with the
+same artefact; until then it would be a large one-off feature serving a single
+service.
+
 ## Two rules inside the generator
 
 **It parses raw YAML, never `docker compose config`, and never reads a `.env`.**
@@ -96,16 +105,35 @@ service with a bare system PATH and no login shell (the trap SERV-62 hit twice).
 
 ## How it deploys
 
-`deploy.yml` builds the site and rsyncs it to `$DEPLOY_ROOT/wiki/site`, which the
-`wiki` container serves read-only. The site is **content, not an image**, so a docs
-change updates it with no container recreate at all.
+**Its own workflow, `wiki.yml` — deliberately not `deploy.yml`.** It builds the
+site and rsyncs it to `$DEPLOY_ROOT/wiki/site`, which the `wiki` container serves
+read-only. The site is **content, not an image**, so a docs change updates it with
+no container recreate at all, and no compose action of any kind.
 
-Because the wiki is generated from the stack definition, the files it reads are
-themselves deploy triggers: `versions.env`, `wiki/**`, `docs/**`, `CLAUDE.md`,
-`PRINCIPLES.md` and `README.md` are in the workflow's `paths:` filter. A docs-only
-push therefore runs the full deploy job. That is cheap — the deploy is idempotent,
-`pull && up -d` recreates only what actually drifted — and it is the price of the
-wiki never describing a stack that is not the live one.
+The split exists for two reasons, both found in review on #108 after the build
+initially lived inside `deploy.yml`:
+
+- **Documentation must not be on the critical path of shipping the stack.** The
+  build ran before `docker compose up -d` with no `continue-on-error`, so an npm
+  registry outage, a failed `docker pull`, or a Vue-hostile character landing in an
+  unrelated repo's README could abort a deploy — *after* the rsync step had already
+  put new config on the box, leaving it holding new files against old containers.
+  That is the exact opposite of the degrade-don't-fail behaviour the fetch step was
+  written for.
+- **A README edit must not roll a service.** The wiki's sources include
+  `README.md`, `CLAUDE.md` and `docs/**`. Adding those to `deploy.yml`'s `paths:`
+  meant a docs-only push ran `docker compose pull` — and under major.minor pins, a
+  pull is precisely where a new patch release enters. Editing a README could
+  therefore ship a version nobody chose at that moment. That unattended-change
+  property is what SERV-75 took away from Watchtower; it should not return through
+  the docs.
+
+The `wiki/site` directory is generated content and so is **not in the repo**. That
+matters more than it sounds: if compose reaches the missing bind source first, the
+Docker daemon creates it as **root**, and every later rsync (running as the runner
+user) fails against it permanently. `ansible/roles/server` claims the path before
+`Start Docker Stack` on a cold host, and `deploy.yml` `mkdir -p`s it to cover the
+ordering race on a warm one — nothing sequences the two workflows.
 
 ### Cloudflare bring-up (one-time, manual)
 

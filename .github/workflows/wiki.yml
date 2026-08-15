@@ -1,0 +1,105 @@
+name: Build the estate wiki
+
+# SERV-101. Deliberately a SEPARATE workflow from deploy.yml, for two reasons that
+# both came out of review on #108.
+#
+# 1. Documentation must not be on the critical path of shipping the stack. Built
+#    inside deploy.yml, this ran before `docker compose up -d` with no
+#    continue-on-error, so an npm registry outage, a `docker pull` failure, or a
+#    Vue-hostile character landing in an unrelated repo's README could abort a
+#    deploy — after the rsync step had already put new config on the box, leaving
+#    it holding new files with old containers. That is the exact opposite of the
+#    degrade-don't-fail behaviour the fetch step was written for.
+#
+# 2. The wiki's sources include README.md, CLAUDE.md and docs/**. Adding those to
+#    deploy.yml's `paths:` meant a docs-only edit ran `docker compose pull` — and
+#    under major.minor pins, a pull is precisely where a new patch release enters.
+#    So editing a README could roll a first-party service to a version nobody chose
+#    to ship at that moment. That unattended-change property is what SERV-75 took
+#    away from watchtower; it should not come back through the docs.
+#
+# The split lets each trigger set be honest: deploy.yml changes what runs, this
+# changes what the wiki says about it. The `wiki` container is long-lived and the
+# site is a bind-mounted directory, so publishing here needs no compose action at
+# all.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - 'wiki/**'
+      - 'docs/**'
+      - 'docker-compose.yml'
+      - 'docker-compose.dev.yml'
+      - 'versions.env'
+      - 'CLAUDE.md'
+      - 'PRINCIPLES.md'
+      - 'README.md'
+      - '.github/workflows/wiki.yml'
+
+# A second push while a build is running makes the first one's output stale before
+# it lands. Cancel it rather than racing two rsyncs at the same directory.
+concurrency:
+  group: wiki-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wiki:
+    runs-on: self-hosted
+    env:
+      DEPLOY_ROOT: /opt/construct-server
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Verify deploy root exists
+        run: |
+          if [ ! -d "$DEPLOY_ROOT" ]; then
+            echo "Error: deploy root $DEPLOY_ROOT does not exist."
+            echo "Bootstrap the host first: ansible-playbook ansible/site.yml"
+            exit 1
+          fi
+
+      - name: Build the site
+        # Built inside a container rather than on the runner. node IS on the bare
+        # system PATH here (/usr/bin/node), so this would work today — but the
+        # runner is a systemd service with no login shell, which is exactly the trap
+        # SERV-62 hit twice, and pinning the toolchain in an image means a host node
+        # upgrade cannot quietly change what gets built. The runner needs only docker.
+        #
+        # WIKI_DOCS_TOKEN is optional: without it the per-repo CLAUDE.md pages are
+        # skipped and everything derived from compose, versions.env and this repo's
+        # own docs still builds.
+        env:
+          WIKI_DOCS_TOKEN: ${{ secrets.WIKI_DOCS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${WIKI_DOCS_TOKEN:-}" ]; then
+            echo "WIKI_DOCS_TOKEN not set — per-repo doc pages will be skipped."
+          fi
+
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -e npm_config_cache=/tmp/.npm \
+            -e WIKI_BUILD_REF="${GITHUB_SHA:0:7}" \
+            -e WIKI_DOCS_TOKEN \
+            -v "$PWD:/repo" -w /repo/wiki \
+            node:22-alpine \
+            sh -c 'npm ci --no-audit --no-fund && npm run fetch && npm run build'
+
+      - name: Publish to the deploy root
+        # The built bundle is content, not an image, so a docs change updates the
+        # site with no container recreate at all. --delete so a page for a removed
+        # service does not linger: the deployed site is exactly what this commit
+        # generates, never an accumulation.
+        #
+        # mkdir before rsync matters on a host where the wiki container started
+        # before this workflow ever ran — see the ownership note in
+        # ansible/roles/server/tasks/main.yml.
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEPLOY_ROOT/wiki/site"
+          rsync -a --delete ./wiki/docs/.vitepress/dist/ "$DEPLOY_ROOT/wiki/site/"

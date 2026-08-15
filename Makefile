@@ -115,15 +115,19 @@ db-check: deploy-root
 # toolchain, so a host node upgrade cannot change what gets built, and it works on
 # a box with no node at all.
 WIKI_NODE_IMAGE ?= node:22-alpine
+# Every flag has to precede the image name — docker treats the first argument after
+# it as the container command, so a trailing `-e FOO` becomes an attempt to exec a
+# binary called `-e`. WIKI_DOCS_TOKEN is passed here rather than at the call site
+# for that reason; forwarding an unset variable is harmless.
 WIKI_RUN = docker run --rm --user "$$(id -u):$$(id -g)" \
-           -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
+           -e HOME=/tmp -e npm_config_cache=/tmp/.npm -e WIKI_DOCS_TOKEN \
            -v "$(CURDIR):/repo" -w /repo/wiki $(WIKI_NODE_IMAGE)
 
 # Cache each repo's CLAUDE.md/README.md from GitHub. Needs a token with contents
 # read across the estate's repos — set WIKI_DOCS_TOKEN. Without one, use
 # `make wiki-fetch-local`, which reads ~/projects instead.
 wiki-fetch:
-	$(WIKI_RUN) -e WIKI_DOCS_TOKEN sh -c 'npm ci --no-audit --no-fund && npm run fetch'
+	$(WIKI_RUN) sh -c 'npm ci --no-audit --no-fund && npm run fetch'
 
 # Same cache, filled from sibling checkouts. Faster, and picks up uncommitted
 # edits — but it describes whatever is in those working copies, not what shipped.

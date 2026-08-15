@@ -64,5 +64,11 @@ handled now. If you add a new ingestion path, you inherit them:
   another repo's README means that file *there*; left alone Vite tries to bundle it
   and fails the build. `absolutizeLinks()` rewrites them to GitHub, covering
   `src`, `href`, `srcset` and `poster`.
-- **`<KEY>-<NUM>` in a comment is an unclosed HTML tag.** `prose()` escapes angle
-  brackets outside backtick spans.
+- **`<KEY>` and `<your-token>` are unclosed HTML tags to Vue.** Two different fixes,
+  because the two sources differ. A *compose comment* is plain text, so `prose()`
+  escapes its angle brackets outside backtick spans, in the generator. An *ingested
+  README* is Markdown, where `<picture>` and `<img>` are legitimate and the link
+  rewriter depends on them — so escaping happens in `config.ts`, which sees the tag
+  name and can escape only the ones that are not real elements. Do not "simplify"
+  these into one: running `prose()` over ingested Markdown would break every README
+  that uses HTML.

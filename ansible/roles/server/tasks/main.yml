@@ -240,6 +240,24 @@
     group: "{{ user_name }}"
     mode: "0755"
 
+# The wiki's bind source (SERV-101). It is NOT in the repo — the site is generated,
+# so only wiki.yml's publish step creates it — which means on a cold host `Start
+# Docker Stack` below reaches a missing bind source first and the Docker daemon
+# creates it itself, as ROOT. Every later `rsync` from wiki.yml then runs as the
+# runner user (uid 1000) into a root-owned directory and fails, and keeps failing,
+# until someone chowns it by hand — which the runner deliberately cannot do.
+#
+# So claim it here, before compose ever sees it. Creating it empty is harmless:
+# nginx starts fine with nothing to serve and /healthz returns 503 until the first
+# wiki build lands, which is the honest answer to "is the bundle there".
+- name: Ensure the wiki site directory exists and is owned by user
+  file:
+    path: "{{ deploy_root }}/wiki/site"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: "0755"
+
 # Two tasks that wrote copyparty config out-of-band are deliberately gone (SERV-76).
 #
 # `Create copyparty configuration` wrote a four-line stub over

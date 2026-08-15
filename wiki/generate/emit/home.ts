@@ -43,7 +43,10 @@ export function emitHome(estate: Estate): Page {
         "- **[Host exposure](/topology/exposure)** — every port bound on the host, in one table.",
         "- **[Networks](/topology/networks)** — who can reach whom.",
         "- **[Startup dependencies](/topology/dependencies)** — `depends_on`, which is also the blast radius of an unscoped compose command.",
-        "- **[Repositories](/repos/)** — the 14 repos behind the stack, each with its own `CLAUDE.md` reproduced.",
+        // Computed, not written down. The stats table eight lines up renders the
+        // same number, and a hardcoded one contradicts it the day a repo is added —
+        // which is exactly the drift this tier exists to prevent.
+        `- **[Repositories](/repos/)** — the ${estate.repos.length} repos behind the stack, each with its own \`CLAUDE.md\` reproduced.`,
         "- **[Reference](/reference/)** — the design documents: delivery pipeline, edge, dev environment, estate principles.",
         "",
       ].join("\n"),
