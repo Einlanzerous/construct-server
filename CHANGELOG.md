@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.17.1](https://github.com/Einlanzerous/construct-server/compare/v4.17.0...v4.17.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **wiki:** authenticate the doc fetch and stop on rate limit (SERV-101) ([#109](https://github.com/Einlanzerous/construct-server/issues/109)) ([65f6f87](https://github.com/Einlanzerous/construct-server/commit/65f6f879fc4c16f0c412f313128e3ce17847ebfc))
+
 ## [4.17.0](https://github.com/Einlanzerous/construct-server/compare/v4.16.1...v4.17.0) (2026-08-15)
 
 
