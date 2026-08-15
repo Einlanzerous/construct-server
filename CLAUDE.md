@@ -99,15 +99,25 @@ anything deploys or gets versioned.
   `./scripts/check-compose-drift.sh`, which flags every container created from a
   foreign root, to see what is left; the list should only ever shrink. A *new*
   root appearing in that list is the real regression.
-- **First-party image tags are pinned, and `PROD_ENV_FILE` holds the values**
-  (SERV-74, SERV-88). Every first-party image reads `${<SERVICE>_TAG:-latest}`,
-  one variable per source repo — backend and frontend ship from one release and
-  pin together, so 10 variables cover 14 images. Services with release-please
-  versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so patch releases
-  still flow in on a `docker compose pull` and nothing else does; argosy and
-  drydock publish no semver and are pinned to a sha. Change a version by editing
-  the secret (`gh secret set PROD_ENV_FILE --env home-server`), never by editing a
-  checkout's `.env` — that is not what the stack reads.
+- **First-party image tags are pinned, and tracked `versions.env` holds the values**
+  (SERV-74, SERV-88, SERV-96). Every first-party image reads
+  `${<SERVICE>_TAG:-latest}`, one variable per source repo — backend and frontend
+  ship from one release and pin together, so 10 variables cover 14 images. Services
+  with release-please versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so
+  patch releases still flow in on a `docker compose pull` and nothing else does;
+  argosy and drydock publish no semver and are pinned to a sha. **Change a version by
+  editing `versions.env` and merging it** — not with `gh secret set`, which is where
+  these lived until SERV-96, and not by editing a deployed or checkout `.env`.
+  An image tag is not a credential, and keeping the pins in git is what gives
+  promote/rollback (SERV-78, SERV-79) something they can write: a workflow can commit
+  with `contents: write`, but no `permissions:` scope lets it edit a secret at all —
+  `secrets` is not one of them. It also makes a version change a reviewable diff and
+  gives rollback its index for free (`git log -p versions.env`).
+  The deployed `.env` is still the one complete environment compose reads:
+  `scripts/render-env.sh` merges the secret and `versions.env` into it, so the
+  Makefile targets, `check-compose-drift.sh` and a bare `docker compose` on the box
+  all resolve the same values. The pins land below a marker comment in that file and
+  are **regenerated every deploy** — editing them on the host is lost without warning.
   Only argosy and drydock are sha-pinned; every other first-party service tracks
   major.minor (amber and purser were the last two exceptions, reconciled by
   SERV-89).
@@ -125,7 +135,7 @@ anything deploys or gets versioned.
   both halves matter. It cannot simply be deleted: an unset **or empty** var
   interpolates to `image: …/argosy:`, which is neither an error nor `latest`, and
   a fresh host with no pins would stop starting. But left unguarded, a var dropped
-  from the secret does not fail either — it silently floats that service back to
+  from `versions.env` does not fail either — it silently floats that service back to
   `latest`. So the fallback stays *and* `deploy.yml` asserts on `docker compose
   config --images`, failing loudly if any first-party image resolves to `:latest`
   or a bare `:`. The two guard different things; neither supersedes the other, and
