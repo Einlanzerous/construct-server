@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.17.0](https://github.com/Einlanzerous/construct-server/compare/v4.16.1...v4.17.0) (2026-08-15)
+
+
+### Features
+
+* **dev:** second compose project with its own network and Postgres (SERV-77) ([#106](https://github.com/Einlanzerous/construct-server/issues/106)) ([2d02712](https://github.com/Einlanzerous/construct-server/commit/2d027122d5e635cc854377585a3b6de9ad09068f))
+* **wiki:** tier-1 estate wiki, generated from the stack definition (SERV-101, SERV-96) ([#108](https://github.com/Einlanzerous/construct-server/issues/108)) ([9b413d8](https://github.com/Einlanzerous/construct-server/commit/9b413d8cd26e5f8debc982f9b6a0f7d806d08b0f))
+
+
+### Bug Fixes
+
+* **bakeoff:** muse-glimmer:30b evaluation + grade any results dir (SERV-95) ([#107](https://github.com/Einlanzerous/construct-server/issues/107)) ([c0db968](https://github.com/Einlanzerous/construct-server/commit/c0db96899fb6672540b4ce5d52af34c8aa88eab6))
+* **deploy:** pin real first-party tag values and fail loudly if they vanish (SERV-88) ([#103](https://github.com/Einlanzerous/construct-server/issues/103)) ([dab5e05](https://github.com/Einlanzerous/construct-server/commit/dab5e05b3702e7b57e55d0abc73ccea3a5cfc08b))
+* **deploy:** reconcile amber and purser onto release tags (SERV-89) ([#105](https://github.com/Einlanzerous/construct-server/issues/105)) ([34b1f15](https://github.com/Einlanzerous/construct-server/commit/34b1f1555a629d5540bd6aae58e7316ec704dd0d))
+
 ## [4.16.1](https://github.com/Einlanzerous/construct-server/compare/v4.16.0...v4.16.1) (2026-08-09)
 
 
