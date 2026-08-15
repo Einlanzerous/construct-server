@@ -180,10 +180,23 @@ signet target add --secret construct-server/WIKI_DOCS_TOKEN --gh-repo Einlanzero
 signet sync
 ```
 
-It needs **Contents: Read** on the estate's repos and nothing else. Without it the
-fetch still succeeds for public repos and the private ones render their
-compose-derived facts with a link out to GitHub — the build never fails on it. A
-documentation fetch must not be able to block shipping the stack.
+It needs **Contents: Read** on the estate's repos and nothing else.
+
+**The rate limit matters more than the privacy.** The first run after merge made
+this concrete: unauthenticated GitHub API calls are capped at 60/hour per IP, this
+fetch makes 12 repos × 4 files = 48, and on a shared runner IP it 403'd partway
+through — most repo pages came out empty even though ten of the twelve repos are
+public. So `wiki.yml` passes the workflow's own `GITHUB_TOKEN` as a fallback, which
+costs nothing to configure and lifts the ceiling to 1,000/hour.
+
+That leaves `WIKI_DOCS_TOKEN` responsible for exactly one thing: the two **private**
+repos, `amber` and `switchyard`. Without it their pages render compose-derived facts
+and a link out to GitHub.
+
+Neither token can fail the build. `fetch.ts` prefers `WIKI_DOCS_TOKEN`, falls back
+to `GITHUB_TOKEN`, degrades to a warning if neither can read a repo, and stops the
+loop on the first rate-limit response rather than turning one problem into fifty
+lines of noise. A documentation fetch must not be able to block shipping the stack.
 
 ## Why not a wiki app
 
