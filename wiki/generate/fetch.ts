@@ -39,11 +39,18 @@ async function main(): Promise<void> {
 
   const token = process.env.WIKI_DOCS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "";
   if (!local && !token) {
-    // Worth saying out loud: these repos are private, so an unauthenticated run
-    // gets 404 on every file and produces a cache that is empty but not obviously
-    // broken. Naming the cause here is the difference between a puzzling wiki and
-    // an actionable warning.
-    warn("no token in WIKI_DOCS_TOKEN / GH_TOKEN / GITHUB_TOKEN — private repos will return 404");
+    // Two distinct failures, and the rate limit is the one that actually bites.
+    // Ten of the twelve estate repos are public, so an unauthenticated run does
+    // not 404 its way to an empty cache — it succeeds until the 60/hour per-IP
+    // quota runs out partway through, then reports nothing for everything after
+    // that point. Only amber and switchyard are private. Naming both causes is
+    // the difference between a puzzling wiki and an actionable warning, and this
+    // string is the copy someone actually hits when debugging an empty cache.
+    warn(
+      "no token in WIKI_DOCS_TOKEN / GH_TOKEN / GITHUB_TOKEN — unauthenticated requests get " +
+        "60/hour per IP and this fetch needs ~48, so it will run out partway through; " +
+        "the private repos (amber, switchyard) will also 404",
+    );
   }
 
   const repos = discoverRepos();
@@ -58,21 +65,28 @@ async function main(): Promise<void> {
     mkdirSync(dest, { recursive: true });
 
     for (const file of REPO_DOC_FILES) {
-      // Once the hourly quota is gone it is gone; the remaining requests cannot
-      // succeed and only turn one actionable problem into fifty lines of noise.
-      if (rateLimited) {
-        absent++;
-        continue;
-      }
       // This repo is already on disk, and the working tree is the truthful answer
       // for it: the wiki is generated from the same checkout being deployed, so
       // fetching `main` would describe a different commit than the one shipping.
+      //
+      // The rate-limit guard is the LAST arm, below both local reads, and the
+      // ordering is load-bearing. A spent quota says nothing about a file already
+      // on disk, and `discoverRepos()` sorts, so construct-server lands fifth —
+      // a quota that dies in the first four repos would drop this repo's own
+      // CLAUDE.md, README.md, PRINCIPLES.md and REVIEW.md, the largest single
+      // piece of writing in the wiki, at a cost of zero API calls. Guarding the
+      // whole branch would make a rate-limited run strictly worse than it was
+      // before the guard existed. Only the network arm skips: once the hourly
+      // quota is gone it is gone, and the remaining requests cannot succeed, they
+      // only turn one actionable problem into fifty lines of noise.
       const body =
         repo === SELF
           ? readLocal(join(REPO_ROOT, file))
           : local
             ? readLocal(join(localRoot, repo, file))
-            : await fetchFile(repo, file, token);
+            : rateLimited
+              ? null
+              : await fetchFile(repo, file, token);
 
       if (body === null) {
         absent++;
@@ -109,18 +123,19 @@ function readLocal(path: string): string | null {
 }
 
 /**
+ * Set once the hourly quota is exhausted, to stop the loop rather than burn
+ * through every remaining repo re-learning the same thing. Unauthenticated calls
+ * get 60/hour per IP and this fetch needs ~48, so on a shared runner IP an
+ * unauthenticated run reliably dies partway through. Only the network arm of the
+ * fetch loop consults this — reads from disk are unaffected by it.
+ */
+let rateLimited = false;
+
+/**
  * `Accept: application/vnd.github.raw` returns the file body directly — no base64
  * round-trip and no JSON to parse. A 404 is the ordinary case for a repo that
  * simply has no REVIEW.md and is not worth a warning; anything else is.
  */
-/**
- * Set once the hourly quota is exhausted, to stop the loop rather than burn
- * through every remaining repo re-learning the same thing. Unauthenticated calls
- * get 60/hour per IP and this fetch needs ~48, so on a shared runner IP an
- * unauthenticated run reliably dies partway through.
- */
-let rateLimited = false;
-
 async function fetchFile(repo: string, file: string, token: string): Promise<string | null> {
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${repo}/contents/${file}`;
   const headers: Record<string, string> = {
