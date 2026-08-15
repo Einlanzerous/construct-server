@@ -58,6 +58,12 @@ async function main(): Promise<void> {
     mkdirSync(dest, { recursive: true });
 
     for (const file of REPO_DOC_FILES) {
+      // Once the hourly quota is gone it is gone; the remaining requests cannot
+      // succeed and only turn one actionable problem into fifty lines of noise.
+      if (rateLimited) {
+        absent++;
+        continue;
+      }
       // This repo is already on disk, and the working tree is the truthful answer
       // for it: the wiki is generated from the same checkout being deployed, so
       // fetching `main` would describe a different commit than the one shipping.
@@ -107,6 +113,14 @@ function readLocal(path: string): string | null {
  * round-trip and no JSON to parse. A 404 is the ordinary case for a repo that
  * simply has no REVIEW.md and is not worth a warning; anything else is.
  */
+/**
+ * Set once the hourly quota is exhausted, to stop the loop rather than burn
+ * through every remaining repo re-learning the same thing. Unauthenticated calls
+ * get 60/hour per IP and this fetch needs ~48, so on a shared runner IP an
+ * unauthenticated run reliably dies partway through.
+ */
+let rateLimited = false;
+
 async function fetchFile(repo: string, file: string, token: string): Promise<string | null> {
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${repo}/contents/${file}`;
   const headers: Record<string, string> = {
@@ -118,6 +132,22 @@ async function fetchFile(repo: string, file: string, token: string): Promise<str
   try {
     const res = await fetch(url, { headers });
     if (res.status === 404) return null;
+
+    // 403/429 with the remaining counter at zero is the rate limit, not a
+    // permission problem — worth distinguishing, because the fixes are different
+    // and "403" alone reads as "your token is wrong".
+    if ((res.status === 403 || res.status === 429) && res.headers.get("x-ratelimit-remaining") === "0") {
+      const reset = Number(res.headers.get("x-ratelimit-reset") ?? 0);
+      const mins = reset ? Math.max(0, Math.ceil((reset * 1000 - Date.now()) / 60000)) : null;
+      rateLimited = true;
+      warn(
+        `GitHub API rate limit exhausted${mins === null ? "" : `, resets in ~${mins} min`}. ` +
+          `Skipping the rest of the fetch.\n` +
+          `      ${token ? "This token's quota is spent." : "Unauthenticated requests get 60/hour; set WIKI_DOCS_TOKEN or GITHUB_TOKEN for 1,000."}`,
+      );
+      return null;
+    }
+
     if (!res.ok) {
       warn(`${repo}/${file}: HTTP ${res.status} ${res.statusText}`);
       return null;
