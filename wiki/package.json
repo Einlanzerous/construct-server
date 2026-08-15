@@ -1,0 +1,25 @@
+{
+  "name": "@construct/wiki",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Generated tier-1 estate wiki (SERV-101). The generator is the product; VitePress is a view of it.",
+  "scripts": {
+    "fetch": "tsx generate/fetch.ts",
+    "fetch:local": "tsx generate/fetch.ts --local",
+    "generate": "tsx generate/index.ts",
+    "build": "npm run generate && vitepress build docs",
+    "dev": "npm run generate && vitepress dev docs --host",
+    "preview": "vitepress preview docs --host",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.64",
+    "mermaid": "^11.4.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitepress": "^1.6.3",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "yaml": "^2.6.1"
+  }
+}

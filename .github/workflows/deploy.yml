@@ -17,6 +17,16 @@ on:
       # (SERV-78, SERV-79) will commit it — so a push that repoints a tag has to be
       # able to reach the box on its own.
       - 'versions.env'
+      # The wiki is generated from the stack definition and rebuilt on every deploy
+      # (SERV-101), so the sources it reads are deploy triggers too. A docs-only
+      # push therefore runs the full job: that is cheap, because the deploy is
+      # idempotent — `pull && up -d` recreates only what actually drifted — and it
+      # is the price of the wiki never describing a stack that is not the live one.
+      - 'wiki/**'
+      - 'docs/**'
+      - 'CLAUDE.md'
+      - 'PRINCIPLES.md'
+      - 'README.md'
 
 jobs:
   deploy:
@@ -59,6 +69,51 @@ jobs:
           rsync -a --delete ./aperture/  "$DEPLOY_ROOT/aperture/"
           rsync -a --delete ./scripts/   "$DEPLOY_ROOT/scripts/"
           rsync -a docker-compose.yml Makefile versions.env "$DEPLOY_ROOT/"
+
+      - name: Build the estate wiki
+        # SERV-101. Regenerated on every deploy so the wiki cannot describe a version
+        # of the stack that is not the one being shipped — same discipline
+        # release-please has over CHANGELOG.md: one owner, and it is not a person.
+        #
+        # Built inside a container rather than on the runner. node IS on the bare
+        # system PATH here (/usr/bin/node), so this would work today — but the runner
+        # is a systemd service with no login shell, which is exactly the trap SERV-62
+        # hit twice, and pinning the toolchain in an image means a host node upgrade
+        # cannot quietly change what gets built. The runner needs only docker.
+        #
+        # WIKI_DOCS_TOKEN is optional: without it the per-repo CLAUDE.md pages are
+        # skipped and the wiki still generates everything derived from compose,
+        # versions.env and this repo's own docs. Degrading is the right failure mode
+        # — a documentation fetch must never be able to block shipping the stack.
+        env:
+          WIKI_DOCS_TOKEN: ${{ secrets.WIKI_DOCS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${WIKI_DOCS_TOKEN:-}" ]; then
+            echo "WIKI_DOCS_TOKEN not set — per-repo doc pages will be skipped."
+            echo "Everything derived from compose, versions.env and this repo's docs still builds."
+          fi
+
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -e npm_config_cache=/tmp/.npm \
+            -e WIKI_BUILD_REF="${GITHUB_SHA:0:7}" \
+            -e WIKI_DOCS_TOKEN \
+            -v "$PWD:/repo" -w /repo/wiki \
+            node:22-alpine \
+            sh -c 'npm ci --no-audit --no-fund && npm run fetch && npm run build'
+
+      - name: Publish the wiki to the deploy root
+        # The built bundle is content, not an image: rsyncing it means a docs change
+        # updates the site with no container recreate at all. --delete so a page for
+        # a removed service does not linger — the deployed site is exactly what this
+        # commit generates, never an accumulation.
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEPLOY_ROOT/wiki/site"
+          rsync -a --delete ./wiki/docs/.vitepress/dist/ "$DEPLOY_ROOT/wiki/site/"
 
       - name: Restore Secrets
         # The deployed environment comes from two sources with different homes (SERV-96):

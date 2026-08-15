@@ -21,6 +21,9 @@ anything deploys or gets versioned.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
 - `scripts/check-compose-drift.sh` — the SERV-8 guardrail (see Invariants).
+- `wiki/` — the generated estate wiki (SERV-101). A TypeScript generator plus a
+  VitePress renderer; `wiki/docs/` is **generated and wiped on every run**. Design
+  of record in `docs/estate-wiki.md`; see also the invariant below.
 - `services/` — first-party service source that hasn't graduated to its own repo.
 - `agent/rules/`, `bakeoff/` — local-model rules and the model bakeoff harness.
 - `PRINCIPLES.md` — **cross-repo** estate defaults (languages, stack, release
@@ -165,6 +168,19 @@ anything deploys or gets versioned.
   setting a Host header — Cloudflare Access is enforced at Cloudflare's edge, not
   here. Giving dev an edge is SERV-93. Isolation is asserted by
   `make dev-verify-isolation`; dev-vs-prod config drift by `make dev-parity`.
+- **The wiki is generated, and its generator must never read a resolved
+  environment** (SERV-101). `wiki/docs/` is wiped and rewritten on every run, so a
+  hand-written page there is deleted without warning — anything a person wants to
+  write belongs in the relevant repo's `CLAUDE.md`, or in tier 2 (IDEA-21). The
+  generator parses the **raw** `docker-compose.yml` and never `docker compose
+  config`, never a `.env`: the resolved view interpolates every variable, so
+  reading it would publish the contents of `PROD_ENV_FILE` onto a Markdown page.
+  The tracked compose file holds no secret by construction, which is the entire
+  safety argument — env tables therefore show variable *names*, and values only
+  where the tracked file spells one out. It also parses raw in order to keep
+  **comments**, which are the best documentation in that file and which
+  `docker compose config` discards. Build it in a container (`make wiki-build`), not
+  against host node.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.

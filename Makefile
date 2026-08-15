@@ -1,6 +1,7 @@
 .PHONY: network up down recreate force-recreate drift-check db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
-        dev-db-init dev-db-shell dev-parity dev-verify-isolation
+        dev-db-init dev-db-shell dev-parity dev-verify-isolation \
+        wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -101,6 +102,46 @@ db-check: deploy-root
 	@$(COMPOSE) exec postgres psql -U cook_book_user -d cook_book -c "SELECT 1 AS connected;"
 	@echo "=== User access: switchyard ==="
 	@$(COMPOSE) exec postgres psql -U switchyard_user -d switchyard -c "SELECT 1 AS connected;"
+
+# ============================================================================
+# ESTATE WIKI (SERV-101) — generated docs
+# ============================================================================
+# These act on this CHECKOUT, not on the deploy root: the wiki is built from
+# source and published by deploy.yml, so there is nothing here to point at the
+# live stack. `make wiki-serve` is the loop you want while working on the
+# generator — it regenerates, then serves with hot reload.
+#
+# The build runs in a container for the same reason deploy.yml does: it pins the
+# toolchain, so a host node upgrade cannot change what gets built, and it works on
+# a box with no node at all.
+WIKI_NODE_IMAGE ?= node:22-alpine
+WIKI_RUN = docker run --rm --user "$$(id -u):$$(id -g)" \
+           -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
+           -v "$(CURDIR):/repo" -w /repo/wiki $(WIKI_NODE_IMAGE)
+
+# Cache each repo's CLAUDE.md/README.md from GitHub. Needs a token with contents
+# read across the estate's repos — set WIKI_DOCS_TOKEN. Without one, use
+# `make wiki-fetch-local`, which reads ~/projects instead.
+wiki-fetch:
+	$(WIKI_RUN) -e WIKI_DOCS_TOKEN sh -c 'npm ci --no-audit --no-fund && npm run fetch'
+
+# Same cache, filled from sibling checkouts. Faster, and picks up uncommitted
+# edits — but it describes whatever is in those working copies, not what shipped.
+wiki-fetch-local:
+	cd wiki && npm run fetch:local
+
+# Emit the Markdown corpus without building the site. The fast inner loop when
+# changing an emitter: it is the corpus that matters, the site is a view of it.
+wiki-generate:
+	cd wiki && npm run generate
+
+# Full static build, exactly as deploy.yml does it.
+wiki-build:
+	$(WIKI_RUN) sh -c 'npm ci --no-audit --no-fund && npm run build'
+
+# Local preview with hot reload on http://localhost:5173.
+wiki-serve:
+	cd wiki && npm run dev
 
 # ============================================================================
 # DEV ENVIRONMENT (SERV-77) — the `construct-server-dev` compose project

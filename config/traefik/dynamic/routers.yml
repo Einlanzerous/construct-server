@@ -208,6 +208,18 @@ http:
       rule: "Host(`lyceum.zerogravity.industries`)"
       service: lyceum
 
+    # Estate wiki (SERV-101): generated static site, tunneled + Cloudflare Access.
+    # `internal` only, like switchyard and lyceum — the wiki assembles the whole
+    # stack's topology, host exposure and environment-variable names onto one
+    # searchable site, which is exactly the reconnaissance summary that must never
+    # be reachable from the public entrypoint. It holds no secret values, but a map
+    # of the estate is not something to serve to the WAN either.
+    wiki:
+      entryPoints:
+        - internal
+      rule: "Host(`wiki.zerogravity.industries`)"
+      service: wiki
+
   services:
     argosy:
       loadBalancer:
@@ -227,6 +239,13 @@ http:
         # on :4005 — no separate frontend, so route the tunneled host straight at it.
         servers:
           - url: "http://lyceum:4005"
+
+    wiki:
+      loadBalancer:
+        # nginx serving the generated bundle from a read-only bind mount. No host
+        # port exists, so this router is the only route to it.
+        servers:
+          - url: "http://wiki:80"
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.
