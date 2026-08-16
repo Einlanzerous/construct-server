@@ -51,6 +51,14 @@ anything deploys or gets versioned.
   Environment — deliberately **not** `home-server`, which would put a human in front
   of every ordinary deploy. A hand-edit of `versions.env` still works and still
   deploys; it just skips the registry check and the gate.
+  It needs **two** repo settings, and asserts both rather than failing obscurely:
+  that environment must have a required reviewer, and the `Proect Main` ruleset must
+  list **GitHub Actions (Integration)** in its bypass list. That ruleset requires a
+  pull request for `main` and bypasses only the *admin* role, but a workflow
+  authenticates as `github-actions[bot]` with `contents: write` — so without the
+  bypass the pin commit is rejected. The human gate is not lost by granting it; it
+  moves to the environment approval, where the approver sees the service, version and
+  reason instead of a one-line diff.
 - Secrets the **stack** consumes reach it as `PROD_ENV_FILE`, a GitHub
   Environment secret on `home-server` — not a repo-level secret. Update it with
   `gh secret set PROD_ENV_FILE --env home-server`.

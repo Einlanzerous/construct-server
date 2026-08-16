@@ -123,6 +123,60 @@ jobs:
           fi
           echo "Gate present: this run was approved by a required reviewer."
 
+      - name: Verify this workflow can actually push to main
+        # This workflow commits straight to main, and the `Proect Main` ruleset requires a
+        # pull request for changes to that branch. Its only bypass actor is the *admin*
+        # repository role, and GITHUB_TOKEN acts as github-actions[bot] with write
+        # permission — not admin. So without a bypass for the Actions app, the push at the
+        # end of this job is rejected.
+        #
+        # Checked HERE rather than discovered at the push, because of when this runs: a
+        # rollback happens with prod already broken, and the worst moment to meet a
+        # ruleset error is halfway through fixing an outage. This costs one API call and
+        # fails before the registry check, the file edit, and the human approval are spent.
+        #
+        # If you would rather not grant the bypass, the alternative is to have this open a
+        # PR instead of pushing — but that puts a human approval in the rollback path,
+        # which is the one path that most needs to be fast, and the approval already
+        # happened at the environment gate above.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" 2>/dev/null || echo '[]')"
+          if ! printf '%s' "$rules" | jq -e 'any(.[]; .type == "pull_request")' >/dev/null 2>&1; then
+            echo "No pull_request rule on main — a direct push is allowed."
+            exit 0
+          fi
+
+          # A PR is required for main. The push only works if an Integration (GitHub App)
+          # actor bypasses, since that is what a workflow authenticates as.
+          bypassed=0
+          for rid in $(printf '%s' "$rules" | jq -r '[.[].ruleset_id] | unique | .[]'); do
+            actors="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${rid}" --jq '.bypass_actors[]?.actor_type' 2>/dev/null || true)"
+            if printf '%s\n' "$actors" | grep -qx 'Integration'; then bypassed=1; fi
+          done
+
+          if [ "$bypassed" -eq 0 ]; then
+            echo "Error: main requires a pull request, and no GitHub App can bypass it."
+            echo
+            echo "This workflow pushes the pin change directly to main, so that push will be"
+            echo "rejected. GITHUB_TOKEN acts as github-actions[bot] (write), and the only"
+            echo "bypass actor configured is the admin repository role."
+            echo
+            echo "Fix under Settings > Rules > Proect Main > Bypass list:"
+            echo "  add 'GitHub Actions' (Integration) with bypass mode 'Always'."
+            echo
+            echo "The human gate is not lost by doing this — it moves to the"
+            echo "production-promote environment approval, which is arguably the better"
+            echo "place for it: the approver sees the service, version and reason rather"
+            echo "than a one-line diff."
+            echo
+            echo "Nothing was committed."
+            exit 1
+          fi
+          echo "A GitHub App bypass is configured — the push to main will be accepted."
+
       - name: Resolve the pin variable
         # One variable per SOURCE REPO, not per image — a repo's backend and frontend ship
         # from one release, so 10 variables cover 14 images (versions.env). The service
