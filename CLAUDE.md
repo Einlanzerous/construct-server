@@ -143,10 +143,10 @@ anything deploys or gets versioned.
   config --images`, failing loudly if any first-party image resolves to `:latest`
   or a bare `:`. The two guard different things; neither supersedes the other, and
   a failing deploy is not fixed by deleting the check.
-- **`postgres` is pinned to an exact patch, and recreating it breaks the Node
-  services** (SERV-102). Every first-party service depends on the one postgres
-  container, so it has the largest blast radius in the stack — and under the old
-  floating `16-alpine` tag it was recreated whenever upstream published, on a
+- **`postgres` is pinned by digest, and recreating it breaks the Node services**
+  (SERV-102). Every first-party service depends on the one postgres container, so
+  it has the largest blast radius in the stack — and under the old floating
+  `16-alpine` tag it was recreated whenever upstream published, on a
   `docker compose pull` aimed at something else entirely. When that happened on
   2026-08-15 postgres moved to a new address on `construct_net` and **switchyard and
   interlock-worker never recovered**: Go's drivers re-resolve DNS per connection
@@ -157,6 +157,12 @@ anything deploys or gets versioned.
   version-string edit: expect to force-recreate the Node services afterwards until
   they re-resolve on error (SWY-267, ITLK-30). Third-party *leaf* images still float
   by design; postgres is pinned because it is shared.
+  **A digest, not a patch tag** — `16.15-alpine` is itself mutable, and upstream had
+  already rebuilt it (prod ran `sha256:44c4ee98…` while the tag pointed at
+  `sha256:075f7ba6…`, both reporting 16.15). A patch-tag pin looks precise and still
+  moves. Note also that **any** edit to the image string costs one recreate even when
+  the image is byte-identical: compose decides from the literal spec, not from what it
+  resolves to.
 - **Docker computes health and acts on none of it.** `restart: unless-stopped`
   restarts **exited** containers, not unhealthy ones, so a failing healthcheck has no
   consequence on its own — switchyard sat at a failing streak of 12 through the

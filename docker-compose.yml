@@ -235,25 +235,50 @@ services:
       - semaphore_data:/etc/semaphore
 
   # --- DATABASE (Shared PostgreSQL) ---
-  # Pinned to an exact patch, NOT `16-alpine` (SERV-102). Every first-party service
-  # depends on this one container, so recreating it is the single largest blast radius
-  # in the stack — and under a floating `16-alpine` tag that happened whenever upstream
-  # published, on a `docker compose pull` nobody aimed at postgres. On 2026-08-15 it
-  # rolled to 16.15 mid-deploy, postgres moved to a new address on construct_net, and
-  # switchyard and interlock-worker sat on the dead IP for an hour (see below).
+  # Pinned BY DIGEST, not by tag (SERV-102). Every first-party service depends on this
+  # one container, so recreating it is the single largest blast radius in the stack —
+  # and under a floating `16-alpine` tag that happened whenever upstream published, on a
+  # `docker compose pull` nobody aimed at postgres. On 2026-08-15 it rolled mid-deploy,
+  # postgres moved to a new address on construct_net, and switchyard and interlock-worker
+  # sat on the dead IP for an hour (see below).
   #
-  # This does not fix the reconnect fragility, and is not meant to: a deliberate
-  # postgres upgrade would still take the Node services down. What it buys is that the
-  # upgrade happens when someone chose it, in a reviewable diff, rather than as a
-  # surprise attached to an unrelated push — which matters much more now that
-  # promote/rollback (SERV-78, SERV-79) make a deploy something we run routinely and
-  # expect to be safe.
+  # A digest and not `16.15-alpine`, because an exact patch tag is still mutable and
+  # this was measured rather than assumed: at the time of pinning, the running container
+  # was `sha256:44c4ee98…` while `16.15-alpine` in the registry had already moved to
+  # `sha256:075f7ba6…`. Both report `postgres 16.15` — upstream rebuilds the same version
+  # for base-image updates. So a patch-tag pin would have looked precise, still pulled a
+  # different image, and still recreated the container. Only the digest is immutable.
+  #
+  # The digest chosen is the one ALREADY RUNNING, so this pin changes no bits. It still
+  # costs exactly one recreate: compose decides to recreate from the literal image string
+  # in the service spec, not from what that string resolves to, so any edit here recreates
+  # the container even when the image is byte-identical (verified with `up -d --dry-run`).
+  # Pinning to the running digest is what keeps that recreate as cheap as it can be — the
+  # container comes back on the same image, so nothing but the address changed — and it
+  # separates "stop postgres moving on its own" from "update postgres", leaving the second
+  # to happen on purpose rather than riding along with the first.
+  #
+  # BUDGET FOR THAT RECREATE WHEN THIS LANDS: postgres comes back in about a second, but
+  # switchyard and interlock-worker will not follow it to the new address, so run
+  #   make force-recreate svc=switchyard
+  #   make force-recreate svc=interlock-worker
+  # immediately after the deploy that applies this. The new post-deploy health gate will
+  # also fail that run, correctly — the stack really is broken until those two are
+  # recreated.
+  #
+  # This does not fix the reconnect fragility, and is not meant to: a deliberate postgres
+  # upgrade would still take the Node services down. What it buys is that the upgrade
+  # happens when someone chose it, in a reviewable diff, rather than as a surprise
+  # attached to an unrelated push — which matters much more now that promote/rollback
+  # (SERV-78, SERV-79) make a deploy something we run routinely and expect to be safe.
   #
   # Bumping this is a real upgrade, not a version-string edit: check the release notes,
-  # and expect the Node services to need `make force-recreate` afterwards until their
-  # pools re-resolve on error (SWY-267, ITLK-30).
+  # expect the container to be recreated, and expect the Node services to need
+  # `make force-recreate` afterwards until their pools re-resolve on error
+  # (SWY-267, ITLK-30). Find the current digest with:
+  #   docker manifest inspect -v postgres:16-alpine | jq -r '.[0].Descriptor.digest'
   postgres:
-    image: postgres:16.15-alpine
+    image: postgres:16.15-alpine@sha256:44c4ee9810eff91f7eab4d822642e01115b1a9eccce4bcbdde7604752d68eac6
     container_name: postgres
     restart: unless-stopped
     ports:
