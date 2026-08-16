@@ -144,17 +144,32 @@ jobs:
         run: |
           set -euo pipefail
           rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" 2>/dev/null || echo '[]')"
-          if ! printf '%s' "$rules" | jq -e 'any(.[]; .type == "pull_request")' >/dev/null 2>&1; then
-            echo "No pull_request rule on main — a direct push is allowed."
+          blocking="$(printf '%s' "$rules" | jq -r '[.[] | select(.type == "pull_request" or .type == "update") | .ruleset_id] | unique | .[]' 2>/dev/null || true)"
+          if [ -z "$blocking" ]; then
+            echo "No pull_request or update rule on main — a direct push is allowed."
             exit 0
           fi
 
-          # A PR is required for main. The push only works if an Integration (GitHub App)
-          # actor bypasses, since that is what a workflow authenticates as.
+          # Ask GitHub directly rather than inferring from the bypass list. Fetching a
+          # ruleset returns `current_user_can_bypass` evaluated for the CALLING token, so
+          # this answers the actual question — "can *this* job push?" — instead of
+          # guessing from actor types, and it stays correct if the bypass is later granted
+          # some other way (a specific app, a deploy key, a role change).
           bypassed=0
-          for rid in $(printf '%s' "$rules" | jq -r '[.[].ruleset_id] | unique | .[]'); do
-            actors="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${rid}" --jq '.bypass_actors[]?.actor_type' 2>/dev/null || true)"
-            if printf '%s\n' "$actors" | grep -qx 'Integration'; then bypassed=1; fi
+          for rid in $blocking; do
+            verdict="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${rid}" --jq '.current_user_can_bypass // "unknown"' 2>/dev/null || echo unknown)"
+            echo "  ruleset $rid: current_user_can_bypass=$verdict"
+            case "$verdict" in
+              always|pull_requests_only) bypassed=1 ;;
+              unknown)
+                # Field absent (older API). Fall back to the actor-type heuristic: a
+                # workflow authenticates as a GitHub App installation, so an Integration
+                # bypass actor is the one that would cover it.
+                if gh api "repos/${GITHUB_REPOSITORY}/rulesets/${rid}" --jq '.bypass_actors[]?.actor_type' 2>/dev/null | grep -qx 'Integration'; then
+                  bypassed=1
+                fi
+                ;;
+            esac
           done
 
           if [ "$bypassed" -eq 0 ]; then
@@ -294,8 +309,14 @@ jobs:
           git add versions.env
           git commit -m "$subject" -m "Requested by ${ACTOR} via the ${KIND} workflow." -m "Reason: ${REASON}"
 
-          # main is unprotected, so this lands directly. Rebase first in case main moved
-          # while this run waited for its approval, which can be a long time.
+          # main IS protected — by the `Proect Main` ruleset, not classic branch
+          # protection, which is why `branches/main/protection` returns 404 and makes it
+          # look unprotected. This push therefore only lands because the job asserted
+          # earlier that it can bypass that ruleset; without the bypass it is rejected
+          # with GH013.
+          #
+          # Rebase first in case main moved while this run waited for its approval, which
+          # can be a long time. That also satisfies the ruleset's required_linear_history.
           git pull --rebase origin main
           git push origin HEAD:main
           echo "COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
