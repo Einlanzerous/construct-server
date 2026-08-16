@@ -18,6 +18,16 @@ on:
       # able to reach the box on its own.
       - 'versions.env'
 
+# Two deploys running at once would race on the same deploy root, the same rendered .env
+# and the same containers. That was unlikely while a deploy only ever came from a person
+# merging, but promote.yml (SERV-78) dispatches this workflow, so a promote landing
+# alongside an ordinary merge is now an ordinary occurrence. Queue rather than cancel:
+# a cancelled deploy can have already rsynced files or recreated half the stack, and
+# leaving that half-applied is worse than waiting.
+concurrency:
+  group: deploy-construct
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: self-hosted

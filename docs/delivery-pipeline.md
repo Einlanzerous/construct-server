@@ -253,8 +253,37 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
 **8. Promote.** `workflow_dispatch` with an explicit version input → pin that semver →
 `docker compose pull && up -d` → record a prod `deployments` row.
 
+*Shipped as `promote.yml` (SERV-78, SERV-79), with three things worth recording:*
+
+- *It is **one workflow with a `kind` input**, not a promote and a rollback. "Make prod
+  run this exact version" is the same operation in both directions, and rollback is the
+  path you least want to be the less-tested one, since it runs when prod is already
+  broken.*
+- *It **does not deploy**. It edits one line of `versions.env` and commits; `deploy.yml`
+  already fires on a push touching that file, and is the only thing that deploys
+  (SERV-76). This keeps the deploy path single, and it makes the recreate scoped for
+  free: `deploy.yml` runs a plain `up -d`, so compose recreates only what drifted, which
+  after a one-line pin change is the one service named.*
+- *It verifies the tag exists in the registry **before** committing, across every image
+  behind the pin — a repo's backend and frontend ship from one release, so a version
+  that published for one and not the other is refused rather than half-deployed.*
+
+*The `deployments` row is the piece still outstanding: the commit is the durable record
+for now (`git log -p versions.env`), and posting to Switchyard is SWY-191.*
+
 **9. Post-prod smoke.** On failure, auto-rollback to the last-good version, which the
 `deployments` table already knows.
+
+*Half of this exists. `deploy.yml` now ends with `scripts/assert-healthy.sh`, so a
+deploy that leaves anything unhealthy fails loudly instead of going green (SERV-102) —
+that is the smoke. It **detects rather than recovers**: `up -d` has already run by the
+time it fails. Wiring the failure to an automatic re-run of `promote.yml` pointed
+backwards is what remains, and it needs step 1's ledger to answer "back to what".*
+
+*One dependency that was not obvious until it bit: this step presumes health is a
+question the stack can answer, and until SERV-102 it partly could not — `interlock-worker`
+had no healthcheck at all, and an unhealthy container triggered nothing, because Docker
+restarts **exited** containers and not unhealthy ones.*
 
 **10. Close.** Ticket resolution → `released`.
 
