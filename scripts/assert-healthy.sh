@@ -111,8 +111,9 @@ statuses() {
 
 container_ids="$(ids)" || { err "ERROR: 'docker compose ps' failed — is the daemon up and the project deployed?"; exit 2; }
 if [ -z "$container_ids" ]; then
-  err "ERROR: no running containers found in $DEPLOY_ROOT"
-  err "Nothing to assert on. If this ran straight after 'up -d', the stack failed to start."
+  err "ERROR: no containers found in $DEPLOY_ROOT"
+  err "Nothing to assert on — not even a stopped one, so this is not 'the stack is down'."
+  err "If this ran straight after 'up -d', compose created nothing at all."
   exit 2
 fi
 
