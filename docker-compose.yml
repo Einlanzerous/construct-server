@@ -235,8 +235,50 @@ services:
       - semaphore_data:/etc/semaphore
 
   # --- DATABASE (Shared PostgreSQL) ---
+  # Pinned BY DIGEST, not by tag (SERV-102). Every first-party service depends on this
+  # one container, so recreating it is the single largest blast radius in the stack —
+  # and under a floating `16-alpine` tag that happened whenever upstream published, on a
+  # `docker compose pull` nobody aimed at postgres. On 2026-08-15 it rolled mid-deploy,
+  # postgres moved to a new address on construct_net, and switchyard and interlock-worker
+  # sat on the dead IP for an hour (see below).
+  #
+  # A digest and not `16.15-alpine`, because an exact patch tag is still mutable and
+  # this was measured rather than assumed: at the time of pinning, the running container
+  # was `sha256:44c4ee98…` while `16.15-alpine` in the registry had already moved to
+  # `sha256:075f7ba6…`. Both report `postgres 16.15` — upstream rebuilds the same version
+  # for base-image updates. So a patch-tag pin would have looked precise, still pulled a
+  # different image, and still recreated the container. Only the digest is immutable.
+  #
+  # The digest chosen is the one ALREADY RUNNING, so this pin changes no bits. It still
+  # costs exactly one recreate: compose decides to recreate from the literal image string
+  # in the service spec, not from what that string resolves to, so any edit here recreates
+  # the container even when the image is byte-identical (verified with `up -d --dry-run`).
+  # Pinning to the running digest is what keeps that recreate as cheap as it can be — the
+  # container comes back on the same image, so nothing but the address changed — and it
+  # separates "stop postgres moving on its own" from "update postgres", leaving the second
+  # to happen on purpose rather than riding along with the first.
+  #
+  # BUDGET FOR THAT RECREATE WHEN THIS LANDS: postgres comes back in about a second, but
+  # switchyard and interlock-worker will not follow it to the new address, so run
+  #   make force-recreate svc=switchyard
+  #   make force-recreate svc=interlock-worker
+  # immediately after the deploy that applies this. The new post-deploy health gate will
+  # also fail that run, correctly — the stack really is broken until those two are
+  # recreated.
+  #
+  # This does not fix the reconnect fragility, and is not meant to: a deliberate postgres
+  # upgrade would still take the Node services down. What it buys is that the upgrade
+  # happens when someone chose it, in a reviewable diff, rather than as a surprise
+  # attached to an unrelated push — which matters much more now that promote/rollback
+  # (SERV-78, SERV-79) make a deploy something we run routinely and expect to be safe.
+  #
+  # Bumping this is a real upgrade, not a version-string edit: check the release notes,
+  # expect the container to be recreated, and expect the Node services to need
+  # `make force-recreate` afterwards until their pools re-resolve on error
+  # (SWY-267, ITLK-30). Find the current digest with:
+  #   docker manifest inspect -v postgres:16-alpine | jq -r '.[0].Descriptor.digest'
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine@sha256:44c4ee9810eff91f7eab4d822642e01115b1a9eccce4bcbdde7604752d68eac6
     container_name: postgres
     restart: unless-stopped
     ports:
@@ -711,6 +753,59 @@ services:
       - construct_net
     depends_on:
       - postgres
+    healthcheck:
+      # The worker is headless — no HTTP server, so there is nothing to curl, and it
+      # had no healthcheck at all until SERV-102. That is how it sat dead for an hour
+      # on 2026-08-15 and was found by grepping a dependent's logs rather than by any
+      # signal the stack produced.
+      #
+      # What this asserts is that the worker's OWN long-lived connection is still
+      # writing, which is the thing that broke. pg-boss touches pgboss.version from its
+      # maintenance loops every few seconds (measured over 10 minutes: median 4.3s,
+      # p95 4.9s, max 8.6s), so a stale timestamp means the worker is not talking to the
+      # database even though the database is fine.
+      #
+      # That distinction is the whole point, and it is why this does not simply open a
+      # connection and `SELECT 1`. The probe is a NEW process, so it re-resolves DNS and
+      # connects happily to the new postgres address — it would have reported healthy
+      # for the entire outage while the worker's pool sat on the dead IP. Reading a
+      # timestamp only the worker can update is what makes the check see what the worker
+      # sees.
+      #
+      # 300s against that 8.6s ceiling is ~35x headroom, deliberately: a false
+      # unhealthy here is worse than a slow true one now that deploy.yml fails on an
+      # unhealthy container. It still catches an hour-long stall within five minutes.
+      #
+      # The `typeof r.age === 'number'` guard is load-bearing, not defensive noise. Those
+      # columns are nullable, and pg-boss leaves them NULL until its first maintenance
+      # pass — so on a fresh database GREATEST(...) is NULL, EXTRACT returns NULL, and
+      # `null < 300` is **true** in JavaScript. Without the guard the probe reports
+      # healthy in precisely the case it exists to catch: no heartbeat at all.
+      #
+      # Uses Bun.SQL, the runtime's own client, NOT `require('pg')`: pg is a transitive
+      # dependency that does not resolve from /app, and a probe that cannot load its
+      # driver exits 0 — a healthcheck that can only ever pass. Verified this one exits
+      # 1 for a stale heartbeat, a NULL heartbeat, an unreachable database, and a
+      # missing table.
+      #
+      # It does reach into pg-boss's internal table, which is a coupling worth naming:
+      # if a pg-boss upgrade renames it the check fails loudly rather than silently
+      # passing, which is the right way round. ITLK-31 replaces this with a liveness
+      # endpoint the worker owns.
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const s=new Bun.SQL(process.env.DATABASE_URL,{max:1,connectionTimeout:5});const [r]=await s.unsafe('SELECT EXTRACT(EPOCH FROM now()-GREATEST(cron_on,bam_on,flow_on))::float8 AS age FROM pgboss.version');await s.end();process.exit(r&&typeof r.age==='number'&&r.age<300?0:1)",
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # Generous: on a first deploy this container crash-loops until the deploy's
+      # init-db step creates the interlock database, then migrates before pg-boss
+      # starts writing (see the note above the service).
+      start_period: 90s
 
   # --- AMBER (Claude Code transcript capture + preservation) — AMBR-4 ---
   # Redacts and archives Claude Code transcript data before the rolling retention

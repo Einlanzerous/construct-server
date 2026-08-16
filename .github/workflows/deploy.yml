@@ -174,6 +174,24 @@ jobs:
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: sleep 5 && docker compose exec -T -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres postgres bash < ./db/init-db.sh
 
+      - name: Assert nothing is unhealthy
+        # Until now a deploy reported success as soon as `up -d` returned, which says
+        # only that compose started containers — not that any of them work. Docker
+        # computes health and then acts on none of it (`restart: unless-stopped` restarts
+        # exited containers, not unhealthy ones), so on 2026-08-15 switchyard sat at a
+        # failing streak of 12 while the deploy that broke it stayed green (SERV-102).
+        # This is what that signal now reaches.
+        #
+        # Runs after the init-db step deliberately: several services crash-loop until
+        # their database exists, so asserting before it would fail every cold deploy.
+        #
+        # This detects, it does not recover — `up -d` has already happened by the time
+        # this runs, so a failure here means "the stack is broken, go look", not "the
+        # deploy was prevented". Wiring the same script to an automatic rollback is
+        # SERV-79; keeping it exit-code-clean is what lets that reuse it unchanged.
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: ./scripts/assert-healthy.sh --timeout 300
+
       - name: Prune Images
         # Clean up old docker images to save disk space
         run: docker image prune -f
