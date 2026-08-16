@@ -77,9 +77,11 @@ jobs:
     environment: production-promote
 
     permissions:
-      contents: write # commit the pin change to main
+      # Applies to GITHUB_TOKEN, which is still what the two assertion steps use for
+      # `gh api`. The pin commit itself goes out over PROMOTE_PUSH_TOKEN — see the
+      # checkout step — so `contents: write` here is not what makes the push work.
+      contents: write
       packages: read # read image manifests to verify the tag exists
-      actions: write # dispatch deploy.yml — see the dispatch step for why this is needed
 
     steps:
       - name: Checkout main
@@ -89,6 +91,26 @@ jobs:
           # Full history: the push below rebases first, and `git pull --rebase` cannot
           # work on checkout's default depth-1 clone.
           fetch-depth: 0
+          # A PAT, not GITHUB_TOKEN, and the reason is a hard constraint rather than a
+          # preference. `main` is governed by the `Proect Main` ruleset, whose only bypass
+          # actor is the *admin* repository role; GITHUB_TOKEN acts as the
+          # github-actions[bot] app installation, holds no repository role, and its push
+          # is rejected with GH013.
+          #
+          # The obvious fix — add GitHub Actions to the bypass list — is NOT AVAILABLE on
+          # this repo, and that is worth writing down so nobody spends an afternoon
+          # looking for the checkbox. Bypass actors of type `Integration` must belong to
+          # an organization, and this repo is owned by a user account. The UI simply does
+          # not offer GitHub Actions in the picker, and the API rejects it outright:
+          #
+          #   422: Actor GitHub Actions integration must be part of the ruleset source
+          #        or owner organization
+          #
+          # A PAT authenticates as the user, who holds the admin role, so it bypasses via
+          # the entry already in the list — no ruleset change at all. The token is scoped
+          # to `contents: write` on this repo only and managed by Signet, per CLAUDE.md;
+          # the scope does not affect the bypass, which is evaluated on the actor.
+          token: ${{ secrets.PROMOTE_PUSH_TOKEN }}
           persist-credentials: true
 
       - name: Verify the approval gate actually exists
@@ -123,74 +145,42 @@ jobs:
           fi
           echo "Gate present: this run was approved by a required reviewer."
 
-      - name: Verify this workflow can actually push to main
-        # This workflow commits straight to main, and the `Proect Main` ruleset requires a
-        # pull request for changes to that branch. Its only bypass actor is the *admin*
-        # repository role, and GITHUB_TOKEN acts as github-actions[bot] with write
-        # permission — not admin. So without a bypass for the Actions app, the push at the
-        # end of this job is rejected.
+      - name: Verify the push credential is present
+        # An empty secret is not a credential (the CLAUDE.md invariant). If
+        # PROMOTE_PUSH_TOKEN is unset, `actions/checkout` silently falls back to
+        # GITHUB_TOKEN, which cannot bypass the `Proect Main` ruleset — so the failure
+        # would surface as a GH013 rejection at the push, five steps and one human
+        # approval later, and read as a ruleset problem rather than a missing secret.
         #
-        # Checked HERE rather than discovered at the push, because of when this runs: a
-        # rollback happens with prod already broken, and the worst moment to meet a
-        # ruleset error is halfway through fixing an outage. This costs one API call and
-        # fails before the registry check, the file edit, and the human approval are spent.
-        #
-        # If you would rather not grant the bypass, the alternative is to have this open a
-        # PR instead of pushing — but that puts a human approval in the rollback path,
-        # which is the one path that most needs to be fast, and the approval already
-        # happened at the environment gate above.
+        # Checked here for the same reason the gate assertion is: a rollback runs with
+        # prod already broken, and the worst moment to discover a missing secret is
+        # halfway through fixing an outage.
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTE_PUSH_TOKEN: ${{ secrets.PROMOTE_PUSH_TOKEN }}
         run: |
           set -euo pipefail
-          rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" 2>/dev/null || echo '[]')"
-          blocking="$(printf '%s' "$rules" | jq -r '[.[] | select(.type == "pull_request" or .type == "update") | .ruleset_id] | unique | .[]' 2>/dev/null || true)"
-          if [ -z "$blocking" ]; then
-            echo "No pull_request or update rule on main — a direct push is allowed."
-            exit 0
-          fi
-
-          # Ask GitHub directly rather than inferring from the bypass list. Fetching a
-          # ruleset returns `current_user_can_bypass` evaluated for the CALLING token, so
-          # this answers the actual question — "can *this* job push?" — instead of
-          # guessing from actor types, and it stays correct if the bypass is later granted
-          # some other way (a specific app, a deploy key, a role change).
-          bypassed=0
-          for rid in $blocking; do
-            verdict="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${rid}" --jq '.current_user_can_bypass // "unknown"' 2>/dev/null || echo unknown)"
-            echo "  ruleset $rid: current_user_can_bypass=$verdict"
-            case "$verdict" in
-              always|pull_requests_only) bypassed=1 ;;
-              unknown)
-                # Field absent (older API). Fall back to the actor-type heuristic: a
-                # workflow authenticates as a GitHub App installation, so an Integration
-                # bypass actor is the one that would cover it.
-                if gh api "repos/${GITHUB_REPOSITORY}/rulesets/${rid}" --jq '.bypass_actors[]?.actor_type' 2>/dev/null | grep -qx 'Integration'; then
-                  bypassed=1
-                fi
-                ;;
-            esac
-          done
-
-          if [ "$bypassed" -eq 0 ]; then
-            echo "Error: main requires a pull request, and no GitHub App can bypass it."
+          if [ -z "${PROMOTE_PUSH_TOKEN:-}" ]; then
+            echo "Error: PROMOTE_PUSH_TOKEN is not set."
             echo
-            echo "This workflow pushes the pin change directly to main, so that push will be"
-            echo "rejected. GITHUB_TOKEN acts as github-actions[bot] (write), and the only"
-            echo "bypass actor configured is the admin repository role."
+            echo "This workflow pushes the pin change to main, which is protected by the"
+            echo "Proect Main ruleset. GITHUB_TOKEN cannot bypass it, and GitHub Actions"
+            echo "cannot be added as a bypass actor on a user-owned repo (422: must be"
+            echo "part of the owner organization). So the push needs a PAT, which"
+            echo "authenticates as the admin user and bypasses via the existing entry."
             echo
-            echo "Fix under Settings > Rules > Proect Main > Bypass list:"
-            echo "  add 'GitHub Actions' (Integration) with bypass mode 'Always'."
+            echo "Mint a fine-grained PAT with 'contents: write' on this repo only, then:"
+            echo "  signet set --project construct-server --name PROMOTE_PUSH_TOKEN"
+            echo "  signet target add --secret construct-server/PROMOTE_PUSH_TOKEN \\"
+            echo "      --gh-repo Einlanzerous/construct-server"
+            echo "  signet sync"
             echo
-            echo "The human gate is not lost by doing this — it moves to the"
-            echo "production-promote environment approval, which is arguably the better"
-            echo "place for it: the approver sees the service, version and reason rather"
-            echo "than a one-line diff."
+            echo "Verify the grant actually took — SGNT-29 is the bug where exactly this"
+            echo "kind of grant 403'd while 'signet sync --check' reported it healthy."
             echo
             echo "Nothing was committed."
             exit 1
           fi
-          echo "A GitHub App bypass is configured — the push to main will be accepted."
+          echo "Push credential present."
 
       - name: Resolve the pin variable
         # One variable per SOURCE REPO, not per image — a repo's backend and frontend ship
@@ -311,9 +301,9 @@ jobs:
 
           # main IS protected — by the `Proect Main` ruleset, not classic branch
           # protection, which is why `branches/main/protection` returns 404 and makes it
-          # look unprotected. This push therefore only lands because the job asserted
-          # earlier that it can bypass that ruleset; without the bypass it is rejected
-          # with GH013.
+          # look unprotected. This lands because checkout was given a PAT, so the push
+          # authenticates as the admin user and bypasses via the entry already in the
+          # ruleset. Over GITHUB_TOKEN it would be rejected with GH013.
           #
           # Rebase first in case main moved while this run waited for its approval, which
           # can be a long time. That also satisfies the ruleset's required_linear_history.
@@ -321,28 +311,13 @@ jobs:
           git push origin HEAD:main
           echo "COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Trigger the deploy
-        if: env.NOOP == '0'
-        # The push above does NOT fire deploy.yml on its own, and that is the one piece
-        # of this design that is not obvious. GitHub deliberately does not create workflow
-        # runs from events authored by the repository's GITHUB_TOKEN, to stop workflows
-        # triggering themselves forever — so the commit lands on main, deploy.yml's path
-        # filter matches versions.env, and nothing happens.
-        #
-        # `workflow_dispatch` is the documented exception to that rule, so dispatching
-        # deploy.yml explicitly works with the same token. The alternative — pushing with
-        # a PAT so the push event is "authored" by a user — would work too, but it means
-        # holding another credential purely to defeat a safety feature, and it makes the
-        # promote->deploy link invisible. This way the chain is written down.
-        #
-        # If this is ever changed to push with a PAT, drop this step: the push would then
-        # fire deploy.yml as well, and both running at once is a real hazard.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh workflow run deploy.yml --ref main
-          echo "Dispatched Deploy to Construct against main ($COMMIT_SHA)."
+          # NO EXPLICIT DISPATCH OF deploy.yml, deliberately, and this is the one thing to
+          # re-check if the credential ever changes. GitHub does not create workflow runs
+          # from events authored by GITHUB_TOKEN, so an earlier version of this file had
+          # to dispatch deploy.yml by hand. A PAT-authored push is a normal push event and
+          # fires deploy.yml's `versions.env` path trigger on its own — dispatching as
+          # well would start a second, concurrent deploy of the same commit.
+          echo "Pushed. deploy.yml fires on this commit via its versions.env path trigger."
 
       - name: Summary
         # The producer side of the delivery ledger (SWY-191) is still a follow-up: this

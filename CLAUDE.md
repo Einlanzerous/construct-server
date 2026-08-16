@@ -51,14 +51,22 @@ anything deploys or gets versioned.
   Environment — deliberately **not** `home-server`, which would put a human in front
   of every ordinary deploy. A hand-edit of `versions.env` still works and still
   deploys; it just skips the registry check and the gate.
-  It needs **two** repo settings, and asserts both rather than failing obscurely:
-  that environment must have a required reviewer, and the `Proect Main` ruleset must
-  list **GitHub Actions (Integration)** in its bypass list. That ruleset requires a
-  pull request for `main` and bypasses only the *admin* role, but a workflow
-  authenticates as `github-actions[bot]` with `contents: write` — so without the
-  bypass the pin commit is rejected. The human gate is not lost by granting it; it
-  moves to the environment approval, where the approver sees the service, version and
-  reason instead of a one-line diff.
+  It needs **two** things, and asserts both rather than failing obscurely: that
+  environment must have a required reviewer, and `PROMOTE_PUSH_TOKEN` must exist.
+  **The push to `main` needs a PAT and cannot use `GITHUB_TOKEN`.** `main` is
+  protected by the `Proect Main` *ruleset* — not classic branch protection, which is
+  why `branches/main/protection` returns 404 and it looks unprotected — and that
+  ruleset's only bypass actor is the **admin** repository role. `GITHUB_TOKEN` acts as
+  the `github-actions[bot]` app installation, holds no repository role, and its push
+  is rejected with GH013. **Adding GitHub Actions to the bypass list is not possible
+  here**: `Integration` bypass actors must belong to an organization and this repo is
+  owned by a user, so the picker omits it and the API returns
+  `422 … must be part of the ruleset source or owner organization`. A PAT
+  authenticates as the admin user and bypasses via the existing entry, so no ruleset
+  change is involved. One consequence: a PAT-authored push **does** fire `deploy.yml`
+  on its own, where a `GITHUB_TOKEN` one would not — so `promote.yml` must never also
+  dispatch `deploy.yml`, or every promote runs two concurrent deploys of the same
+  commit.
 - Secrets the **stack** consumes reach it as `PROD_ENV_FILE`, a GitHub
   Environment secret on `home-server` — not a repo-level secret. Update it with
   `gh secret set PROD_ENV_FILE --env home-server`.
