@@ -776,10 +776,17 @@ services:
       # unhealthy here is worse than a slow true one now that deploy.yml fails on an
       # unhealthy container. It still catches an hour-long stall within five minutes.
       #
+      # The `typeof r.age === 'number'` guard is load-bearing, not defensive noise. Those
+      # columns are nullable, and pg-boss leaves them NULL until its first maintenance
+      # pass — so on a fresh database GREATEST(...) is NULL, EXTRACT returns NULL, and
+      # `null < 300` is **true** in JavaScript. Without the guard the probe reports
+      # healthy in precisely the case it exists to catch: no heartbeat at all.
+      #
       # Uses Bun.SQL, the runtime's own client, NOT `require('pg')`: pg is a transitive
       # dependency that does not resolve from /app, and a probe that cannot load its
       # driver exits 0 — a healthcheck that can only ever pass. Verified this one exits
-      # 1 for a stale heartbeat, an unreachable database, and a missing table.
+      # 1 for a stale heartbeat, a NULL heartbeat, an unreachable database, and a
+      # missing table.
       #
       # It does reach into pg-boss's internal table, which is a coupling worth naming:
       # if a pg-boss upgrade renames it the check fails loudly rather than silently
@@ -790,7 +797,7 @@ services:
           "CMD",
           "bun",
           "-e",
-          "const s=new Bun.SQL(process.env.DATABASE_URL,{max:1,connectionTimeout:5});const [r]=await s.unsafe('SELECT EXTRACT(EPOCH FROM now()-GREATEST(cron_on,bam_on,flow_on))::float8 AS age FROM pgboss.version');await s.end();process.exit(r&&r.age<300?0:1)",
+          "const s=new Bun.SQL(process.env.DATABASE_URL,{max:1,connectionTimeout:5});const [r]=await s.unsafe('SELECT EXTRACT(EPOCH FROM now()-GREATEST(cron_on,bam_on,flow_on))::float8 AS age FROM pgboss.version');await s.end();process.exit(r&&typeof r.age==='number'&&r.age<300?0:1)",
         ]
       interval: 60s
       timeout: 10s

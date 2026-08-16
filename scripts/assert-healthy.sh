@@ -95,10 +95,13 @@ ids() {
 # every container without a healthcheck fails to render, so they vanish from the tally
 # instead of being listed, and the script reports "no healthcheck: 0" over a stack with
 # eighteen of them. The id is already in hand from the loop below — pair it there.
-inspect_fmt='{{.Name}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
+#
+# FailingStreak and the probe timestamps are carried because a health STATUS on its own
+# is a stale answer — see the wait loop for what that costs.
+inspect_fmt='{{.Name}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}} {{.State.Health.FailingStreak}}{{range .State.Health.Log}} {{.End.Unix}}{{end}}{{else}}none 0 0{{end}}'
 
-# Emit "<id> <name> <state> <health>" per container, taking the id from the loop rather
-# than the template for the reason above.
+# Emit "<id> <name> <state> <health> <streak> <probe-epochs…>" per container, taking the
+# id from the loop rather than the template for the reason above.
 statuses() {
   local cid
   for cid in $container_ids; do
@@ -113,25 +116,56 @@ if [ -z "$container_ids" ]; then
   exit 2
 fi
 
-# Wait out `starting`. A container inside its start_period is not yet a verdict, and
-# failing on one would just be a race against whichever healthcheck has the longest
-# grace. Docker flips `starting` to `unhealthy` on its own once start_period elapses,
-# so this only ever waits for an answer — it cannot mask one.
-deadline=$(( $(date +%s) + TIMEOUT ))
+# Wait for a verdict that is actually about the deploy that just happened.
+#
+# The obvious version of this — read every container's health status once and pass if
+# none says `unhealthy` — is wrong in the exact way SERV-102 was missed. A status is
+# only as fresh as the last probe, and probes run on their own interval (30-60s here).
+# Immediately after `up -d` recreates postgres, switchyard still reports `healthy` from a
+# probe that ran before postgres moved. The gate would go green, and switchyard would
+# flip to unhealthy a minute later with the deploy already reported successful. That is
+# the ticket's own "the signal existed and reached nothing", reproduced inside the thing
+# built to fix it.
+#
+# So three separate conditions mean "no verdict yet", and all three are waited out:
+#
+#   starting / restarting   inside start_period, or coming up after its database. Normal
+#                           for a few seconds on a cold deploy.
+#   stale                   the last probe finished BEFORE this script started, so its
+#                           verdict predates the deploy and says nothing about it.
+#   healthy + streak > 0    currently failing but has not yet hit `retries`. Docker will
+#                           resolve this either way shortly; passing now would be calling
+#                           it early, in the direction of a false green.
+#
+# Docker moves every one of these to a settled state on its own, so this only ever waits
+# for an answer — with one honest exception: amber declares `start_period: 15m`, which is
+# longer than the default timeout, so a cold amber can still be `starting` at the
+# deadline. That is reported rather than failed, and is why the loop reports what it was
+# still waiting on instead of claiming everything settled.
+script_start="$(date +%s)"
+deadline=$(( script_start + TIMEOUT ))
 while :; do
-  starting=""
-  while read -r _id name state health; do
-    # `restarting` is waited on for the same reason as `starting`: a container coming up
-    # after its database is a normal few seconds on a cold deploy, and only a container
-    # still restarting when the clock runs out is a crash loop.
-    case "$health:$state" in
-      starting:*|*:restarting) starting="$starting ${name#/}" ;;
-    esac
+  waiting=""
+  while read -r _id name state health streak probes; do
+    name="${name#/}"
+    last_probe="${probes##* }"
+    case "${last_probe}" in (*[!0-9]*|'') last_probe=0 ;; esac
+    if [ "$state" = "restarting" ] || [ "$health" = "starting" ]; then
+      waiting="$waiting $name"
+    elif [ "$health" != "none" ] && [ "$state" = "running" ]; then
+      if [ "$last_probe" -lt "$script_start" ]; then
+        waiting="$waiting $name(stale)"
+      elif [ "$health" = "healthy" ] && [ "${streak:-0}" -gt 0 ]; then
+        waiting="$waiting $name(failing)"
+      fi
+    fi
   done <<< "$(statuses)"
 
-  [ -z "$starting" ] && break
+  [ -z "$waiting" ] && break
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    printf 'Still starting after %ss, reporting on current state:%s\n\n' "$TIMEOUT" "$starting"
+    printf 'Gave up waiting after %ss on:%s\n' "$TIMEOUT" "$waiting"
+    printf 'Reporting on current state — a `(stale)` entry means its healthcheck had not\n'
+    printf 're-run yet, so its verdict may still change after this.\n\n'
     break
   fi
   sleep 10
@@ -140,7 +174,7 @@ done
 healthy=""; unhealthy=""; nocheck=""; starting=""; down=""
 declare -A unhealthy_id=()
 declare -A down_state=()
-while read -r id name state health; do
+while read -r id name state health streak probes; do
   name="${name#/}"
   # Not running beats any health verdict: an exited container has a stale health status
   # from before it died, and reporting that would be worse than saying nothing.
