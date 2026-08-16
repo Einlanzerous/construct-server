@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check health-check db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
@@ -80,6 +80,14 @@ force-recreate: deploy-root network
 #        make drift-check svc=argosy (check a single service)
 drift-check:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/check-compose-drift.sh $(svc)
+
+# Fail if any container is unhealthy, and list the ones with no healthcheck at all
+# (SERV-102). deploy.yml runs the same script as a post-deploy gate; this is the local
+# way to ask "is the stack actually up", which `docker compose ps` does not answer.
+# Usage: make health-check                (whole stack)
+#        make health-check svc=switchyard (one service)
+health-check:
+	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-healthy.sh $(svc)
 
 # Start only the postgres service
 db-up: deploy-root network

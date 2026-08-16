@@ -143,6 +143,30 @@ anything deploys or gets versioned.
   config --images`, failing loudly if any first-party image resolves to `:latest`
   or a bare `:`. The two guard different things; neither supersedes the other, and
   a failing deploy is not fixed by deleting the check.
+- **`postgres` is pinned to an exact patch, and recreating it breaks the Node
+  services** (SERV-102). Every first-party service depends on the one postgres
+  container, so it has the largest blast radius in the stack — and under the old
+  floating `16-alpine` tag it was recreated whenever upstream published, on a
+  `docker compose pull` aimed at something else entirely. When that happened on
+  2026-08-15 postgres moved to a new address on `construct_net` and **switchyard and
+  interlock-worker never recovered**: Go's drivers re-resolve DNS per connection
+  attempt, but Node/Bun's `pg-pool` caches the container IP and retries the dead one
+  forever. The split is by runtime, not by service. Recovery is
+  `make force-recreate svc=<svc>` — a plain `make recreate` is a no-op, because the
+  container spec has not changed. Bumping the pin is a real upgrade, not a
+  version-string edit: expect to force-recreate the Node services afterwards until
+  they re-resolve on error (SWY-267, ITLK-30). Third-party *leaf* images still float
+  by design; postgres is pinned because it is shared.
+- **Docker computes health and acts on none of it.** `restart: unless-stopped`
+  restarts **exited** containers, not unhealthy ones, so a failing healthcheck has no
+  consequence on its own — switchyard sat at a failing streak of 12 through the
+  incident above while the deploy that caused it stayed green. `deploy.yml` now ends
+  with `scripts/assert-healthy.sh`, which is what that signal reaches; run it locally
+  with `make health-check`. A service with **no** healthcheck is the worse case, since
+  it cannot even be seen to fail — that is how interlock-worker stayed invisibly dead
+  — so the script lists those too. When adding a healthcheck, verify it can actually
+  **fail**: a probe that cannot load its driver, or a `bun -e` one-liner whose
+  `require` throws, exits 0 and reports healthy forever.
 - **Watchtower is opt-in and no longer rolls first-party images** (SERV-75).
   `WATCHTOWER_LABEL_ENABLE=true` means it monitors only containers carrying
   `com.centurylinklabs.watchtower.enable=true` — currently four third-party
@@ -197,5 +221,9 @@ There is no test suite — this repo is configuration, so validation is mostly
 - `ansible-lint` runs in CI on `ansible/**`; run it locally before pushing.
 - `docker compose config` catches compose syntax and interpolation errors.
 - `./scripts/check-compose-drift.sh [service]` after any mount or env change.
+- `make health-check` (or `./scripts/assert-healthy.sh [service]`) to ask whether
+  the stack actually works, which `docker compose ps` does not answer — it fails
+  on anything unhealthy and lists every container with no healthcheck at all.
+  `deploy.yml` runs it as a post-deploy gate (SERV-102).
 - For edge or auth changes, the only real check is a request through the public
   path — internal container-to-container success proves nothing about Access.
