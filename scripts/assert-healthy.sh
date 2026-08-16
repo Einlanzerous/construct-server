@@ -67,14 +67,24 @@ fi
 
 cd "$DEPLOY_ROOT"
 
+# --all, NOT the default. `docker compose ps -q` lists only RUNNING containers, so a
+# container that crashed and exited is simply absent from it — and absent reads as fine.
+# Verified: with a service dead in `exited`, the running-only form reported "nothing
+# unhealthy" and exited 0. A service that fails to start at all is the most basic deploy
+# failure there is, and it was the one case this could not see.
 ids() {
   if [ ${#services[@]} -gt 0 ]; then
-    docker compose ps -q "${services[@]}"
+    docker compose ps -aq "${services[@]}"
   else
-    docker compose ps -q
+    docker compose ps -aq
   fi
 }
 
+# Two different questions, and both have to be asked: `.State.Status` is whether the
+# container is running at all, `.State.Health` is whether the process inside it works. A
+# check that asks only the second misses a crash; one that asks only the first misses the
+# SERV-102 case, where every container was up and two of them were dead.
+#
 # `{{if .State.Health}}` distinguishes "no healthcheck declared" from a health status —
 # without it every container without one reads as an empty string alongside real results.
 #
@@ -85,10 +95,10 @@ ids() {
 # every container without a healthcheck fails to render, so they vanish from the tally
 # instead of being listed, and the script reports "no healthcheck: 0" over a stack with
 # eighteen of them. The id is already in hand from the loop below — pair it there.
-inspect_fmt='{{.Name}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
+inspect_fmt='{{.Name}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
 
-# Emit "<id> <name> <status>" per container, taking the id from the loop rather than the
-# template for the reason above.
+# Emit "<id> <name> <state> <health>" per container, taking the id from the loop rather
+# than the template for the reason above.
 statuses() {
   local cid
   for cid in $container_ids; do
@@ -110,8 +120,13 @@ fi
 deadline=$(( $(date +%s) + TIMEOUT ))
 while :; do
   starting=""
-  while read -r _id name status; do
-    [ "$status" = "starting" ] && starting="$starting ${name#/}"
+  while read -r _id name state health; do
+    # `restarting` is waited on for the same reason as `starting`: a container coming up
+    # after its database is a normal few seconds on a cold deploy, and only a container
+    # still restarting when the clock runs out is a crash loop.
+    case "$health:$state" in
+      starting:*|*:restarting) starting="$starting ${name#/}" ;;
+    esac
   done <<< "$(statuses)"
 
   [ -z "$starting" ] && break
@@ -122,11 +137,18 @@ while :; do
   sleep 10
 done
 
-healthy=""; unhealthy=""; nocheck=""; starting=""
+healthy=""; unhealthy=""; nocheck=""; starting=""; down=""
 declare -A unhealthy_id=()
-while read -r id name status; do
+declare -A down_state=()
+while read -r id name state health; do
   name="${name#/}"
-  case "$status" in
+  # Not running beats any health verdict: an exited container has a stale health status
+  # from before it died, and reporting that would be worse than saying nothing.
+  if [ "$state" != "running" ]; then
+    down="$down $name"; down_state["$name"]="$state"; unhealthy_id["$name"]="$id"
+    continue
+  fi
+  case "$health" in
     healthy)   healthy="$healthy $name" ;;
     unhealthy) unhealthy="$unhealthy $name"; unhealthy_id["$name"]="$id" ;;
     starting)  starting="$starting $name" ;;
@@ -136,12 +158,21 @@ done <<< "$(statuses)"
 
 count() { printf '%s' "$1" | wc -w | tr -d ' '; }
 
-printf 'healthy: %s   unhealthy: %s   starting: %s   no healthcheck: %s\n' \
-  "$(count "$healthy")" "$(count "$unhealthy")" "$(count "$starting")" "$(count "$nocheck")"
+printf 'healthy: %s   unhealthy: %s   not running: %s   starting: %s   no healthcheck: %s\n' \
+  "$(count "$healthy")" "$(count "$unhealthy")" "$(count "$down")" \
+  "$(count "$starting")" "$(count "$nocheck")"
 
 if [ -n "$nocheck" ]; then
   printf '\nNo healthcheck declared (not an error, but these cannot be seen to fail):\n'
   for n in $nocheck; do printf '  - %s\n' "$n"; done
+fi
+
+if [ -n "$down" ]; then
+  printf '\nNOT RUNNING:\n'
+  for n in $down; do
+    printf '  - %s (%s)\n' "$n" "${down_state[$n]}"
+    docker logs "${unhealthy_id[$n]}" --tail 5 2>&1 | sed 's/^/      /' || true
+  done
 fi
 
 if [ -n "$unhealthy" ]; then
@@ -156,7 +187,10 @@ if [ -n "$unhealthy" ]; then
     docker inspect -f '{{range .State.Health.Log}}{{.Output}}{{end}}' \
       "${unhealthy_id[$n]}" 2>/dev/null | tail -5 | sed 's/^/      /' || true
   done
-  printf '\nA healthy stack is the deploy'"'"'s postcondition, so this is a failed deploy even\n'
+fi
+
+if [ -n "$unhealthy" ] || [ -n "$down" ]; then
+  printf '\nA working stack is the deploy'"'"'s postcondition, so this is a failed deploy even\n'
   printf 'though `up -d` succeeded. Investigate with:\n'
   printf '  docker logs <name> --tail 50\n'
   printf '  make force-recreate svc=<name>   # --no-deps is baked in (SERV-63)\n'
@@ -164,5 +198,5 @@ if [ -n "$unhealthy" ]; then
   exit 1
 fi
 
-printf '\nNothing unhealthy.\n'
+printf '\nEverything is running, and nothing is unhealthy.\n'
 exit 0
