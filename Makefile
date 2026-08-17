@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check health-check versions db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
@@ -88,6 +88,16 @@ drift-check:
 #        make health-check svc=switchyard (one service)
 health-check:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-healthy.sh $(svc)
+
+# Assert the ORIGIN rejects a spoofed Host (SERV-106), rather than merely being hard to
+# reach (SERV-107). Two halves: a config check that every router on the `internal`
+# entrypoint carries the cf-access-jwt middleware and that the AUD map matches, and a live
+# probe from the host — which reaches container ports whether or not they are published.
+# deploy.yml runs the same script as a post-deploy gate.
+# Usage: make edge-auth-check                  (config + live; needs the stack up)
+#        make edge-auth-check config_only=1    (config only, e.g. from a laptop)
+edge-auth-check:
+	./scripts/check-edge-auth.sh $(if $(config_only),--config-only)
 
 # Report what the stack is actually running: image ref, resolved digest, and the COMMIT
 # each image was built from (SERV-97). Read the revision column, not the digest — the
@@ -210,10 +220,12 @@ dev-root:
 # The dev network is external and belongs to the dev project alone. NOTHING from
 # the prod project should ever be attached to it — an earlier revision of SERV-77
 # put Traefik on both so it could route dev. hostnames, and that handed every dev
-# container an unauthenticated route into prod Switchyard and Lyceum: the internal
-# entrypoint has no source restriction and those routers have no auth middleware
-# (SERV-25 unimplemented). `make dev-verify-isolation` fails if anything foreign
-# joins. Giving dev an edge without reopening that is SERV-93.
+# container an unauthenticated route into prod Switchyard and Lyceum: back then the
+# internal entrypoint had no source restriction and those routers had no auth
+# middleware. Both have since been fixed (SERV-107, SERV-106), so a dev container on
+# a shared Traefik would now be refused rather than served — but the network stays
+# separate regardless. `make dev-verify-isolation` fails if anything foreign joins.
+# Giving dev its own edge, with its own Access applications, is SERV-93.
 dev-network:
 	docker network create construct_dev_net 2>/dev/null || echo "construct_dev_net already exists"
 

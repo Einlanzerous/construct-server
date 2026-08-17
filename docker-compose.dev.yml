@@ -270,25 +270,24 @@ networks:
   # `make dev-network`; only this project references it.
   #
   # An earlier revision attached prod's Traefik here as a second network so it
-  # could route dev. hostnames. That was withdrawn, and the reason still stands:
-  # the prod switchyard and lyceum routers on Traefik's `internal` entrypoint have
-  # no auth middleware, because the Cloudflare Access JWT validation their comments
-  # promise is still unimplemented (SERV-106). Access is enforced at Cloudflare's
-  # edge, so a request arriving at that entrypoint from inside Docker is
-  # authenticated by nothing. Verified at the time: a container on a
-  # Traefik-attached network got HTTP 200 from prod switchyard just by setting the
-  # Host header.
-  #
-  # SERV-107 has since bound `internal` to a single address on construct_edge_net,
-  # so that exact command no longer connects from construct_net. It does NOT make
-  # attaching Traefik here safe — a second network is a second place the entrypoint
-  # becomes reachable, which is precisely what the bind stopped. The protection is
-  # topology, not authentication, and adding a network is how topology stops
-  # protecting you.
-  #
-  # Attaching Traefik here would therefore have handed every dev container — all
+  # could route dev. hostnames. At the time that handed every dev container — all
   # of them deliberately running :latest, i.e. the untested code this project
-  # exists to exercise — an unauthenticated route into prod's HTTP tier. Dev is
-  # reached on its loopback ports instead. Giving dev its own edge is SERV-93.
+  # exists to exercise — an unauthenticated route into prod's HTTP tier: the
+  # `internal` entrypoint listened on every interface and its routers carried no
+  # auth middleware, so a container on a Traefik-attached network got HTTP 200 from
+  # prod switchyard just by setting the Host header. Verified, not assumed.
+  #
+  # Both halves of that have since been closed. SERV-107 bound `internal` to a
+  # single address on construct_edge_net, so the command no longer connects from
+  # construct_net; SERV-106 put origin-side Access JWT validation on every router
+  # there, so a request that does connect is refused unless it carries a valid
+  # token for that host's own AUD. A dev hostname would have no AUD entry and fail
+  # closed.
+  #
+  # The networks stay separate anyway. Isolation that holds because two projects
+  # share nothing is cheaper to verify — `make dev-verify-isolation` — than
+  # isolation that holds because a middleware is correctly attached everywhere, and
+  # the two are not in tension. Giving dev its own edge, with its own Access
+  # applications, is SERV-93.
   construct_dev_net:
     external: true

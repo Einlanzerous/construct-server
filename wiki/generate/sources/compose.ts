@@ -278,7 +278,7 @@ function parseVolume(raw: string): VolumeMount {
 // `networks:` has the same two forms as `depends_on:` — a plain list of names, or a map
 // keyed by network with per-network settings under it. Only the names matter here.
 //
-// The map form is not hypothetical: SERV-106 gave traefik
+// The map form is not hypothetical: SERV-107 gave traefik
 // `construct_net: {}` / `construct_edge_net: {ipv4_address: …}` so the internal
 // entrypoint could bind one address. Under the list-only reader that parsed as `[]`,
 // silently — no throw — and the wiki then claimed traefik declared no networks at all

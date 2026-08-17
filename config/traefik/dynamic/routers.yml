@@ -37,7 +37,7 @@ http:
     # Public edge only: Cloudflare Access is NOT in front of the direct Argosy path,
     # so a client must not be able to inject Cf-Access-* trust headers. On the
     # internal entrypoint these arrive from cloudflared and are cryptographically
-    # validated in Phase 2 (SERV-25) — so they are NOT stripped there.
+    # validated by cf-access-jwt below (SERV-106) — so they are NOT stripped there.
     strip-cf-access:
       headers:
         customRequestHeaders:
@@ -74,6 +74,32 @@ http:
       rateLimit:
         average: 5
         burst: 15
+
+    # Origin-side validation of Cf-Access-Jwt-Assertion (SERV-106). Every router on
+    # the `internal` entrypoint carries this, and scripts/check-edge-auth.sh fails if
+    # one does not — a tunneled router that forgets it is unauthenticated, and that is
+    # the whole class of bug this closes.
+    #
+    # Cloudflare Access is enforced at Cloudflare's EDGE. Without this the origin
+    # re-checked nothing, so a request that reached :9080 at all was served whatever
+    # Host it claimed. cf-access-guard verifies the JWT against the team's published
+    # signing keys and the AUD registered for that host; anything else gets a 403 here
+    # and never reaches a backend. See services/cf-access-guard/.
+    cf-access-jwt:
+      forwardAuth:
+        address: "http://cf-access-guard:4020/verify"
+        # FALSE is the default; it is spelled out because it is load-bearing. The guard
+        # picks which AUD to require from X-Forwarded-Host. With this true, Traefik
+        # would pass the CLIENT's X-Forwarded-Host through, letting a caller name one
+        # host for the audience check while the router serves a different backend. False
+        # makes Traefik set that header itself, from the same Host the router matched.
+        trustForwardHeader: false
+        # Forward only the assertion. Traefik still adds the X-Forwarded-* set it
+        # computes itself (the filter runs before those are written), so the guard keeps
+        # the host it needs — but the real request's session cookies and Authorization
+        # headers never reach it. It has no use for them and should not hold them.
+        authRequestHeaders:
+          - "Cf-Access-Jwt-Assertion"
 
     # CrowdSec bouncer (SERV-27): rejects IPs with an active CrowdSec decision
     # before anything else runs. `live` mode = one LAPI round-trip per new client
@@ -187,26 +213,33 @@ http:
       tls: {}
 
     # ------------- INTERNAL entrypoint: tunneled apps -------------
-    # Reachable only via cloudflared over construct_net. Phase 2 (SERV-25) adds a
-    # cf-access-jwt validation middleware to each of these routers.
+    # Reachable only via cloudflared, which is the only other member of
+    # construct_edge_net (SERV-107). EVERY router here carries `cf-access-jwt`, which
+    # is what makes reaching the entrypoint insufficient on its own (SERV-106) —
+    # check-edge-auth.sh fails if a new one is added without it.
     switchyard:
       entryPoints:
         - internal
       rule: "Host(`switchyard.zerogravity.industries`)"
       service: switchyard
+      middlewares:
+        - cf-access-jwt
       # No TLS: internal is plain HTTP (Cloudflare terminates TLS at the edge and
-      # the tunnel encrypts the wire). Phase 2 (SERV-25) adds a cf-access-jwt
-      # validation middleware here.
+      # the tunnel encrypts the wire).
 
     # Lyceum (LYCM-803): tunneled + Cloudflare Access, mirroring switchyard. HTTP
     # on the internal entrypoint — no tls block. Cf-Access-Jwt-Assertion is
-    # preserved here (only stripped on the public entrypoint) and validated by
-    # Lyceum's backend against the team-domain JWKS + AUD.
+    # preserved here (only stripped on the public entrypoint), checked by
+    # cf-access-jwt before the request is proxied, and checked AGAIN by Lyceum's
+    # own backend for SSO sign-in. The two are not redundant: this one decides
+    # whether the request is served at all, Lyceum's decides who it is served as.
     lyceum:
       entryPoints:
         - internal
       rule: "Host(`lyceum.zerogravity.industries`)"
       service: lyceum
+      middlewares:
+        - cf-access-jwt
 
     # Estate wiki (SERV-101): generated static site, tunneled + Cloudflare Access.
     # `internal` only, like switchyard and lyceum — the wiki assembles the whole
@@ -214,11 +247,16 @@ http:
     # searchable site, which is exactly the reconnaissance summary that must never
     # be reachable from the public entrypoint. It holds no secret values, but a map
     # of the estate is not something to serve to the WAN either.
+    # It is also the only tunneled app with no authentication of its own — nginx
+    # serving static files will hand the estate map to whoever asks — so for the
+    # wiki, cf-access-jwt is not defense in depth, it is the entire gate.
     wiki:
       entryPoints:
         - internal
       rule: "Host(`wiki.zerogravity.industries`)"
       service: wiki
+      middlewares:
+        - cf-access-jwt
 
   services:
     argosy:

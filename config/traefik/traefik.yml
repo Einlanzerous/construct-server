@@ -6,6 +6,8 @@
 #                lowest-priority deny-all catch-all. Nothing tunneled lives here.
 #   * internal — Docker-network-only (NOT published to the host). cloudflared
 #                dials this; it carries the tunneled apps (switchyard, lyceum…).
+#                Every router on it validates the Cloudflare Access JWT at the
+#                origin (SERV-106) — see the cf-access-jwt middleware.
 # Identity headers are stripped on ingress on BOTH entrypoints (see the
 # entryPoints.*.http.middlewares refs below + config/traefik/dynamic/routers.yml).
 #
@@ -66,12 +68,17 @@ entryPoints:
   #
   # (it shows up in the access log as entryPointName=internal, ClientHost=172.19.0.1,
   # the bridge gateway). That is equally true after the bind below — anything with host
-  # access or the docker socket still reaches it. Those are strictly larger compromises
-  # than the one SERV-106 closes, so this is not a regression, but the sentence should
-  # not be trusted as written. SERV-30's suite should probe from the host too, not only
-  # from a container.
+  # access or the docker socket still reaches it.
+  #
+  # Reaching it is now insufficient: every router on this entrypoint carries the
+  # `cf-access-jwt` middleware (SERV-106), so a request without a valid Cloudflare
+  # Access assertion for that exact host gets a 403 from the origin rather than a
+  # backend. The one-line probe above therefore returns 403 today, and
+  # scripts/check-edge-auth.sh asserts from the host that it still does. The bind
+  # below and that middleware guard different things: one decides who can connect,
+  # the other decides who is served.
   internal:
-    # Bound to ONE address, not every interface (SERV-106). `:9080` meant "listen on all
+    # Bound to ONE address, not every interface (SERV-107). `:9080` meant "listen on all
     # of Traefik's interfaces", and on a shared Docker network that means every neighbour
     # can reach it. That was demonstrated, not theorised — from a throwaway container on
     # construct_net:

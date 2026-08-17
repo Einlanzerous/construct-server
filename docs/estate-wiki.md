@@ -161,13 +161,19 @@ hostname with no Access policy is an open door. Same warning as the runbook in
 Verify with an unauthenticated request: it must `302` to the Access login, not
 serve the wiki.
 
-**What is not protected.** The origin does not validate `Cf-Access-Jwt-Assertion`
-— SERV-25 is still unimplemented, so this inherits the same posture as Switchyard
-and Lyceum. Access is enforced at Cloudflare's edge, and the origin's protection is
-that Traefik's `internal` entrypoint is never published to the host. Any container
-already on `construct_net` can reach `http://wiki:80` directly with no auth. That
-is acceptable for this content and worth knowing before anything more sensitive is
-put behind the same pattern.
+**What the origin checks, and what it does not.** Since SERV-106 the origin
+validates `Cf-Access-Jwt-Assertion` itself: the `wiki` router carries the
+`cf-access-jwt` middleware, so a request arriving at Traefik's `internal`
+entrypoint with a `wiki.` Host and no valid token for the wiki's own AUD gets a
+403 rather than the site. That matters more here than for Switchyard and Lyceum,
+which authenticate their own users — nginx serving static files will hand the
+estate map to whoever asks, so for the wiki that middleware is not defense in
+depth, it is the entire gate.
+
+What it does **not** cover is the backend directly: any container already on
+`construct_net` can reach `http://wiki:80` and bypass Traefik altogether. The
+guard sits on the router, not on the service. That is acceptable for this content
+and worth knowing before anything more sensitive is put behind the same pattern.
 
 ### The optional token
 
