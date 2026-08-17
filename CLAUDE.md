@@ -218,10 +218,14 @@ anything deploys or gets versioned.
   is on both networks**, which is what makes "dev cannot reach prod" true rather
   than merely intended. Do not attach Traefik to `construct_dev_net` to route
   dev hostnames: its `internal` entrypoint has no source restriction and the prod
-  routers on it have no auth middleware (SERV-25 is unimplemented), so any
-  container that can reach `traefik:9080` gets prod Switchyard and Lyceum by
-  setting a Host header — Cloudflare Access is enforced at Cloudflare's edge, not
-  here. Giving dev an edge is SERV-93. Isolation is asserted by
+  routers on it have no auth middleware (**SERV-106**), so any container that can
+  reach `traefik:9080` gets prod Switchyard and Lyceum by setting a Host header —
+  Cloudflare Access is enforced at Cloudflare's edge, not here. **Do not read
+  SERV-25 as covering this**: it shipped the Access policies and explicitly
+  deferred the origin-side `Cf-Access-Jwt-Assertion` validation, then closed — so
+  it reads `done` while the origin is still unauthenticated. SERV-106 is that
+  deferred half, and it is what makes the property above hold by *topology* rather
+  than by authentication. Giving dev an edge is SERV-93. Isolation is asserted by
   `make dev-verify-isolation`; dev-vs-prod config drift by `make dev-parity`.
 - **The wiki is generated, and its generator must never read a resolved
   environment** (SERV-101). `wiki/docs/` is wiped and rewritten on every run, so a
