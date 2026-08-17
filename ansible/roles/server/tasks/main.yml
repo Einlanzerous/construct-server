@@ -285,6 +285,33 @@
     driver: bridge
     state: present
 
+# --- DEV PROJECT BOOTSTRAP (SERV-77, SERV-97) ---
+# Only the two things `deploy-dev.yml` cannot create for itself. /opt is root-owned and
+# the runner has no sudo, so a workflow mkdir would fail in a less legible way than the
+# workflow's own "bootstrap the host first" error — same split as the prod deploy root
+# (SERV-76): ansible bootstraps, the workflow owns steady state.
+#
+# Deliberately does NOT clone, render an .env, or start anything. Dev's environment comes
+# from the DEV_ENV_FILE secret on the `home-server-dev` GitHub Environment and must never
+# be assembled from anything on this host — copying the prod .env into dev is the failure
+# SERV-77 exists to make impossible, because a dev purser holding prod credentials does
+# not fail safely, it succeeds against production.
+- name: Ensure dev deploy root exists
+  file:
+    path: "{{ dev_deploy_root }}"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: "0755"
+
+# External to the dev compose project, and owned by it alone. Nothing from the prod
+# project may ever join it (asserted by scripts/check-dev-isolation.sh).
+- name: Ensure construct_dev_net Docker network exists
+  community.docker.docker_network:
+    name: construct_dev_net
+    driver: bridge
+    state: present
+
 - name: Load .env variables
   slurp:
     src: "{{ deploy_root }}/.env"

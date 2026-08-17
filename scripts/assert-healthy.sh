@@ -24,6 +24,12 @@
 #     --timeout    — how long to wait for `starting` containers to settle (default 300)
 #     --warn-only  — report exactly as normal but always exit 0
 #
+#   DEPLOY_ROOT / COMPOSE_FILE / COMPOSE_PROJECT select which project to assert on, so the
+#   dev project gets the same gate as prod (SERV-97):
+#     DEPLOY_ROOT=/opt/construct-server-dev COMPOSE_FILE=docker-compose.dev.yml \
+#     COMPOSE_PROJECT=construct-server-dev ./scripts/assert-healthy.sh
+#   `make health-check` and `make dev-health-check` set these for you.
+#
 # Exit codes:
 #   0  nothing unhealthy (or --warn-only)
 #   1  at least one container is unhealthy
@@ -34,6 +40,14 @@ set -euo pipefail
 # Same fixed path as the rest of the tooling (SERV-76): the answer must not depend on
 # which checkout invoked this. See check-compose-drift.sh for the full reasoning.
 DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/construct-server}"
+# Named rather than assumed, because dev's file is not `docker-compose.yml` and compose
+# would not find it: a bare `docker compose` in the dev root discovers nothing at all,
+# and a bare one in this REPO discovers the prod file, which is the confusion the
+# `make dev-*` targets exist to prevent.
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+# Optional. The dev file declares `name: construct-server-dev` itself, so this is
+# belt-and-braces — but "which project did I just assert on" should not be inferred.
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-}"
 
 TIMEOUT=300
 WARN_ONLY=0
@@ -58,14 +72,16 @@ done
 
 command -v docker >/dev/null 2>&1 || { err "ERROR: required dependency 'docker' not found in PATH"; exit 2; }
 
-if [ ! -f "$DEPLOY_ROOT/docker-compose.yml" ]; then
-  err "ERROR: no docker-compose.yml at DEPLOY_ROOT=$DEPLOY_ROOT"
+if [ ! -f "$DEPLOY_ROOT/$COMPOSE_FILE" ]; then
+  err "ERROR: no $COMPOSE_FILE at DEPLOY_ROOT=$DEPLOY_ROOT"
   err "The stack deploys from a fixed path (SERV-76). Point this elsewhere with"
   err "  DEPLOY_ROOT=/path/to/root $0"
   exit 2
 fi
 
 cd "$DEPLOY_ROOT"
+
+compose() { docker compose -f "$COMPOSE_FILE" ${COMPOSE_PROJECT:+-p "$COMPOSE_PROJECT"} "$@"; }
 
 # --all, NOT the default. `docker compose ps -q` lists only RUNNING containers, so a
 # container that crashed and exited is simply absent from it — and absent reads as fine.
@@ -74,9 +90,9 @@ cd "$DEPLOY_ROOT"
 # failure there is, and it was the one case this could not see.
 ids() {
   if [ ${#services[@]} -gt 0 ]; then
-    docker compose ps -aq "${services[@]}"
+    compose ps -aq "${services[@]}"
   else
-    docker compose ps -aq
+    compose ps -aq
   fi
 }
 
@@ -143,11 +159,29 @@ fi
 # longer than the default timeout, so a cold amber can still be `starting` at the
 # deadline. That is reported rather than failed, and is why the loop reports what it was
 # still waiting on instead of claiming everything settled.
+#
+# Separately, the loop records every container it ever observes `restarting`. A container
+# that crash-loops is only `restarting` part of the time — sample it during one of its
+# short-lived `running` phases and, if it declares no healthcheck, it is indistinguishable
+# from a working service. That is most of the dev project (SERV-97), and the cold-start
+# failure SERV-77 measured at 10 restarts per service looks exactly like this. It is
+# reported rather than failed: a single restart while dependencies settle is normal on a
+# cold deploy, and prod's own init-db step runs after `up -d`, so failing on it would turn
+# every cold deploy red. Still `restarting` at the end is a different matter and does fail,
+# via the not-running path below.
 script_start="$(date +%s)"
 deadline=$(( script_start + TIMEOUT ))
+flapped=""
 while :; do
   waiting=""
   while read -r _id name state health streak probes; do
+    # The `[ … ] && …` reads like it would trip `set -e` on every non-restarting
+    # container, and does not: a command on the left of `&&` is exempt, which is exactly
+    # the rule that makes this idiom safe. Stated because the reflex is to "fix" it.
+    case " $flapped " in
+      *" ${name#/} "*) ;;
+      *) [ "$state" = "restarting" ] && flapped="$flapped ${name#/}" ;;
+    esac
     name="${name#/}"
     last_probe="${probes##* }"
     case "${last_probe}" in (*[!0-9]*|'') last_probe=0 ;; esac
@@ -202,6 +236,13 @@ if [ -n "$nocheck" ]; then
   for n in $nocheck; do printf '  - %s\n' "$n"; done
 fi
 
+if [ -n "$flapped" ]; then
+  printf '\nRestarted while this was watching (settled, so not a failure — but look if it\n'
+  printf 'repeats, especially for a service with no healthcheck above):\n'
+  for n in $flapped; do printf '  - %s (restart count: %s)\n' "$n" \
+    "$(docker inspect -f '{{.RestartCount}}' "$n" 2>/dev/null || echo '?')"; done
+fi
+
 if [ -n "$down" ]; then
   printf '\nNOT RUNNING:\n'
   for n in $down; do
@@ -225,10 +266,17 @@ if [ -n "$unhealthy" ]; then
 fi
 
 if [ -n "$unhealthy" ] || [ -n "$down" ]; then
+  # Name the right Makefile target for the project actually being asserted on — a dev
+  # failure telling you to run the prod recreate is a recipe for touching prod while
+  # debugging dev.
+  case "$COMPOSE_FILE" in
+    *dev*) recreate="make dev-force-recreate svc=<name>" ;;
+    *)     recreate="make force-recreate svc=<name>" ;;
+  esac
   printf '\nA working stack is the deploy'"'"'s postcondition, so this is a failed deploy even\n'
   printf 'though `up -d` succeeded. Investigate with:\n'
   printf '  docker logs <name> --tail 50\n'
-  printf '  make force-recreate svc=<name>   # --no-deps is baked in (SERV-63)\n'
+  printf '  %s   # --no-deps is baked in (SERV-63)\n' "$recreate"
   [ "$WARN_ONLY" -eq 1 ] && { printf '\n(--warn-only: not failing)\n'; exit 0; }
   exit 1
 fi

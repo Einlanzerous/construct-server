@@ -1,6 +1,6 @@
-.PHONY: network up down recreate force-recreate drift-check health-check db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check health-check versions db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
-        dev-db-init dev-db-shell dev-parity dev-verify-isolation \
+        dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
@@ -89,6 +89,15 @@ drift-check:
 health-check:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-healthy.sh $(svc)
 
+# Report what the stack is actually running: image ref, resolved digest, and the COMMIT
+# each image was built from (SERV-97). Read the revision column, not the digest — the
+# publish workflow builds the same source twice seconds apart, so two digests from one
+# commit is normal and comparing them invents drift that is not there (SERV-88).
+# Usage: make versions            (whole stack)
+#        make versions svc=purser (one service)
+versions:
+	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/report-versions.sh $(svc)
+
 # Start only the postgres service
 db-up: deploy-root network
 	$(COMPOSE) up -d postgres
@@ -168,6 +177,17 @@ wiki-serve:
 # materialised at $(DEV_ROOT)/.env. Never point dev at the prod .env: SERV-77 is
 # explicit about that, and a dev Purser holding prod credentials would provision
 # real accounts in real services.
+#
+# `deploy-dev.yml` is what drives these in steady state (SERV-97) — it renders the .env
+# from DEV_ENV_FILE + dev-versions.env, pulls, and calls dev-up. These targets remain the
+# way a human does it locally, and the workflow calls them rather than restating the flags,
+# which is the point of pinning the project/file/env-file triple in one place.
+#
+# Setting up a dev root BY HAND, without the workflow: after `make dev-bootstrap`, put your
+# own .env at $(DEV_ROOT)/.env. It needs no DEV_*_TAG entries — the `:-latest` fallback in
+# the compose file applies and dev floats, which is dev's normal state. To also apply the
+# tracked pins, render it the way the workflow does:
+#   ./scripts/render-env.sh $(DEV_ROOT)/.env dev-versions.env $(DEV_ROOT)/.env
 DEV_ROOT ?= /opt/construct-server-dev
 DEV_PROJECT = construct-server-dev
 DEV_COMPOSE = docker compose -p $(DEV_PROJECT) -f $(DEV_ROOT)/docker-compose.dev.yml \
@@ -202,8 +222,9 @@ dev-network:
 # checkout that CI or a human may move underneath it.
 dev-bootstrap: dev-network
 	@mkdir -p "$(DEV_ROOT)" 2>/dev/null || { echo "Cannot create $(DEV_ROOT) — run: sudo install -d -o $$(id -un) -g $$(id -gn) $(DEV_ROOT)"; exit 1; }
-	rsync -a docker-compose.dev.yml "$(DEV_ROOT)/"
+	rsync -a docker-compose.dev.yml dev-versions.env Makefile "$(DEV_ROOT)/"
 	rsync -a --delete ./db/ "$(DEV_ROOT)/db/"
+	rsync -a --delete ./scripts/ "$(DEV_ROOT)/scripts/"
 	@echo "Dev root ready at $(DEV_ROOT). Put the dev .env there, then: make dev-up"
 
 # Bring the dev stack up. Safe to re-run; recreates only what drifted.
@@ -268,6 +289,24 @@ dev-db-init: dev-root
 
 dev-db-shell: dev-root
 	$(DEV_COMPOSE) exec postgres-dev psql -U postgres
+
+# Dev's counterpart to health-check (SERV-97). Most dev services declare no healthcheck,
+# so what this mainly catches is a service that crash-looped or exited — which is the dev
+# failure that matters, since a cold dev root is exactly where that happens. It also names
+# the containers that cannot be seen to fail.
+# Usage: make dev-health-check                    (whole dev project)
+#        make dev-health-check svc=switchyard-dev (one service)
+dev-health-check:
+	DEPLOY_ROOT=$(DEV_ROOT) COMPOSE_FILE=docker-compose.dev.yml COMPOSE_PROJECT=$(DEV_PROJECT) \
+	  ./scripts/assert-healthy.sh --timeout 180 $(svc)
+
+# What is dev ACTUALLY running? Dev floats on `latest`, so the compose file answers
+# nothing and `dev-ps` answers with the same word every time. This resolves it to the
+# commit each image was built from (SERV-97).
+# Usage: make dev-versions
+dev-versions:
+	DEPLOY_ROOT=$(DEV_ROOT) COMPOSE_FILE=docker-compose.dev.yml COMPOSE_PROJECT=$(DEV_PROJECT) \
+	  ./scripts/report-versions.sh $(svc)
 
 # Report env keys prod declares that dev does not (see the script header for why
 # dev is written out explicitly instead of using compose `extends`).

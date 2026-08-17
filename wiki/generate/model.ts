@@ -14,6 +14,8 @@ export interface Estate {
   prod: ComposeFile;
   dev: ComposeFile | null;
   pins: VersionPin[];
+  /** The dev project's own pins (SERV-97). Empty when `dev-versions.env` is absent. */
+  devPins: VersionPin[];
   repos: Repo[];
   /** Local files ingested verbatim into the reference section. */
   reference: { title: string; path: string; body: string }[];
@@ -24,6 +26,7 @@ export interface EstateInputs {
   composePath: string;
   devComposePath: string | null;
   versionsPath: string;
+  devVersionsPath: string | null;
   repoDocsCache: string;
   reference: { title: string; path: string; body: string }[];
   buildRef: string;
@@ -33,11 +36,15 @@ export function buildEstate(inputs: EstateInputs): Estate {
   const prod = parseCompose(inputs.composePath);
   const dev = inputs.devComposePath ? parseCompose(inputs.devComposePath) : null;
   const pins = parseVersions(inputs.versionsPath);
+  // Deliberately NOT merged into `pins`. They are different vocabularies for different
+  // environments, and the version page's whole job is to say what PROD runs.
+  const devPins = inputs.devVersionsPath ? parseVersions(inputs.devVersionsPath) : [];
 
   return {
     prod,
     dev,
     pins,
+    devPins,
     repos: deriveRepos(prod, pins, inputs.repoDocsCache),
     reference: inputs.reference,
     buildRef: inputs.buildRef,

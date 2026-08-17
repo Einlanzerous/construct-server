@@ -15,3 +15,14 @@ repo_url: "https://github.com/Einlanzerous/construct-server.git"
 # every deploy. Defined here rather than in the server role so the ops/ playbooks,
 # which do not consume that role, resolve the same value.
 deploy_root: /opt/construct-server
+
+# Where the dev compose project is deployed from (SERV-77, SERV-97). A sibling path, not
+# a subdirectory: the two are separate compose projects with separate networks, databases
+# and secrets, and nesting them would make a stray `--project-directory` or a recursive
+# rsync able to confuse the two.
+#
+# The same ownership split as above, with one difference — ansible creates this directory
+# and the dev network and stops there. It does not clone into it and does not write an
+# .env, because dev's environment comes from the DEV_ENV_FILE secret and nothing on this
+# host is a valid source for it.
+dev_deploy_root: /opt/construct-server-dev

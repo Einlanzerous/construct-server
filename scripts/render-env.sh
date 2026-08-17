@@ -22,9 +22,12 @@
 # to remember.
 #
 # The strip list is read from versions.env itself, so adding an eleventh service needs
-# no edit here — and third-party pins that also end in _TAG (CLOUDFLARED_TAG,
-# AUTHENTIK_TAG) are left in the secret untouched, which a blanket regex over `_TAG`
-# would have eaten.
+# no edit here, and only the keys that file actually defines are touched. A blanket regex
+# over `_TAG` would have been simpler and wrong: it would eat any third-party pin the
+# secret happened to carry. There are none left as of SERV-105 — the third-party images
+# are pinned by digest in docker-compose.yml — but the strip list stays derived rather
+# than pattern-matched, because that property should not depend on the current contents
+# of a file this script does not own.
 #
 # Usage:
 #   render-env.sh <base> <versions.env> <output>
@@ -116,11 +119,15 @@ stripped="$(printf '%s\n' "$base_content" | awk -v keys="$pinned_keys" '
   }
 ')"
 
+# The MARKER itself is a fixed sentinel — it is what the cut above searches for, so it
+# must read identically no matter which pin file produced the block. The line under it
+# names the actual source instead, because dev renders from dev-versions.env (SERV-97) and
+# a deployed dev .env telling you to go edit versions.env sends you to the wrong file.
 rendered="$(printf '%s\n\n%s\n%s\n%s\n%s\n' \
   "$stripped" \
   "$MARKER" \
   "# Do not edit below here: this block is regenerated on every deploy and an edit made" \
-  "# on the host is lost without warning. Change versions.env and merge it." \
+  "# on the host is lost without warning. Change $(basename "$versions") and merge it." \
   "$pins")"
 
 if [ -f "$out" ] && [ "$(cat "$out")" = "$rendered" ]; then

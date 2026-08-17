@@ -16,6 +16,8 @@ anything deploys or gets versioned.
 - `docker-compose.dev.yml` — the `construct-server-dev` project (SERV-77): a second,
   isolated copy of switchyard/argosy/lyceum/purser with its own Postgres and
   network. See `docs/dev-environment.md`; drive it with the `make dev-*` targets.
+  Deployed by `deploy-dev.yml` (SERV-97), which pins nothing — `dev-versions.env`
+  holds `latest` for every service on purpose.
 - `config/` — Traefik, CrowdSec, and Copyparty config mounted into containers.
 - `caddy/`, edge routing — public 443 paths and Cloudflare Access.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
@@ -159,6 +161,27 @@ anything deploys or gets versioned.
   digest comparison alone will invent version drift that does not exist, which
   matters for the delivery ledger and for rollback, where "is this the same code"
   is the whole question.
+  **Dev pins separately, to `latest`, and that is not an oversight** (SERV-97).
+  `dev-versions.env` is a second file with a `DEV_` prefix on every variable, every value
+  `latest`. Dev's job is to run what just merged; sharing prod's variable names would mean
+  a misplaced prod `.env` silently pins dev to prod's versions, where distinct names make
+  that inert. Note that **a floating tag is not a floating container**: the image string
+  never changes, so compose sees no drift and `up -d` alone moves nothing however far main
+  has gone. Dev advances only on a `pull`, which is what `deploy-dev.yml` does hourly.
+  **Third-party images are pinned by digest** (SERV-105), in the form `repo:tag@sha256:…`
+  inline in `docker-compose.yml` — the tag is provenance, the digest is the pin. Before it,
+  `docker compose pull` moved every floating tag, and the first real rollback recreated
+  purser, ollama and semaphore when only purser was asked for.
+  **This does not make a promote's blast radius the one service named, and do not write
+  that it does.** The major.minor pins above are moving tags by design, so a purser rollback
+  still recreates lyceum if lyceum cut a patch in the meantime — and that is worse than the
+  leaf case, since first-party services have dependents and the Node ones do not recover
+  from a peer recreate on their own. Scoping the pull is SERV-109. A "stable-looking" tag is not a pin —
+  `traefik:v3.3` moves on patch releases and `crowdsec:v1.7.8` can be rebuilt in place,
+  the same trap as `postgres:16.15-alpine`. **The four watchtower opt-ins stay floating**
+  (dozzle, uptime-kuma, datadog, watchtower): watchtower is their update path and it cannot
+  roll a digest-pinned container, so pinning them disables the mechanism rather than making
+  anything deliberate.
   The `:-latest` fallback is a bootstrap convenience and a hazard in prod, and
   both halves matter. It cannot simply be deleted: an unset **or empty** var
   interpolates to `image: …/argosy:`, which is neither an error nor `latest`, and
@@ -212,7 +235,9 @@ anything deploys or gets versioned.
   (`construct_dev_net`) and its own secrets (`DEV_ENV_FILE` on the
   `home-server-dev` environment). A bare `docker compose` in this repo resolves to
   the **prod** file, so use the `make dev-*` targets, which pin the project name,
-  compose file and env file together. Never copy the prod `.env` into dev: purser
+  compose file and env file together. `deploy-dev.yml` calls those same targets
+  rather than restating the flags (SERV-97) — ansible creates the dev root and the
+  dev network, the workflow owns steady state, the same split as prod. Never copy the prod `.env` into dev: purser
   provisions real accounts across four services, so a dev purser with prod
   credentials does not fail safely — it succeeds, against production. **Nothing
   is on both networks**, which is what makes "dev cannot reach prod" true rather
@@ -263,6 +288,12 @@ There is no test suite — this repo is configuration, so validation is mostly
 - `make health-check` (or `./scripts/assert-healthy.sh [service]`) to ask whether
   the stack actually works, which `docker compose ps` does not answer — it fails
   on anything unhealthy and lists every container with no healthcheck at all.
-  `deploy.yml` runs it as a post-deploy gate (SERV-102).
+  `deploy.yml` runs it as a post-deploy gate (SERV-102). `make dev-health-check`
+  is the dev project's copy, run by `deploy-dev.yml`.
+- `make versions` / `make dev-versions` to answer *what is actually running* — the
+  image ref, the resolved digest, and the commit each image was built from. **Read
+  the revision column, not the digest**: the publish workflow builds the same source
+  twice seconds apart, so two digests from one commit is normal and comparing them
+  invents drift that is not there (SERV-88).
 - For edge or auth changes, the only real check is a request through the public
   path — internal container-to-container success proves nothing about Access.
