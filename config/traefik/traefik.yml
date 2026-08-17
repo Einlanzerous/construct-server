@@ -59,7 +59,28 @@ entryPoints:
   # This port is intentionally absent from the compose `ports:` list, so it is
   # unreachable from the host/WAN and can never provide a bypass around Access.
   internal:
-    address: ":9080"
+    # Bound to ONE address, not every interface (SERV-106). `:9080` meant "listen on all
+    # of Traefik's interfaces", and on a shared Docker network that means every neighbour
+    # can reach it. That was demonstrated, not theorised — from a throwaway container on
+    # construct_net:
+    #
+    #   curl -H "Host: switchyard.zerogravity.industries" http://traefik:9080/  -> 200
+    #
+    # unauthenticated prod Switchyard, because Cloudflare Access is enforced at
+    # Cloudflare's edge and nothing re-checked it here. The comment above about this port
+    # being "unreachable from the host/WAN" was true and beside the point: the exposure
+    # was never the host, it was the other ~30 containers.
+    #
+    # 172.31.240.10 is Traefik's fixed address on construct_edge_net, which only
+    # cloudflared shares. THIS VALUE MUST MATCH the ipv4_address in docker-compose.yml —
+    # if they disagree Traefik binds an address it does not hold, cloudflared cannot
+    # connect, and every tunneled app goes dark. Verify with:
+    #
+    #   docker run --rm --network construct_net curlimages/curl -sv \
+    #     -H "Host: switchyard.zerogravity.industries" http://traefik:9080/
+    #
+    # which must fail to connect, while the public hostnames still 302 to Access.
+    address: "172.31.240.10:9080"
     http:
       middlewares:
         - strip-identity-headers@file
