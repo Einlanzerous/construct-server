@@ -270,10 +270,17 @@ else
 fi
 
 probe() {
-  # Prints the status code, or "conn-refused" — which must never be read as a
-  # pass. "Could not connect" and "was rejected" are different properties, and
-  # conflating them is how SERV-107 came to look like it closed this ticket.
-  curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "Host: $1" "http://$ADDR/" 2>/dev/null || echo "conn-refused"
+  # Prints the status code, or `000` when curl could not connect at all — which must
+  # never be read as a pass. "Could not connect" and "was rejected" are different
+  # properties, and conflating them is how SERV-107 came to look like it closed this
+  # ticket.
+  #
+  # `|| true` rather than `|| echo`: on a connection failure curl writes `000` AND
+  # exits non-zero, so an `echo` on the right-hand side appends a SECOND line to a
+  # value the caller compares as one string.
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "Host: $1" "http://$ADDR/" 2>/dev/null || true)"
+  printf '%s\n' "${code:-000}"
 }
 
 # 6. The exploit, verbatim, per tunneled host.
@@ -284,9 +291,12 @@ for host in "${HOSTS[@]}"; do
     echo "  ok    spoofed Host: $host -> 403"
   else
     echo "  FAIL  spoofed Host: $host -> $code (expected 403)"
-    if [ "$code" = "200" ]; then
-      echo "        The origin served this host to an unauthenticated request. This is SERV-106."
-    fi
+    case "$code" in
+      200) echo "        The origin served this host to an unauthenticated request. This is SERV-106." ;;
+      000) echo "        Could not connect to $ADDR at all. That is not a pass: this asserts the"
+           echo "        origin REJECTS the request, and an unreachable edge proves nothing about"
+           echo "        what it does when reached. Check that traefik is up and bound correctly." ;;
+    esac
     FAIL=1
   fi
 done

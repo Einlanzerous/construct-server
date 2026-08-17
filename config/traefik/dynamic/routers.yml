@@ -238,11 +238,15 @@ http:
     # push after this middleware went to enforce returned 403 on
     # POST /v1/external/github, and the audit-mode log is what caught it.
     #
-    # It is NOT an unauthenticated endpoint — it authenticates with something Access
-    # cannot express. Every request is HMAC-verified against GITHUB_WEBHOOK_SECRET and
-    # the receiver returns 503 when that secret is absent, so a forged call fails at
-    # the application. The exemption is kept as narrow as it can be: exact `Path()`,
-    # not `PathPrefix()`, on one host.
+    # Be precise about what this costs, because "narrow exemption, exact Path" reads
+    # safer than it is: at THIS layer the path is an unauthenticated POST into prod
+    # Switchyard for anything that can reach the entrypoint. Nothing here checks it.
+    # What actually guards it is one layer down — every request is HMAC-verified
+    # against GITHUB_WEBHOOK_SECRET and the receiver returns 503 when that secret is
+    # absent — so the endpoint authenticates with something Cloudflare Access cannot
+    # express, rather than not at all. If that HMAC ever became optional, this router
+    # would be a hole. Keeping the rule to an exact `Path()` rather than a
+    # `PathPrefix()` is what bounds the damage to the one endpoint that has it.
     #
     # check-edge-auth.sh knows this router by name. Any OTHER internal router that
     # turns up without the middleware fails that check — the allowlist is the point.
@@ -274,8 +278,16 @@ http:
     # be reachable from the public entrypoint. It holds no secret values, but a map
     # of the estate is not something to serve to the WAN either.
     # It is also the only tunneled app with no authentication of its own — nginx
-    # serving static files will hand the estate map to whoever asks — so for the
-    # wiki, cf-access-jwt is not defense in depth, it is the entire gate.
+    # serving static files will hand the estate map to whoever asks — so on THIS
+    # path, cf-access-jwt is not defense in depth, it is the entire gate.
+    #
+    # Scoped to "this path" deliberately. The guard sits on the router, not on the
+    # service, and `wiki` is on construct_net with no auth: `curl http://wiki:80/`
+    # from any container there still returns the site, including the arbitrary-workload
+    # neighbours (n8n, open-webui, copyparty, ollama). That is pre-existing and outside
+    # SERV-106, but it is the same "reaching it is enough" shape, so do not read the
+    # sentence above as saying the wiki is closed — it says the tunneled route is.
+    # Closing the other one means the wiki growing an auth layer of its own.
     wiki:
       entryPoints:
         - internal
