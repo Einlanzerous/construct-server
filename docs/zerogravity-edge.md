@@ -27,7 +27,7 @@ The open WAN 443 must never provide a bypass around Cloudflare Access. Traefik r
 | Entrypoint | Container port | Published? | Serves |
 |-----------|----------------|-----------|--------|
 | `public`   | `:8443` | yes (host `443:8443`) | direct routers only — Argosy + Lyceum's direct path (SERV-60) — + a deny-all catch-all |
-| `internal` | `:9080` (HTTP) | **no** (construct_net only) | tunneled apps; cloudflared origin |
+| `internal` | `172.31.240.10:9080` (HTTP) | **no** (bound to construct_edge_net only) | tunneled apps; cloudflared origin |
 | `traefik`  | `:8080` | **no** | dashboard/API |
 
 The `internal` entrypoint is plain HTTP: Cloudflare terminates TLS at the edge and
@@ -47,7 +47,9 @@ is preserved and will be cryptographically validated in Phase 2 (SERV-25).
 ## Status
 
 **Done / live:**
-- **Traefik (SERV-20)** + **cloudflared (SERV-23)** deployed on `construct_net`; host
+- **Traefik (SERV-20)** on `construct_net` + `construct_edge_net`; **cloudflared (SERV-23)**
+  on `construct_edge_net` only, so the `internal` entrypoint binds one address that only
+  the tunnel can reach (SERV-107). Host
   connector retired (single container connector).
 - **Switchyard tunneled + Access (SERV-24/25):** `switchyard.zerogravity.industries`
   → tunnel → `traefik:9080` → switchyard-frontend, gated by **Cloudflare Access**

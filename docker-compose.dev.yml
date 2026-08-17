@@ -253,15 +253,21 @@ networks:
   # `make dev-network`; only this project references it.
   #
   # An earlier revision attached prod's Traefik here as a second network so it
-  # could route dev. hostnames. That was withdrawn: Traefik's `internal`
-  # entrypoint (:9080) listens on every interface it has, with no source
-  # restriction — only header stripping — and the prod switchyard and lyceum
-  # routers sit on it with no auth middleware, because the Cloudflare Access JWT
-  # validation their comments promise is still unimplemented (SERV-25). Access is
-  # enforced at Cloudflare's edge, so a request arriving at :9080 from inside
-  # Docker is authenticated by nothing. Verified: a container on a
-  # Traefik-attached network gets HTTP 200 from prod switchyard just by setting
-  # the Host header.
+  # could route dev. hostnames. That was withdrawn, and the reason still stands:
+  # the prod switchyard and lyceum routers on Traefik's `internal` entrypoint have
+  # no auth middleware, because the Cloudflare Access JWT validation their comments
+  # promise is still unimplemented (SERV-106). Access is enforced at Cloudflare's
+  # edge, so a request arriving at that entrypoint from inside Docker is
+  # authenticated by nothing. Verified at the time: a container on a
+  # Traefik-attached network got HTTP 200 from prod switchyard just by setting the
+  # Host header.
+  #
+  # SERV-107 has since bound `internal` to a single address on construct_edge_net,
+  # so that exact command no longer connects from construct_net. It does NOT make
+  # attaching Traefik here safe — a second network is a second place the entrypoint
+  # becomes reachable, which is precisely what the bind stopped. The protection is
+  # topology, not authentication, and adding a network is how topology stops
+  # protecting you.
   #
   # Attaching Traefik here would therefore have handed every dev container — all
   # of them deliberately running :latest, i.e. the untested code this project

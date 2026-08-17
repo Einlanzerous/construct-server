@@ -53,11 +53,23 @@ entryPoints:
       trustedIPs: []
 
   # Internal entrypoint — target for cloudflared at http://traefik:9080. Plain HTTP
-  # on purpose: the leg from cloudflared to Traefik runs inside construct_net behind
+  # on purpose: the leg from cloudflared to Traefik runs inside a Docker network behind
   # an already-encrypted tunnel, and Cloudflare presents the edge cert to browsers,
   # so no origin cert is needed here (only the public/Argosy path needs the LE cert).
-  # This port is intentionally absent from the compose `ports:` list, so it is
-  # unreachable from the host/WAN and can never provide a bypass around Access.
+  #
+  # This port is absent from the compose `ports:` list, so it is unreachable from the
+  # WAN. It is NOT unreachable from the host — an earlier version of this comment said
+  # so and was wrong. On Linux the host routes to container addresses directly, publish
+  # or not, which is verifiable in one line:
+  #
+  #   curl -H 'Host: switchyard.zerogravity.industries' http://<traefik-ip>:9080/   -> 200
+  #
+  # (it shows up in the access log as entryPointName=internal, ClientHost=172.19.0.1,
+  # the bridge gateway). That is equally true after the bind below — anything with host
+  # access or the docker socket still reaches it. Those are strictly larger compromises
+  # than the one SERV-106 closes, so this is not a regression, but the sentence should
+  # not be trusted as written. SERV-30's suite should probe from the host too, not only
+  # from a container.
   internal:
     # Bound to ONE address, not every interface (SERV-106). `:9080` meant "listen on all
     # of Traefik's interfaces", and on a shared Docker network that means every neighbour
@@ -67,9 +79,9 @@ entryPoints:
     #   curl -H "Host: switchyard.zerogravity.industries" http://traefik:9080/  -> 200
     #
     # unauthenticated prod Switchyard, because Cloudflare Access is enforced at
-    # Cloudflare's edge and nothing re-checked it here. The comment above about this port
-    # being "unreachable from the host/WAN" was true and beside the point: the exposure
-    # was never the host, it was the other ~30 containers.
+    # Cloudflare's edge and nothing re-checked it here. The exposure this closes is the
+    # other ~30 containers on the shared network; see the note above for why the host
+    # remains a separate and larger matter.
     #
     # 172.31.240.10 is Traefik's fixed address on construct_edge_net, which only
     # cloudflared shares. THIS VALUE MUST MATCH the ipv4_address in docker-compose.yml —

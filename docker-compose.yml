@@ -1059,7 +1059,10 @@ services:
       #
       # so it needs nothing from construct_net. Keeping it off that network is half of
       # what makes the entrypoint's bind address meaningful: Traefik listens on one
-      # address, and this is the only other container that can reach it.
+      # address, and this is the only other *container* that can reach it. The host
+      # still can — Linux routes to container addresses whether or not a port is
+      # published — and so does anything holding the docker socket. Both are larger
+      # compromises than the one this closes; see config/traefik/traefik.yml.
       #
       # If a future ingress rule points at a service directly instead of at Traefik, it
       # will fail to resolve here — that is the intended failure. Route it through

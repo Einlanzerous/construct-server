@@ -172,7 +172,7 @@ function parseServices(doc: Document): ComposeService[] {
       user: str(body, "user"),
       profiles: stringList(body.get("profiles", true)),
       ports: stringList(body.get("ports", true)).map(parsePort),
-      networks: stringList(body.get("networks", true)),
+      networks: parseNetworks(body.get("networks", true)),
       volumes: stringList(body.get("volumes", true)).map(parseVolume),
       dependsOn: parseDependsOn(body.get("depends_on", true)),
       env: parseEnvironment(body.get("environment", true)),
@@ -259,6 +259,25 @@ function parseVolume(raw: string): VolumeMount {
   const mode = parts[2] ?? null;
   const kind = target === "" ? "anonymous" : source.startsWith(".") || source.startsWith("/") ? "bind" : "named";
   return { raw, source, target, mode, kind };
+}
+
+// `networks:` has the same two forms as `depends_on:` — a plain list of names, or a map
+// keyed by network with per-network settings under it. Only the names matter here.
+//
+// The map form is not hypothetical: SERV-106 gave traefik
+// `construct_net: {}` / `construct_edge_net: {ipv4_address: …}` so the internal
+// entrypoint could bind one address. Under the list-only reader that parsed as `[]`,
+// silently — no throw — and the wiki then claimed traefik declared no networks at all
+// and put it on the project default, on the one service where the answer *is* the
+// security control. A wrong topology page is worse than a missing one.
+function parseNetworks(node: unknown): string[] {
+  if (isSeq(node)) return stringList(node);
+  if (isMap(node)) {
+    return (node.items as Pair<unknown, unknown>[])
+      .map((item) => scalarString(item.key))
+      .filter((n): n is string => n !== null);
+  }
+  return [];
 }
 
 function parseDependsOn(node: unknown): string[] {
