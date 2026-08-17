@@ -48,6 +48,7 @@ function main(): void {
     composePath: join(REPO_ROOT, "docker-compose.yml"),
     devComposePath: optional(join(REPO_ROOT, "docker-compose.dev.yml")),
     versionsPath: join(REPO_ROOT, "versions.env"),
+    devVersionsPath: optional(join(REPO_ROOT, "dev-versions.env")),
     repoDocsCache,
     reference: loadReference(),
     buildRef: buildRef(),

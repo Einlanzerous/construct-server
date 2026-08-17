@@ -151,6 +151,11 @@ function glanceRows(estate: Estate, svc: ComposeService): (string | null)[][] {
     } else if (svc.image.tag) {
       rows.push(["Tag", code(svc.image.tag)]);
     }
+    // A digest pin means the tag above is documentation, not the thing docker resolves
+    // (SERV-105). Say so, or the Tag row reads as the version in effect when it is not.
+    if (svc.image.digest) {
+      rows.push(["Pinned by digest", `${code(svc.image.digest)} — the tag is provenance only`]);
+    }
     rows.push(["Origin", svc.image.firstParty ? "first-party" : "third-party"]);
   }
   if (svc.build) rows.push(["Built from", code(svc.build)]);

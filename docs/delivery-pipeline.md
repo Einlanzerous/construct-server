@@ -216,6 +216,27 @@ happens today; no change.
 deploying *that sha* to the dev project only. Dev always tracks HEAD. No gate here —
 the gate is what comes after.
 
+*Shipped as `deploy-dev.yml` (SERV-97), with two departures from the sentence above.*
+
+- *Dev **floats on `latest`** rather than pinning a dispatched sha. The pinning machinery
+  exists — `dev-versions.env`, a separate file with a `DEV_` prefix on every variable so a
+  misplaced prod `.env` cannot pin dev to prod's versions — but every value in it is
+  `latest`, deliberately. Dev's job is to run what just merged; a pinned dev is a second
+  prod. The file earns its place by giving a **temporary** dev pin a reviewable home, and by
+  making dev's version state answerable from git rather than from the box.*
+- *A dispatch alone would not have worked, and this is the part worth carrying forward. The
+  service repos do dispatch `image-updated` — from `release.yml`, gated on release-please
+  cutting a version. So it fires on a **release**, not on a merge. `latest` is pushed by
+  `publish.yml` on every push to main and announced to nobody. A dispatch-only workflow
+  would have left dev moving on releases while looking like it had fixed the problem. An
+  **hourly schedule** is what makes step 2 true today; the dispatch is what makes it prompt.
+  Adding a per-merge `deploy-dev` dispatch to each service repo's `publish.yml` is
+  **SERV-108**, and it is what lets the cron drop back to a backstop.*
+
+*Note what actually moves dev, because it is not obvious: a floating tag is not a floating
+container. The image string never changes, so compose sees no drift and `up -d` alone is a
+no-op however far main has moved. Dev advances only when something **pulls**.*
+
 **3. Record the deployment.** The deploy writes a `deployments` row: environment,
 service, version, actor, source ref. Ticket keys come from commit trailers. This table
 is what makes the version matrix possible, and doubles as the rollback index.
@@ -262,12 +283,17 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
 - *It **does not deploy**. It edits one line of `versions.env` and commits; `deploy.yml`
   already fires on a push touching that file, and is the only thing that deploys
   (SERV-76). This keeps the deploy path single.*
-- *The recreate is **not** scoped to the named service, which this document claimed until
-  it was measured. `deploy.yml` pulls before `up -d`, so compose recreates the named
-  service **and any unpinned third-party image that moved since the last pull**. The first
-  real rollback (purser 0.13 → 0.12) recreated purser, ollama and semaphore. Both extras
-  are leaves, so nothing broke — but "a rollback recreates one service" is not currently
-  true, and predictability is most of what a rollback is for. **SERV-105.***
+- *The recreate is scoped to the named service — but it was **not** when this shipped, and
+  this document asserted it without measuring. `deploy.yml` pulls before `up -d`, so compose
+  recreated the named service **and any unpinned third-party image that had moved since the
+  last pull**. The first real rollback (purser 0.13 → 0.12) recreated purser, ollama and
+  semaphore. Both extras were leaves, so nothing broke; "a rollback recreates one service"
+  was simply false, and predictability is most of what a rollback is for. **SERV-105** closed
+  it by pinning the third-party images by digest — including `traefik:v3.3` and
+  `crowdsec:v1.7.8`, which look like pins and are not, since a minor tag moves on patch
+  releases and a patch tag can be rebuilt in place. Four images still float by design: the
+  watchtower opt-ins, which have their own scheduled path and cannot be rolled by it once
+  pinned.*
 - *It verifies the tag exists in the registry **before** committing, across every image
   behind the pin — a repo's backend and frontend ship from one release, so a version
   that published for one and not the other is refused rather than half-deployed.*

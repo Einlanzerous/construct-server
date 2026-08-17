@@ -37,9 +37,14 @@ export function parseVersions(path: string): VersionPin[] {
   return out;
 }
 
-/** `SWITCHYARD_TAG` -> `switchyard`. One variable per source repo, by convention. */
+/**
+ * `SWITCHYARD_TAG` -> `switchyard`. One variable per source repo, by convention.
+ * The dev pin file uses the same convention behind a `DEV_` prefix (SERV-97), which
+ * names the same repo — strip it, or `DEV_SWITCHYARD_TAG` claims a repo that does
+ * not exist.
+ */
 function repoFromVariable(variable: string): string {
-  return variable.replace(/_TAG$/, "").toLowerCase();
+  return variable.replace(/^DEV_/, "").replace(/_TAG$/, "").toLowerCase();
 }
 
 function classify(value: string): PinStyle {

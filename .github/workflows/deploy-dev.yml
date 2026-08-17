@@ -1,0 +1,252 @@
+name: Deploy to Dev
+
+# The pipeline's step 2 (SERV-97). `docs/delivery-pipeline.md` has always said a merge
+# auto-deploys to dev with no gate — SERV-77 built the dev project and its `make dev-*`
+# targets, but nothing moved code into it, so dev was a sandbox someone started by hand
+# rather than a pipeline stage. Everything downstream assumes otherwise: the gate suite,
+# the verifier (SERV-80), the contract tests (SERV-81). A verifier reading acceptance
+# criteria against a stale dev writes a confident verdict about the wrong code, which is
+# worse than no verdict at all.
+#
+# WHY A SCHEDULE AND NOT ONLY A DISPATCH.
+# The design of record says `repository_dispatch` → deploy that sha. The service repos do
+# dispatch — but from `release.yml`, gated on release-please cutting a version, so
+# `image-updated` fires on a RELEASE and not on a merge. Dev tracks `latest`, which
+# `publish.yml` pushes on every push to main and announces to nobody. Listening only for
+# dispatches would leave dev moving on releases: the exact staleness this ticket exists to
+# remove, with a workflow file that looks like it fixed it.
+#
+# So the schedule is the mechanism that makes the acceptance criterion true today, and the
+# dispatch is the mechanism that makes it prompt. Adding a per-merge `deploy-dev` dispatch
+# to each service repo's `publish.yml` is the follow-up (SERV-108); when every one of them
+# sends it, this cron can drop to a low-frequency backstop or go away.
+#
+# WHAT THIS DOES NOT DO: touch prod. Different root, different compose file, different
+# project, different network, different secret. The last step asserts that rather than
+# trusting it.
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    # `deploy-dev` is the type a service repo should send on every merge to main.
+    # `image-updated` is what they send today, on release — accepted so a release still
+    # reaches dev promptly rather than waiting for the next scheduled run.
+    types: [deploy-dev, image-updated]
+  schedule:
+    # Hourly. Dev exists to run what just merged, so a lag measured in hours is the most
+    # this can be while still being honest about it. A run with nothing new to pull is a
+    # ~1 minute no-op that doubles as a "dev is still healthy" check.
+    - cron: '0 * * * *'
+  push:
+    branches: ["main"]
+    paths:
+      - 'docker-compose.dev.yml'
+      - 'dev-versions.env'
+      - 'db/**'
+      - 'scripts/**'
+      - '.github/workflows/deploy-dev.yml'
+
+# Same reasoning as deploy.yml: two runs would race on one deploy root, one rendered .env
+# and one set of containers. Queue rather than cancel — a cancelled run can have already
+# rsynced files or recreated half the project, and half-applied is worse than late. A
+# scheduled trigger makes overlap likelier here than in prod, not less.
+concurrency:
+  group: deploy-construct-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-dev:
+    runs-on: self-hosted
+    # Dev's secrets live on their own GitHub Environment, so this job cannot read
+    # PROD_ENV_FILE even by accident — `home-server` is a different environment and only a
+    # job declaring it can read its secrets. That is the same boundary prod relies on,
+    # pointed the other way (SERV-77).
+    environment: home-server-dev
+    env:
+      DEV_ROOT: /opt/construct-server-dev
+      DEV_PROJECT: construct-server-dev
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Verify required tools are on PATH
+        # The runner is a systemd service with a bare system PATH and no login shell, so
+        # anything under $HOME is invisible to it. Check explicitly rather than letting a
+        # missing binary surface as `command not found` from three layers down inside a
+        # make recipe (SERV-62 hit this twice). python3 is here because
+        # check-dev-isolation.sh parses the Traefik router config with it.
+        run: |
+          missing=""
+          for b in docker make rsync python3; do
+            command -v "$b" >/dev/null 2>&1 || missing="$missing $b"
+          done
+          if [ -n "$missing" ]; then
+            echo "Error: not on the runner's PATH:$missing"
+            echo "The runner does not source a login shell — add the directory via \$GITHUB_PATH."
+            exit 1
+          fi
+
+      - name: Verify the dev root exists
+        # Fail loudly rather than creating it: /opt is root-owned and this job has no sudo,
+        # so a mkdir here would fail in a less legible way. Ansible owns creating and
+        # chowning the directory, the same split as prod (SERV-76).
+        run: |
+          if [ ! -d "$DEV_ROOT" ]; then
+            echo "Error: dev root $DEV_ROOT does not exist."
+            echo "Bootstrap the host first: ansible-playbook ansible/site.yml"
+            echo "or, for a one-off:  sudo install -d -o \$(id -un) -g \$(id -gn) $DEV_ROOT"
+            exit 1
+          fi
+
+      - name: Sync dev stack files to the dev root
+        # Only what the dev project reads. --delete is per-directory so a removed file does
+        # not linger, and .env is never inside a synced directory — it is written by the
+        # next step and has to survive this one.
+        run: |
+          rsync -a --delete ./db/      "$DEV_ROOT/db/"
+          rsync -a --delete ./scripts/ "$DEV_ROOT/scripts/"
+          rsync -a docker-compose.dev.yml dev-versions.env Makefile "$DEV_ROOT/"
+
+      - name: Restore dev secrets
+        # DEV_ENV_FILE is to dev what PROD_ENV_FILE is to prod, and it is emphatically not
+        # a copy of it: purser provisions real accounts across four services, so a dev
+        # purser holding prod credentials does not fail safely — it succeeds, against
+        # production (SERV-77). Start from .env.dev.example and generate every value fresh.
+        #
+        # Rendered by the SAME script prod uses, merging the secret with dev-versions.env
+        # into one complete .env, so `make dev-*`, check-dev-parity.sh and a bare compose
+        # invocation in the dev root all resolve identical values without knowing the pin
+        # file exists.
+        env:
+          DEV_ENV_FILE: ${{ secrets.DEV_ENV_FILE }}
+        run: |
+          if [ -z "$DEV_ENV_FILE" ]; then
+            echo "Error: DEV_ENV_FILE secret is missing or empty."
+            echo "An empty environment is not an environment — compose would interpolate every"
+            echo "credential to the empty string and start a half-configured dev stack."
+            echo "Set it with:  gh secret set DEV_ENV_FILE --env home-server-dev < your-dev.env"
+            exit 1
+          fi
+          printf '%s\n' "$DEV_ENV_FILE" | ./scripts/render-env.sh - dev-versions.env "$DEV_ROOT/.env"
+          chmod 600 "$DEV_ROOT/.env"
+
+      - name: Verify every dev tag variable is accounted for
+        # Prod's guard asserts no first-party image resolved to `:latest`. Dev cannot borrow
+        # it — `latest` is dev's intended state, so the same assertion passes unconditionally
+        # here and would be a check that cannot fail. (Nor can a bare trailing `:` occur:
+        # `${VAR:-latest}` substitutes the default when the variable is empty as well as
+        # when it is unset, so the obvious "did a pin come out blank" test is also
+        # unfailable. Verified rather than assumed.)
+        #
+        # What CAN go wrong is coverage, and it is the same class of bug prod's guard
+        # exists for: a dev service added with `${DEV_AMBER_TAG:-latest}` and no matching
+        # line in dev-versions.env floats with nothing to hold it, and a line in
+        # dev-versions.env that no service reads is a control that silently does nothing.
+        # Assert the two sets match, in both directions.
+        run: |
+          referenced="$(grep -oE '\$\{DEV_[A-Z0-9_]+_TAG' docker-compose.dev.yml | sed 's/^\${//' | sort -u)"
+          pinned="$(grep -oE '^DEV_[A-Z0-9_]+_TAG' dev-versions.env | sort -u)"
+
+          unpinned="$(comm -23 <(printf '%s\n' "$referenced") <(printf '%s\n' "$pinned"))"
+          dead="$(comm -13 <(printf '%s\n' "$referenced") <(printf '%s\n' "$pinned"))"
+
+          rc=0
+          if [ -n "$unpinned" ]; then
+            echo "Error: docker-compose.dev.yml reads these variables, dev-versions.env does not set them:"
+            printf '%s\n' "$unpinned" | sed 's/^/  - /'
+            echo "Each falls through to :-latest with nothing tracked in git holding it there."
+            rc=1
+          fi
+          if [ -n "$dead" ]; then
+            echo "Error: dev-versions.env sets these, no service reads them:"
+            printf '%s\n' "$dead" | sed 's/^/  - /'
+            echo "A pin nothing reads looks like a control and is not one. Remove it."
+            rc=1
+          fi
+          [ "$rc" -eq 0 ] || exit 1
+          echo "All $(printf '%s\n' "$referenced" | grep -c .) dev tag variables are set in dev-versions.env."
+
+      - name: Show what dev will pull
+        # Compose's own resolution, in the dev root, against the .env it will actually use.
+        # Not a grep of that file: compose strips quotes and takes the last of duplicate
+        # keys, and a grep-vs-compose disagreement of exactly that kind has shipped a bug
+        # here once already (see deploy.yml, SERV-88).
+        working-directory: ${{ env.DEV_ROOT }}
+        run: docker compose -f docker-compose.dev.yml config --images | sed 's/^/  /'
+
+      - name: Ensure the dev network exists
+        # External and owned by this project alone. NOTHING from prod may join it — the
+        # last step of this job is what asserts that. `make dev-up` creates it too; this is
+        # here so a missing network reads as its own step rather than as a compose error
+        # inside a make recipe.
+        run: docker network create construct_dev_net 2>/dev/null || true
+
+      - name: Pull the images dev tracks
+        # This is what actually moves dev forward, and it is not optional. Dev floats on
+        # `latest`, so the image STRING in the compose file never changes — compose compares
+        # that string, sees no drift, and `up -d` alone is a no-op no matter how many times
+        # main has moved. A floating tag is not a floating container.
+        #
+        # No GHCR login step: all four first-party dev images are public packages (verified
+        # with an anonymous `docker manifest inspect`), so dev needs no registry credential
+        # and DEV_ENV_FILE stays free of a GitHub PAT. If one is ever made private this
+        # fails with an auth error rather than silently — which is the right way round.
+        run: make dev-pull
+
+      - name: Deploy the dev stack
+        # `make dev-up`, NOT a bare `docker compose up -d`, and the target's three steps are
+        # not collapsible. `depends_on: service_healthy` only waits for Postgres to accept
+        # connections; it says nothing about whether the per-service DATABASES exist, and
+        # those are created by db/init-db.sh afterwards. A single `up -d` against a cold dev
+        # root starts every service with no database to connect to — measured at 10 restarts
+        # each before the ordering was added. Prod gets away with the same shape only
+        # because its databases already exist.
+        run: make dev-up
+
+      - name: Assert nothing in dev is unhealthy
+        # Docker computes health and acts on none of it, in dev exactly as in prod
+        # (SERV-102). Most dev services declare no healthcheck at all, so this mostly
+        # catches the case that matters here — a service that crash-looped or exited — and
+        # names the ones that cannot be seen to fail. A shorter timeout than prod's 300s:
+        # dev has no `start_period: 15m` service to wait out.
+        run: make dev-health-check
+
+      - name: Assert dev is still isolated from prod
+        # SERV-97's acceptance criterion, and the one thing this workflow could plausibly
+        # break. Checks from the NETWORK's side as well as the project's, because the
+        # regression this repo has already made once is a PROD container joining the dev
+        # network — invisible to any dev-side check.
+        #
+        # always(), because a failed health check is not a reason to stop asking the
+        # security question — and an unhealthy dev is one of the states in which someone
+        # might reach for the network bridge that this forbids.
+        if: always()
+        run: make dev-verify-isolation
+
+      - name: Report what dev is running
+        # The third acceptance criterion: answerable from the run, not by shelling in.
+        # Prints the commit each image was built from, not just the digest — a digest
+        # comparison alone invents version drift that does not exist, because the publish
+        # workflow builds the same source twice seconds apart (SERV-88).
+        #
+        # always(), so a failed health check still tells you what is deployed — precisely
+        # the moment the question gets asked. continue-on-error with it, because a REPORT
+        # must not be able to fail a deploy: if an earlier step died before anything was
+        # created, this exits 2 for want of containers, and a second red step over the same
+        # root cause only obscures the first.
+        if: always()
+        continue-on-error: true
+        env:
+          DEPLOY_ROOT: ${{ env.DEV_ROOT }}
+          COMPOSE_FILE: docker-compose.dev.yml
+          COMPOSE_PROJECT: construct-server-dev
+        run: |
+          ./scripts/report-versions.sh
+          {
+            printf '## Dev is running\n\n'
+            ./scripts/report-versions.sh --markdown
+            printf '\nTriggered by `%s`.\n' "$GITHUB_EVENT_NAME"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -38,8 +38,19 @@ services:
   #
   # It also keeps dev deploys away from the shared Postgres, whose recreation
   # bounces every database-backed service on the box (SERV-63).
+  #
+  # Pinned by digest to the SAME image prod runs (SERV-102, SERV-105). Under the old
+  # floating `16-alpine` this container was recreated whenever upstream published and a
+  # `docker compose pull` happened to run — and a postgres recreate moves its address on
+  # the network, which Node/Bun's `pg-pool` caches and retries forever. That is precisely
+  # what killed prod switchyard on 2026-08-15, and `switchyard-dev` is the same runtime,
+  # so dev inherits the failure mode exactly. Dev pulls on every deploy, which is far more
+  # often than prod did.
+  #
+  # Matching prod's digest is also the point of dev: a dev postgres one minor version ahead
+  # of prod's is a rehearsal of something that is not going to ship. Bump both together.
   postgres-dev:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine@sha256:44c4ee9810eff91f7eab4d822642e01115b1a9eccce4bcbdde7604752d68eac6
     container_name: postgres-dev
     restart: unless-stopped
     # Loopback only. Dev's database is reachable from this host for a psql shell
@@ -82,7 +93,13 @@ services:
     # floating tag is correct — the point of dev is to run what just merged. The
     # SERV-88 pinning guard runs only against the prod deploy root, so this does
     # not trip it.
-    image: ghcr.io/einlanzerous/switchyard/backend:latest
+    #
+    # The variable is not a change of heart about that (SERV-97). `dev-versions.env` sets
+    # every one of these to `latest`, so the default state is unchanged; what the indirection
+    # buys is a reviewable place to hold dev on an older version for an afternoon, and a
+    # vocabulary distinct from prod's `SWITCHYARD_TAG` so a misplaced prod `.env` cannot
+    # quietly pin dev to prod's versions. See that file's header.
+    image: ghcr.io/einlanzerous/switchyard/backend:${DEV_SWITCHYARD_TAG:-latest}
     container_name: switchyard-dev
     restart: unless-stopped
     environment:
@@ -109,7 +126,7 @@ services:
       - construct_dev_net
 
   switchyard-frontend-dev:
-    image: ghcr.io/einlanzerous/switchyard/frontend:latest
+    image: ghcr.io/einlanzerous/switchyard/frontend:${DEV_SWITCHYARD_TAG:-latest}
     container_name: switchyard-frontend-dev
     restart: unless-stopped
     ports:
@@ -124,7 +141,7 @@ services:
 
   # --- ARGOSY (dev) ---
   argosy-dev:
-    image: ghcr.io/einlanzerous/argosy:latest
+    image: ghcr.io/einlanzerous/argosy:${DEV_ARGOSY_TAG:-latest}
     container_name: argosy-dev
     restart: unless-stopped
     ports:
@@ -168,7 +185,7 @@ services:
 
   # --- LYCEUM (dev) ---
   lyceum-dev:
-    image: ghcr.io/einlanzerous/lyceum:latest
+    image: ghcr.io/einlanzerous/lyceum:${DEV_LYCEUM_TAG:-latest}
     container_name: lyceum-dev
     restart: unless-stopped
     ports:
@@ -201,7 +218,7 @@ services:
   # (SERV-81). Every one of them points at a dev peer — a dev purser that
   # provisions accounts in prod would be the worst possible outcome of this ticket.
   purser-dev:
-    image: ghcr.io/einlanzerous/purser:latest
+    image: ghcr.io/einlanzerous/purser:${DEV_PURSER_TAG:-latest}
     container_name: purser-dev
     restart: unless-stopped
     ports:

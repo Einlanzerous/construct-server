@@ -5,7 +5,7 @@
 // value is how isolation breaks. So this page renders differences, not a second
 // copy of the service catalogue.
 
-import type { ComposeFile } from "../sources/compose.ts";
+import type { ComposeFile, ComposeService } from "../sources/compose.ts";
 import { cell, code, frontmatter, provenance, section, table } from "../lib/md.ts";
 import type { Estate } from "../model.ts";
 import type { Page } from "./page.ts";
@@ -35,17 +35,27 @@ export function emitDev(estate: Estate): Page[] {
 
         section(
           "Services",
-          table(
-            ["Service", "Image", "Also in prod?", "Networks"],
-            dev.services.map((svc) => [
-              code(svc.name),
-              svc.image ? code(svc.image.repo) : "—",
-              prodByName.has(svc.name)
-                ? `yes — [${svc.name}](/${servicePath(svc.name)})`
-                : "dev only",
-              cell(svc.networks.join(", ")),
-            ]),
-          ),
+          [
+            table(
+              ["Service", "Image", "Tracks", "Also in prod?", "Networks"],
+              dev.services.map((svc) => [
+                code(svc.name),
+                svc.image ? code(svc.image.repo) : "—",
+                tracks(estate, svc.image),
+                prodByName.has(svc.name)
+                  ? `yes — [${svc.name}](/${servicePath(svc.name)})`
+                  : "dev only",
+                cell(svc.networks.join(", ")),
+              ]),
+            ),
+            "\n**Tracks** comes from `dev-versions.env`, dev's own pin file (SERV-97), and every",
+            "value in it is `latest` on purpose — dev exists to run what just merged. The file is",
+            "separate from prod's `versions.env`, with a `DEV_` prefix on every variable, so a",
+            "misplaced prod `.env` cannot quietly pin dev to prod's versions.\n\n",
+            "A floating tag is not a floating container. The image string never changes, so",
+            "compose sees no drift and `up -d` alone moves nothing — dev advances only when",
+            "something pulls, which is `deploy-dev.yml` on merge, on dispatch, and hourly.\n\n",
+          ].join("\n"),
         ),
 
         section(
@@ -95,12 +105,29 @@ export function emitDev(estate: Estate): Page[] {
             "make dev-recreate svc=purser   # pick up a compose change, scoped",
             "make dev-verify-isolation      # assert dev cannot reach prod",
             "make dev-parity                # report dev-vs-prod config drift",
+            "make dev-health-check          # fail if anything in dev is unhealthy or dead",
+            "make dev-versions              # what dev is running, by the commit each image was built from",
             "```\n",
           ].join("\n"),
         ),
       ].join(""),
     },
   ];
+}
+
+/**
+ * What tag a dev service resolves to: the pin if `dev-versions.env` sets one, otherwise
+ * the compose fallback. Says which of the two it is, because "latest because that is the
+ * pin" and "latest because nothing is pinned" are different states with the same word.
+ */
+function tracks(estate: Estate, image: ComposeService["image"]): string {
+  if (!image) return "—";
+  if (!image.tagVar) return image.digest ? "pinned by digest" : code(image.tag);
+
+  const pin = estate.devPins.find((p) => p.variable === image.tagVar);
+  return pin
+    ? `${code(pin.value)} — ${code(image.tagVar)}`
+    : `${code(image.tagFallback)} — ${code(image.tagVar)} unset, compose fallback`;
 }
 
 /** Networks named by both files — the concrete way isolation would break. */

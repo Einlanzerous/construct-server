@@ -69,7 +69,8 @@ bind stopped. So the address restriction does not make routing dev hostnames saf
 SERV-106 (origin-side JWT validation) is what would.
 
 Every dev container runs `:latest` — the untested code this project exists to
-exercise — so that route is exactly the wrong one to open. Note the database
+exercise, and now pulled hourly by `deploy-dev.yml` rather than whenever someone
+remembered — so that route is exactly the wrong one to open. Note the database
 isolation was never affected: neither Postgres is behind Traefik.
 
 Dev is therefore reached on loopback, and giving it a real edge is **SERV-93**,
@@ -96,19 +97,95 @@ push a rendered file to a GitHub Environment secret. Between them the vault take
 ownership of `DEV_ENV_FILE` without the stack changing how it reads anything —
 which is why the interim deliberately has the same shape as the end state.
 
+## How code gets into dev — `deploy-dev.yml` (SERV-97)
+
+Dev is a pipeline stage, not a sandbox someone starts by hand. `deploy-dev.yml` renders
+the dev `.env`, pulls, and runs the same `make dev-*` targets a human would:
+
+| Trigger | When |
+|---|---|
+| `schedule` | hourly — the backstop that makes "dev tracks HEAD" true |
+| `repository_dispatch: deploy-dev` | what a service repo should send on every merge (**SERV-108**) |
+| `repository_dispatch: image-updated` | what service repos send today, on release |
+| `push` to `main` | touching `docker-compose.dev.yml`, `dev-versions.env`, `db/`, `scripts/` |
+| `workflow_dispatch` | by hand |
+
+**Why a schedule, given the design says dispatch.** The service repos already dispatch —
+but from `release.yml`, gated on release-please cutting a version, so `image-updated`
+fires on a *release*. `latest` is pushed by `publish.yml` on every push to `main` and
+announced to nobody. A dispatch-only workflow would have left dev moving on releases while
+looking like it had fixed the staleness. SERV-108 adds the per-merge dispatch in each
+service repo; until then the cron is what makes the criterion true.
+
+**What actually moves dev.** A floating tag is not a floating container. The image string
+in the compose file never changes, so compose sees no drift and `up -d` alone is a no-op
+however far `main` has moved. Dev advances only when something **pulls** — which is why the
+workflow pulls before it ups, and why `make dev-up` on its own will not refresh anything.
+
+The workflow's last three steps are its acceptance criteria, asserted rather than assumed:
+`make dev-health-check` (nothing crashed), `make dev-verify-isolation` (nothing joined
+`construct_net`), and `make dev-versions` into the run summary, so *what dev is running* is
+answerable from the run instead of by shelling in.
+
+Dev needs no registry credential: all four first-party dev images are public GHCR packages,
+verified with an anonymous `docker manifest inspect`. That is what keeps `DEV_ENV_FILE`
+free of a GitHub PAT. If one is ever made private the pull fails with an auth error, which
+is the right way round.
+
+## Versions — `dev-versions.env`
+
+Dev's own pin file, and every value in it is `latest` on purpose. It is **not** shared with
+prod's `versions.env`, and every variable carries a `DEV_` prefix:
+
+```
+DEV_ARGOSY_TAG=latest
+DEV_LYCEUM_TAG=latest
+DEV_PURSER_TAG=latest
+DEV_SWITCHYARD_TAG=latest
+```
+
+Sharing prod's variable names would work right up until prod's `.env` ended up at the dev
+root, at which point dev would silently run prod's pinned versions and look fine doing it.
+Distinct names make that inert — with no `DEV_*_TAG` set, the `:-latest` fallback applies
+and dev floats, which is dev's intended state anyway. (Copying the prod `.env` into dev
+remains forbidden for much larger reasons; this is a second line, not the first.)
+
+What the file buys, given it changes nothing by default: a **temporary** dev pin — "hold
+dev at switchyard 4.7 while I reproduce this" — becomes a reviewable one-line diff that the
+next deploy re-applies, rather than an edit to the deployed `.env`, which `render-env.sh`
+regenerates and discards without warning.
+
+`postgres-dev` is pinned by digest to the **same image prod runs**. Under the old floating
+`16-alpine` it was recreated whenever upstream published and a pull happened to run, and a
+postgres recreate moves its address on the network — which Node/Bun's `pg-pool` caches and
+retries forever (SERV-102). `switchyard-dev` is the same runtime, and dev pulls far more
+often than prod ever did. Bump both together; a dev postgres ahead of prod's is a rehearsal
+of something that is not going to ship.
+
 ## Running it
 
 ```sh
-# One-time, needs root because /opt is root-owned:
+# One-time, needs root because /opt is root-owned. `ansible-playbook ansible/site.yml`
+# does this for you; this is the one-off equivalent:
 sudo install -d -o "$(id -un)" -g "$(id -gn)" /opt/construct-server-dev
 
 make dev-bootstrap          # create the network, sync stack files to the dev root
 #   put the dev .env at /opt/construct-server-dev/.env
 make dev-up                 # postgres first, then init the databases, then the rest
 make dev-ps
+make dev-versions           # what dev is running, by the commit each image was built from
+make dev-health-check       # fail if anything crashed
 make dev-logs svc=purser-dev
 make dev-recreate svc=switchyard-dev
 make dev-down
+```
+
+A hand-made `.env` needs no `DEV_*_TAG` entries — the compose fallback covers it. To apply
+the tracked pins the way the workflow does:
+
+```sh
+./scripts/render-env.sh /opt/construct-server-dev/.env dev-versions.env \
+                        /opt/construct-server-dev/.env
 ```
 
 `make dev-up` is deliberately three steps rather than one `docker compose up -d`.

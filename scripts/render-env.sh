@@ -116,11 +116,15 @@ stripped="$(printf '%s\n' "$base_content" | awk -v keys="$pinned_keys" '
   }
 ')"
 
+# The MARKER itself is a fixed sentinel — it is what the cut above searches for, so it
+# must read identically no matter which pin file produced the block. The line under it
+# names the actual source instead, because dev renders from dev-versions.env (SERV-97) and
+# a deployed dev .env telling you to go edit versions.env sends you to the wrong file.
 rendered="$(printf '%s\n\n%s\n%s\n%s\n%s\n' \
   "$stripped" \
   "$MARKER" \
   "# Do not edit below here: this block is regenerated on every deploy and an edit made" \
-  "# on the host is lost without warning. Change versions.env and merge it." \
+  "# on the host is lost without warning. Change $(basename "$versions") and merge it." \
   "$pins")"
 
 if [ -f "$out" ] && [ "$(cat "$out")" = "$rendered" ]; then

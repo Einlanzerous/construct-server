@@ -85,6 +85,8 @@ export interface ImageRef {
   /** `SWITCHYARD_TAG` for `image: …/backend:${SWITCHYARD_TAG:-latest}`. */
   tagVar: string | null;
   tagFallback: string | null;
+  /** `sha256:44c4…` for a digest-pinned third-party image (SERV-102, SERV-105). */
+  digest: string | null;
   firstParty: boolean;
 }
 
@@ -204,19 +206,30 @@ function parseTopLevel(
 function parseImage(raw: string | null): ImageRef | null {
   if (!raw) return null;
 
-  // Finding the tag separator is fiddlier than it looks, in two ways that both
+  // Finding the tag separator is fiddlier than it looks, in three ways that all
   // bite here. A registry port (`localhost:5000/x`) puts a colon before the last
-  // `/` and is not a tag — hence the `colon > slash` test. And every first-party
+  // `/` and is not a tag — hence the `colon > slash` test. Every first-party
   // image in this stack is tagged `${SERVICE_TAG:-latest}`, whose *default*
   // syntax contains a colon of its own: a naive lastIndexOf splits
   // `…/amber:${AMBER_TAG:-latest}` into repo `…/amber:${AMBER_TAG` and tag
   // `-latest}`. So mask the `${…}` spans before searching.
-  const masked = raw.replace(/\$\{[^}]*\}/g, (m) => " ".repeat(m.length));
+  //
+  // And a digest pin (`repo:tag@sha256:44c4…`, SERV-102/SERV-105) carries a THIRD
+  // colon, the last one in the string — so the same lastIndexOf produced repo
+  // `postgres:16.15-alpine@sha256` and tag `44c4ee98…`, which is how the wiki has
+  // been describing postgres since it was pinned. An OCI reference is
+  // `[registry/]name[:tag][@digest]`, so split the digest off first and let the
+  // existing tag logic see the shape it was written for.
+  const at = raw.lastIndexOf("@");
+  const digest = at >= 0 ? raw.slice(at + 1) : null;
+  const ref = at >= 0 ? raw.slice(0, at) : raw;
+
+  const masked = ref.replace(/\$\{[^}]*\}/g, (m) => " ".repeat(m.length));
   const slash = masked.lastIndexOf("/");
   const colon = masked.lastIndexOf(":");
   const hasTag = colon > slash;
-  const repo = hasTag ? raw.slice(0, colon) : raw;
-  const tag = hasTag ? raw.slice(colon + 1) : null;
+  const repo = hasTag ? ref.slice(0, colon) : ref;
+  const tag = hasTag ? ref.slice(colon + 1) : null;
 
   const m = tag ? VAR_RE.exec(tag) : null;
   return {
@@ -225,6 +238,7 @@ function parseImage(raw: string | null): ImageRef | null {
     tag,
     tagVar: m?.[1] ?? null,
     tagFallback: m?.[2] ?? null,
+    digest,
     firstParty: repo.startsWith(FIRST_PARTY_PREFIX),
   };
 }

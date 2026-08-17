@@ -11,18 +11,24 @@ name: Promote / Rollback a Version
 # recreated containers itself would be a second way for prod to change, which is exactly
 # what that ticket spent its length removing.
 #
-# The recreate is mostly scoped, but NOT to the one service named — an earlier version of
-# this comment claimed that and was wrong (SERV-105). deploy.yml runs a plain
-# `docker compose up -d` with no --force-recreate, so compose recreates what drifted; the
-# named service drifts because its pin changed, and so does **any unpinned third-party
-# image that moved since the last pull**, because deploy.yml pulls first.
+# The recreate is scoped to the named service, and that is now true by construction rather
+# than by luck. deploy.yml runs a plain `docker compose up -d` with no --force-recreate, so
+# compose recreates what drifted — and a pin change drifts exactly one service.
 #
-# Measured, not theorised: the first real rollback through this workflow
-# (purser 0.13 -> 0.12, 2026-08-17) recreated purser, ollama AND semaphore, the latter two
-# being `ollama/ollama:rocm` and `semaphoreui/semaphore:latest`. Harmless — both are
-# leaves — but harmless by luck rather than by construction, and it means a rollback does
-# not yet have the bounded blast radius a rollback is supposed to have. SERV-105 tracks
-# pinning them; until then, expect collateral recreates and check what actually moved.
+# It was NOT true when this workflow shipped, and the history is worth keeping because the
+# mechanism is easy to re-introduce. deploy.yml pulls before it ups, so every image on a
+# floating tag also drifted whenever upstream had published since the last deploy. Measured,
+# not theorised: the first real rollback through this workflow (purser 0.13 -> 0.12,
+# 2026-08-17) recreated purser, ollama AND semaphore. Only purser was named. Both extras
+# were leaves, so nothing broke — but "a rollback recreates one service" was false, and
+# predictability is most of what a rollback is for, since it runs when prod is already
+# broken. SERV-105 closed it by pinning the third-party images by digest.
+#
+# Four images still float on purpose — the watchtower opt-ins (dozzle, uptime-kuma, datadog,
+# watchtower itself), which have their own scheduled update path and cannot be rolled by it
+# if pinned. A promote can therefore still recreate one of those four, and only those four.
+# Adding a floating third-party image to docker-compose.yml re-opens this in proportion to
+# what it is; see that file's header before doing so.
 #
 # SERV-63's --no-deps concern is a different thing and genuinely does not arise here: that
 # is about --force-recreate propagating through depends_on, and this path never forces.
