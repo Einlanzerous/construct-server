@@ -69,10 +69,13 @@ export function emitDev(estate: Estate): Page[] {
                 "true rather than merely intended. Assert it for real with `make dev-verify-isolation`.",
                 ":::\n",
                 "Do not attach Traefik to the dev network to route dev hostnames. Its `internal`",
-                "entrypoint has no source restriction and the prod routers on it have no auth middleware",
-                "(SERV-25 is unimplemented), so any container that can reach `traefik:9080` gets prod",
-                "Switchyard and Lyceum by setting a Host header — Cloudflare Access is enforced at",
-                "Cloudflare's edge, not here. Giving dev an edge is SERV-93.\n",
+                "entrypoint now binds a single address on `construct_edge_net`, which only cloudflared",
+                "shares (SERV-107) — but the prod routers on it still have **no auth middleware**, so",
+                "anything that can reach that address gets prod Switchyard and Lyceum by setting a Host",
+                "header. Cloudflare Access is enforced at Cloudflare's edge, not here. Attaching Traefik",
+                "to a second network makes the entrypoint reachable from that network too, which is",
+                "exactly what the bind stopped — so the address restriction does **not** make this safe.",
+                "Origin-side JWT validation (SERV-106) is what would. Giving dev an edge is SERV-93.\n",
               ].join("\n")
             : [
                 "::: danger SHARED NETWORK",

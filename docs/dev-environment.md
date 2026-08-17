@@ -45,18 +45,28 @@ knowing before anyone re-adds the bridge.
 An earlier revision attached prod's Traefik to `construct_dev_net` as a second
 network so it could route `<svc>-dev.` hostnames. Review caught that this hands
 dev an **unauthenticated route into prod's HTTP tier**. Traefik's `internal`
-entrypoint (`:9080`) listens on every interface it has with no source
-restriction — only header stripping — and the prod `switchyard` and `lyceum`
-routers sit on it with no auth middleware, because the Cloudflare Access JWT
-validation their comments promise is still unimplemented (SERV-25). Access is
-enforced at *Cloudflare's* edge, so a request arriving at `:9080` from inside
-Docker is authenticated by nothing:
+entrypoint used to listen on every interface it has with no source restriction —
+only header stripping — and the prod `switchyard` and `lyceum` routers sit on it with
+no auth middleware, because the Cloudflare Access JWT validation their comments promise
+is still unimplemented (**SERV-106**). Access is enforced at *Cloudflare's* edge, so a
+request arriving at `:9080` from inside Docker was authenticated by nothing:
 
 ```
 $ docker exec crowdsec wget -S -O /dev/null \
     --header 'Host: switchyard.zerogravity.industries' http://traefik:9080/
   HTTP/1.1 200 OK
 ```
+
+**SERV-107 closed the reachability half**: `internal` now binds one address on
+`construct_edge_net`, which only cloudflared shares, so the command above no longer
+connects from `construct_net`. The demo is kept because the *reason* is unchanged — the
+routers still have no auth middleware, so the protection is now topology rather than
+authentication.
+
+That distinction is the whole point here: attaching Traefik to the dev network would
+make the bound address reachable **from the dev network**, which is precisely what the
+bind stopped. So the address restriction does not make routing dev hostnames safe.
+SERV-106 (origin-side JWT validation) is what would.
 
 Every dev container runs `:latest` — the untested code this project exists to
 exercise — so that route is exactly the wrong one to open. Note the database
