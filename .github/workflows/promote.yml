@@ -11,11 +11,21 @@ name: Promote / Rollback a Version
 # recreated containers itself would be a second way for prod to change, which is exactly
 # what that ticket spent its length removing.
 #
-# That also means the recreate is scoped for free. deploy.yml runs a plain
-# `docker compose up -d` with no --force-recreate, so compose recreates only what
-# actually drifted — which after a one-line pin change is the one service named here.
-# SERV-63's --no-deps concern is about --force-recreate propagating through depends_on;
-# it does not arise on this path.
+# The recreate is mostly scoped, but NOT to the one service named — an earlier version of
+# this comment claimed that and was wrong (SERV-105). deploy.yml runs a plain
+# `docker compose up -d` with no --force-recreate, so compose recreates what drifted; the
+# named service drifts because its pin changed, and so does **any unpinned third-party
+# image that moved since the last pull**, because deploy.yml pulls first.
+#
+# Measured, not theorised: the first real rollback through this workflow
+# (purser 0.13 -> 0.12, 2026-08-17) recreated purser, ollama AND semaphore, the latter two
+# being `ollama/ollama:rocm` and `semaphoreui/semaphore:latest`. Harmless — both are
+# leaves — but harmless by luck rather than by construction, and it means a rollback does
+# not yet have the bounded blast radius a rollback is supposed to have. SERV-105 tracks
+# pinning them; until then, expect collateral recreates and check what actually moved.
+#
+# SERV-63's --no-deps concern is a different thing and genuinely does not arise here: that
+# is about --force-recreate propagating through depends_on, and this path never forces.
 
 on:
   workflow_dispatch:

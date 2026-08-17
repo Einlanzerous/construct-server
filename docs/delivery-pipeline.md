@@ -261,9 +261,13 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
   broken.*
 - *It **does not deploy**. It edits one line of `versions.env` and commits; `deploy.yml`
   already fires on a push touching that file, and is the only thing that deploys
-  (SERV-76). This keeps the deploy path single, and it makes the recreate scoped for
-  free: `deploy.yml` runs a plain `up -d`, so compose recreates only what drifted, which
-  after a one-line pin change is the one service named.*
+  (SERV-76). This keeps the deploy path single.*
+- *The recreate is **not** scoped to the named service, which this document claimed until
+  it was measured. `deploy.yml` pulls before `up -d`, so compose recreates the named
+  service **and any unpinned third-party image that moved since the last pull**. The first
+  real rollback (purser 0.13 → 0.12) recreated purser, ollama and semaphore. Both extras
+  are leaves, so nothing broke — but "a rollback recreates one service" is not currently
+  true, and predictability is most of what a rollback is for. **SERV-105.***
 - *It verifies the tag exists in the registry **before** committing, across every image
   behind the pin — a repo's backend and frontend ship from one release, so a version
   that published for one and not the other is refused rather than half-deployed.*
