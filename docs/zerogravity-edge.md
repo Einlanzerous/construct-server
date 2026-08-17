@@ -87,6 +87,17 @@ complementary: the bind decides who can connect, the middleware decides who is
 served. Assert both with `make edge-auth-check`, which `deploy.yml` runs as a
 post-deploy gate.
 
+**One exemption: `switchyard-github-webhook`.** GitHub cannot authenticate to
+Access, so Access has a Bypass policy on `/v1/external/github` and injects no
+assertion — the request arrives with nothing to validate. Found the hard way: the
+first push after enforcing returned 403 on that path, which would have stopped
+external-ref updates and PR-merge auto-close (SERV-45) with no other symptom. The
+exempt router is one host and one **exact** `Path()`; the endpoint is HMAC-gated by
+`GITHUB_WEBHOOK_SECRET`, so it authenticates with something Access cannot express
+rather than not at all. `check-edge-auth.sh` holds the allowlist, prints it on every
+run, refuses a `PathPrefix()` as too broad to verify, and fails on any internal
+router that is neither gated nor listed.
+
 ## Files
 
 | Path | Purpose |

@@ -227,6 +227,32 @@ http:
       # No TLS: internal is plain HTTP (Cloudflare terminates TLS at the edge and
       # the tunnel encrypts the wire).
 
+    # THE ONE EXEMPTION from origin auth, and the only router on this entrypoint
+    # without cf-access-jwt (SERV-106).
+    #
+    # GitHub cannot authenticate to Cloudflare Access, so Access carries a Bypass
+    # policy on this exact path and injects no assertion — the request arrives with no
+    # Cf-Access-Jwt-Assertion at all. Without this router it falls through to
+    # `switchyard` above and is 403'd, which silently stops external-ref updates and
+    # PR-merge auto-close (SERV-45). That is not hypothetical: it happened. The first
+    # push after this middleware went to enforce returned 403 on
+    # POST /v1/external/github, and the audit-mode log is what caught it.
+    #
+    # It is NOT an unauthenticated endpoint — it authenticates with something Access
+    # cannot express. Every request is HMAC-verified against GITHUB_WEBHOOK_SECRET and
+    # the receiver returns 503 when that secret is absent, so a forged call fails at
+    # the application. The exemption is kept as narrow as it can be: exact `Path()`,
+    # not `PathPrefix()`, on one host.
+    #
+    # check-edge-auth.sh knows this router by name. Any OTHER internal router that
+    # turns up without the middleware fails that check — the allowlist is the point.
+    switchyard-github-webhook:
+      entryPoints:
+        - internal
+      rule: "Host(`switchyard.zerogravity.industries`) && Path(`/v1/external/github`)"
+      priority: 1000
+      service: switchyard
+
     # Lyceum (LYCM-803): tunneled + Cloudflare Access, mirroring switchyard. HTTP
     # on the internal entrypoint — no tls block. Cf-Access-Jwt-Assertion is
     # preserved here (only stripped on the public entrypoint), checked by

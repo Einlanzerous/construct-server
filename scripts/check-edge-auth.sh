@@ -99,19 +99,40 @@ def bad(msg):
     print(f"  FAIL  {msg}")
     fail = True
 
+# Routers deliberately NOT behind the middleware. Every entry is a hole in origin
+# auth, so this is an ALLOWLIST and not a pattern: an internal router that is
+# neither gated nor named here fails the check. Adding to it is a reviewable diff
+# in a security script, which is the point — the failure mode this whole ticket
+# exists to prevent is an exemption nobody had to argue for.
+EXEMPT = {
+    "switchyard-github-webhook":
+        "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET",
+}
+
 routers = (yaml.safe_load(open(routers_file)) or {}).get("http", {}).get("routers", {}) or {}
 internal = {n: r for n, r in routers.items() if "internal" in (r.get("entryPoints") or [])}
 
 if not internal:
     bad("no routers on the `internal` entrypoint — this check would pass vacuously")
 else:
-    missing = [n for n, r in internal.items() if middleware not in (r.get("middlewares") or [])]
+    missing = sorted(n for n, r in internal.items()
+                     if middleware not in (r.get("middlewares") or []) and n not in EXEMPT)
     if missing:
-        bad(f"internal routers with no {middleware} middleware: {', '.join(sorted(missing))}")
+        bad(f"internal routers with no {middleware} middleware: {', '.join(missing)}")
         print(f"        Those hosts are served without any origin-side check of the")
-        print(f"        Cloudflare Access assertion. Add `{middleware}` to each.")
+        print(f"        Cloudflare Access assertion. Add `{middleware}` to each, or — if one")
+        print(f"        genuinely cannot carry it — add it to EXEMPT in this script with a reason.")
     else:
-        print(f"  ok    all {len(internal)} internal router(s) carry {middleware}")
+        gated = len(internal) - len([n for n in EXEMPT if n in internal])
+        print(f"  ok    all {gated} gated internal router(s) carry {middleware}")
+
+# Named, never silent. An exemption that stops being printed is an exemption that
+# stops being noticed.
+for name, why in sorted(EXEMPT.items()):
+    if name in internal:
+        print(f"  ok    {name} is exempt by design — {why}")
+    else:
+        bad(f"EXEMPT names {name}, which is not an internal router — stale entry, remove it")
 
 # Host(`x`) is the only rule form used on this entrypoint; anything else is a
 # router this script cannot reason about and is reported rather than ignored.
@@ -181,9 +202,22 @@ elif ip and declared:
 # failing config check still produces the list the live probes need — a config
 # error and a live bypass are separate findings and the run should report both.
 with open(os.environ["PROBE_OUT"], "w") as fh:
-    fh.write(f"{addr}\n")
+    fh.write(f"addr {addr}\n")
     for h in sorted(hosts):
-        fh.write(f"{h}\n")
+        fh.write(f"host {h}\n")
+    for name in sorted(EXEMPT):
+        r = internal.get(name)
+        if not r:
+            continue
+        eh = re.findall(r"Host\(`([^`]+)`\)", r.get("rule", ""))
+        ep = re.findall(r"Path\(`([^`]+)`\)", r.get("rule", ""))
+        if len(eh) == 1 and len(ep) == 1:
+            fh.write(f"exempt {eh[0].lower()} {ep[0]}\n")
+        else:
+            # An exemption that is not exactly one host and one exact path is
+            # broader than an exemption should be, and cannot be probed — so it
+            # would sit here unverified. Refuse it.
+            bad(f"{name} is exempt but its rule is not one Host + one exact Path; too broad to verify")
 
 sys.exit(1 if fail else 0)
 PY
@@ -203,8 +237,9 @@ for dep in docker curl; do
   command -v "$dep" >/dev/null 2>&1 || { err "ERROR: required dependency '$dep' not found in PATH"; exit 2; }
 done
 
-ADDR="$(head -n1 "$PROBES")"
-mapfile -t HOSTS < <(tail -n +2 "$PROBES")
+ADDR="$(awk '$1=="addr"{print $2}' "$PROBES")"
+mapfile -t HOSTS < <(awk '$1=="host"{print $2}' "$PROBES")
+mapfile -t EXEMPTS < <(awk '$1=="exempt"{print $2, $3}' "$PROBES")
 if [ -z "$ADDR" ] || [ "${#HOSTS[@]}" -eq 0 ]; then
   err "ERROR: could not derive the internal entrypoint address or its hosts from the config"
   exit 2
@@ -254,6 +289,35 @@ for host in "${HOSTS[@]}"; do
     fi
     FAIL=1
   fi
+done
+
+# The exemptions, asserted in BOTH directions. The guard stamps X-Cf-Access-Guard
+# on every response it produces, so its absence is proof the request never reached
+# it — which is exactly what an exemption should look like from outside. The `/`
+# probe above already covers the other direction: the same host, any other path, is
+# still denied. Together they say the hole is real AND that it is only this wide.
+guard_verdict() {
+  local out
+  out="$(curl -s -D- -o /dev/null --max-time 5 -H "Host: $1" "http://$ADDR$2" 2>/dev/null | tr -d '\r')" || true
+  # A connection failure must not read as "the guard was bypassed".
+  if ! printf '%s' "$out" | grep -qi '^HTTP/'; then printf 'unreachable\n'; return; fi
+  printf '%s' "$out" | awk 'tolower($1)=="x-cf-access-guard:"{print $2; f=1} END{if(!f) print "none"}'
+}
+
+for entry in "${EXEMPTS[@]}"; do
+  # shellcheck disable=SC2086
+  set -- $entry
+  verdict="$(guard_verdict "$1" "$2")"
+  case "$verdict" in
+    none) echo "  ok    exempt $1$2 bypasses the guard, as intended" ;;
+    unreachable)
+      echo "  FAIL  exempt $1$2 is unreachable — the exemption cannot be verified"; FAIL=1 ;;
+    *)
+      echo "  FAIL  exempt $1$2 was handled by the guard ($verdict) — the exemption is not in effect"
+      echo "        If this is the GitHub webhook, external-ref updates and PR-merge"
+      echo "        auto-close are silently failing right now (SERV-45)."
+      FAIL=1 ;;
+  esac
 done
 
 # 7. A host nobody routed. Not a 403 necessarily — Traefik has no catch-all on

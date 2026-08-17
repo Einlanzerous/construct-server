@@ -267,7 +267,15 @@ anything deploys or gets versioned.
   weeks. A host with no AUD entry is refused, so a new tunneled router that nobody
   mapped is unreachable (loud) rather than unauthenticated (silent), and
   `scripts/check-edge-auth.sh` fails if a router lacks the middleware or the map and
-  the routers disagree. It also runs the exploit itself against the live edge, from
+  the routers disagree. **There is exactly one exemption and it is an allowlist, not
+  a pattern**: `switchyard-github-webhook`, because GitHub cannot authenticate to
+  Access — Access carries a Bypass policy on that path and injects no assertion at
+  all, so without an exempt router the webhook 403s and external-ref updates and
+  PR-merge auto-close stop silently (SERV-45). It is not unauthenticated; it is
+  HMAC-gated by `GITHUB_WEBHOOK_SECRET`, which is authentication Access cannot
+  express. The exemption is one host and one **exact** `Path()` — the checker refuses
+  a `PathPrefix()` as too broad to verify — and an internal router that is neither
+  gated nor on the allowlist fails the check. It also runs the exploit itself against the live edge, from
   the **host** — an unpublished container port is still routable from there, which no
   container-side probe sees. `deploy.yml` runs it as a post-deploy gate; locally it is
   `make edge-auth-check`. The guard is the one first-party image **built on the box**
