@@ -11,24 +11,32 @@ name: Promote / Rollback a Version
 # recreated containers itself would be a second way for prod to change, which is exactly
 # what that ticket spent its length removing.
 #
-# The recreate is scoped to the named service, and that is now true by construction rather
-# than by luck. deploy.yml runs a plain `docker compose up -d` with no --force-recreate, so
-# compose recreates what drifted — and a pin change drifts exactly one service.
+# THE RECREATE IS NOT SCOPED TO THE NAMED SERVICE. Two earlier versions of this comment got
+# this wrong in opposite directions, so state it precisely.
 #
-# It was NOT true when this workflow shipped, and the history is worth keeping because the
-# mechanism is easy to re-introduce. deploy.yml pulls before it ups, so every image on a
-# floating tag also drifted whenever upstream had published since the last deploy. Measured,
-# not theorised: the first real rollback through this workflow (purser 0.13 -> 0.12,
-# 2026-08-17) recreated purser, ollama AND semaphore. Only purser was named. Both extras
-# were leaves, so nothing broke — but "a rollback recreates one service" was false, and
-# predictability is most of what a rollback is for, since it runs when prod is already
-# broken. SERV-105 closed it by pinning the third-party images by digest.
+# deploy.yml runs a plain `docker compose up -d` with no --force-recreate, so compose
+# recreates what drifted — but it PULLS first, and a pull moves every image whose reference
+# is not immutable. The named service drifts because its pin changed. So does anything else
+# that moved since the last pull.
 #
-# Four images still float on purpose — the watchtower opt-ins (dozzle, uptime-kuma, datadog,
-# watchtower itself), which have their own scheduled update path and cannot be rolled by it
-# if pinned. A promote can therefore still recreate one of those four, and only those four.
-# Adding a floating third-party image to docker-compose.yml re-opens this in proportion to
-# what it is; see that file's header before doing so.
+# Measured, not theorised: the first real rollback through this workflow (purser 0.13 ->
+# 0.12, 2026-08-17) recreated purser, ollama AND semaphore. Only purser was named.
+#
+# What SERV-105 fixed: the third-party images are now pinned by digest, so ollama and
+# semaphore can no longer do that. What it did NOT fix, and what remains the larger half:
+#
+#   * First-party services on a major.minor pin. Eight of the ten values in versions.env
+#     are `LYCEUM_TAG=1.10`-shaped, and that tag MOVES on a patch release — deliberately,
+#     so security fixes land without an edit. Roll purser back while lyceum has cut 1.10.4
+#     since the last deploy and you recreate lyceum too. This is worse than the leaf case:
+#     first-party services have dependents, and per SERV-102 the Node ones do not recover
+#     on their own from a peer recreate that moves an address.
+#   * The four watchtower opt-ins (dozzle, uptime-kuma, datadog, watchtower), left floating
+#     because watchtower cannot roll a digest-pinned container.
+#
+# SERV-109 is scoping the pull, which is what would actually bound this. Until then: a
+# rollback is a stack-wide pull with one intended change, so check what actually moved
+# rather than assuming the diff describes it.
 #
 # SERV-63's --no-deps concern is a different thing and genuinely does not arise here: that
 # is about --force-recreate propagating through depends_on, and this path never forces.

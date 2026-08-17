@@ -64,6 +64,13 @@ jobs:
     # PROD_ENV_FILE even by accident — `home-server` is a different environment and only a
     # job declaring it can read its secrets. That is the same boundary prod relies on,
     # pointed the other way (SERV-77).
+    #
+    # `home-server-dev` carries a deployment branch policy restricting it to `main`, mirroring
+    # `home-server`. Without it, `workflow_dispatch` from an arbitrary branch would run that
+    # branch's `run:` blocks on the self-hosted runner with DEV_ENV_FILE in scope. Repo write
+    # access is needed either way, so this is depth rather than a hole — but the asymmetry
+    # with prod would have been unintended. It is GitHub config, not settable from here;
+    # re-check it if the environment is ever recreated.
     environment: home-server-dev
     env:
       DEV_ROOT: /opt/construct-server-dev

@@ -22,9 +22,12 @@
 # to remember.
 #
 # The strip list is read from versions.env itself, so adding an eleventh service needs
-# no edit here — and third-party pins that also end in _TAG (CLOUDFLARED_TAG,
-# AUTHENTIK_TAG) are left in the secret untouched, which a blanket regex over `_TAG`
-# would have eaten.
+# no edit here, and only the keys that file actually defines are touched. A blanket regex
+# over `_TAG` would have been simpler and wrong: it would eat any third-party pin the
+# secret happened to carry. There are none left as of SERV-105 — the third-party images
+# are pinned by digest in docker-compose.yml — but the strip list stays derived rather
+# than pattern-matched, because that property should not depend on the current contents
+# of a file this script does not own.
 #
 # Usage:
 #   render-env.sh <base> <versions.env> <output>

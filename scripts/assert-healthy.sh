@@ -175,6 +175,9 @@ flapped=""
 while :; do
   waiting=""
   while read -r _id name state health streak probes; do
+    # The `[ … ] && …` reads like it would trip `set -e` on every non-restarting
+    # container, and does not: a command on the left of `&&` is exempt, which is exactly
+    # the rule that makes this idiom safe. Stated because the reflex is to "fix" it.
     case " $flapped " in
       *" ${name#/} "*) ;;
       *) [ "$state" = "restarting" ] && flapped="$flapped ${name#/}" ;;

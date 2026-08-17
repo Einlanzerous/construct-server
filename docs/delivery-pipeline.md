@@ -283,17 +283,22 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
 - *It **does not deploy**. It edits one line of `versions.env` and commits; `deploy.yml`
   already fires on a push touching that file, and is the only thing that deploys
   (SERV-76). This keeps the deploy path single.*
-- *The recreate is scoped to the named service — but it was **not** when this shipped, and
-  this document asserted it without measuring. `deploy.yml` pulls before `up -d`, so compose
-  recreated the named service **and any unpinned third-party image that had moved since the
-  last pull**. The first real rollback (purser 0.13 → 0.12) recreated purser, ollama and
-  semaphore. Both extras were leaves, so nothing broke; "a rollback recreates one service"
-  was simply false, and predictability is most of what a rollback is for. **SERV-105** closed
-  it by pinning the third-party images by digest — including `traefik:v3.3` and
-  `crowdsec:v1.7.8`, which look like pins and are not, since a minor tag moves on patch
-  releases and a patch tag can be rebuilt in place. Four images still float by design: the
-  watchtower opt-ins, which have their own scheduled path and cannot be rolled by it once
-  pinned.*
+- *The recreate is **not** scoped to the named service, which this document asserted without
+  measuring. `deploy.yml` pulls before `up -d`, so compose recreates the named service **and
+  anything else whose reference moved since the last pull**. The first real rollback (purser
+  0.13 → 0.12) recreated purser, ollama and semaphore; only purser was named.*
+
+  - ***SERV-105** removed the third-party half, pinning those images by digest — including
+    `traefik:v3.3` and `crowdsec:v1.7.8`, which look like pins and are not, since a minor tag
+    moves on patch releases and a patch tag can be rebuilt in place. Four stay floating by
+    design: the watchtower opt-ins, which cannot be rolled by watchtower once pinned.*
+  - ***The first-party half is still open, and it is the larger one.** Eight of the ten values
+    in `versions.env` are major.minor, and that tag moves on a patch release — deliberately,
+    which is the point of the convention. So a purser rollback also recreates lyceum if lyceum
+    cut `1.10.4` in the meantime. Unlike ollama and semaphore these have dependents, and per
+    SERV-102 the Node services do not recover on their own from a peer recreate. Scoping the
+    pull is **SERV-109**; until it lands, a rollback is a stack-wide pull with one intended
+    change.*
 - *It verifies the tag exists in the registry **before** committing, across every image
   behind the pin — a repo's backend and frontend ship from one release, so a version
   that published for one and not the other is refused rather than half-deployed.*

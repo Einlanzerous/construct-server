@@ -93,14 +93,21 @@ for cid in $container_ids; do
     --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null \
     | awk -F@ -v r="$repo" '$1 == r { print $2; exit }')"
   # Locally built images (build:, no registry push) have no RepoDigest at all. Say so
-  # rather than printing an empty cell that reads like a lookup failure.
-  [ -n "$digest" ] || digest="(not from a registry)"
+  # rather than printing an empty cell that reads like a lookup failure. Truncated only
+  # when it IS a digest — the column width is there to cut 71 hex characters down to
+  # something readable, and applying it to this sentence printed `(not from a registr`.
+  # Reachable on the prod project today: servo-signal and autosavant-bot both `build:`.
+  if [ -n "$digest" ]; then
+    digest="${digest:0:19}"
+  else
+    digest="(not from a registry)"
+  fi
 
   revision="$(docker image inspect "$imgid" \
     --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
   [ -n "$revision" ] && [ "$revision" != "<no value>" ] || revision="—"
 
-  rows="$rows$name|$ref|${digest:0:19}|${revision:0:12}"$'\n'
+  rows="$rows$name|$ref|$digest|${revision:0:12}"$'\n'
 done
 
 rows="$(printf '%s' "$rows" | sort)"

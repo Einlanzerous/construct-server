@@ -1208,7 +1208,7 @@ services:
 
   # Dedicated Redis for Authentik (nothing else in the stack uses one).
   authentik-redis:
-    image: redis:7-alpine@sha256:9702d01c1f10c3ea9f48211b4362e44f154ff02d063e6f7268eba804059f53bf
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2   # 7.4.10-alpine
     container_name: authentik-redis
     restart: unless-stopped
     profiles: ["identity"]

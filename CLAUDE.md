@@ -169,10 +169,14 @@ anything deploys or gets versioned.
   never changes, so compose sees no drift and `up -d` alone moves nothing however far main
   has gone. Dev advances only on a `pull`, which is what `deploy-dev.yml` does hourly.
   **Third-party images are pinned by digest** (SERV-105), in the form `repo:tag@sha256:…`
-  inline in `docker-compose.yml` — the tag is provenance, the digest is the pin. This is
-  what makes a rollback's blast radius the one service named: before it, `docker compose
-  pull` moved every floating tag, and the first real rollback recreated purser, ollama and
-  semaphore when only purser was asked for. A "stable-looking" tag is not a pin —
+  inline in `docker-compose.yml` — the tag is provenance, the digest is the pin. Before it,
+  `docker compose pull` moved every floating tag, and the first real rollback recreated
+  purser, ollama and semaphore when only purser was asked for.
+  **This does not make a promote's blast radius the one service named, and do not write
+  that it does.** The major.minor pins above are moving tags by design, so a purser rollback
+  still recreates lyceum if lyceum cut a patch in the meantime — and that is worse than the
+  leaf case, since first-party services have dependents and the Node ones do not recover
+  from a peer recreate on their own. Scoping the pull is SERV-109. A "stable-looking" tag is not a pin —
   `traefik:v3.3` moves on patch releases and `crowdsec:v1.7.8` can be rebuilt in place,
   the same trap as `postgres:16.15-alpine`. **The four watchtower opt-ins stay floating**
   (dozzle, uptime-kuma, datadog, watchtower): watchtower is their update path and it cannot
