@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.18.0](https://github.com/Einlanzerous/construct-server/compare/v4.17.1...v4.18.0) (2026-08-17)
+
+
+### Features
+
+* **deploy:** add promote/rollback as one gated workflow (SERV-78, SERV-79) ([#114](https://github.com/Einlanzerous/construct-server/issues/114)) ([48c87b4](https://github.com/Einlanzerous/construct-server/commit/48c87b44cd85a2fded04f975af1e92a06ecd39c7))
+
+
+### Bug Fixes
+
+* **compose:** pin postgres and make the health signal reach something (SERV-102) ([#113](https://github.com/Einlanzerous/construct-server/issues/113)) ([f3438de](https://github.com/Einlanzerous/construct-server/commit/f3438def5017816ad3a1eb6373c6c12a926ba422))
+* **deploy:** move amber onto 0.7 — the pin sat two releases behind (AMBR-7) ([#111](https://github.com/Einlanzerous/construct-server/issues/111)) ([cb28f2b](https://github.com/Einlanzerous/construct-server/commit/cb28f2b1a630000cbe7ba33142bccead2d4f3d0c))
+* **edge:** bind the internal entrypoint to one address, not every interface (SERV-107) ([#115](https://github.com/Einlanzerous/construct-server/issues/115)) ([99f01b9](https://github.com/Einlanzerous/construct-server/commit/99f01b962f7c1dc6be512ffa00a4f2e42e0bd839))
+
 ## [4.17.1](https://github.com/Einlanzerous/construct-server/compare/v4.17.0...v4.17.1) (2026-08-15)
 
 
