@@ -197,7 +197,10 @@ anything deploys or gets versioned.
   falls back to the full pull — the dangerous direction is a scope that narrows to nothing,
   which would be a deploy that goes green having shipped no change at all. The cost of the
   trade: a scoped deploy converges nothing it did not name, so after a **failed** deploy a
-  later promote's green tick no longer means the stack matches `main`. Settle that by
+  later promote's green tick no longer means the stack matches `main`. `cf-access-guard` is
+  the one exception, checked explicitly by revision, because it is the one service where a
+  stale binary passes every gate — `assert-healthy` sees a healthy container and
+  `check-edge-auth` sees the old binary still refusing a spoofed `Host`. Settle the rest by
   re-running `deploy.yml` from the Actions tab — a `workflow_dispatch` carries no push
   range, so it always takes the full path. **Not** with `check-compose-drift.sh`, which
   compares mounts and the compose project root and nothing else, so an unapplied env or
@@ -300,7 +303,13 @@ anything deploys or gets versioned.
   container-side probe sees. `deploy.yml` runs it as a post-deploy gate; locally it is
   `make edge-auth-check`. The guard is the one first-party image **built on the box**
   rather than pinned (stdlib-only Go, no deps), so `deploy.yml` builds it explicitly —
-  `up -d` alone would keep running a stale image without complaint.
+  `up -d` alone would keep running a stale image without complaint. Its image carries
+  `org.opencontainers.image.revision`, stamped from `git log -1 -- services/cf-access-guard`
+  at build time (SERV-109). That label is the guard's **only** identity: it has no pin, and
+  its image ID is useless for comparison because BuildKit re-exports the config on every
+  build, so a full cache hit still yields a new ID. Recreating on an ID difference would
+  bounce the auth path on every deploy; recreating on a revision difference bounces it
+  exactly when the source moved.
 - **The wiki is generated, and its generator must never read a resolved
   environment** (SERV-101). `wiki/docs/` is wiped and rewritten on every run, so a
   hand-written page there is deleted without warning — anything a person wants to

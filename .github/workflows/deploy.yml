@@ -192,6 +192,23 @@ jobs:
           GITHUB_PAT=$(grep '^GITHUB_PAT=' "$DEPLOY_ROOT/.env" | cut -d'=' -f2)
           echo "$GITHUB_PAT" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
 
+      - name: Resolve the guard's source revision
+        # cf-access-guard is built on the box rather than pulled (SERV-106), so unlike
+        # every pinned image nothing records which SOURCE the running container was built
+        # from — and SERV-109 needs that, because a scoped deploy has to decide whether to
+        # recreate it. The image ID cannot answer: BuildKit re-exports the config on every
+        # build, so a full cache hit still yields a new ID and an ID comparison would
+        # recreate the auth-path container on every deploy.
+        #
+        # Runs in the CHECKOUT: the deploy root is an rsync target with no git history.
+        # An empty result is not fatal and must not read as a match — the scoped path
+        # below recreates the guard whenever it cannot prove the running one is current.
+        run: |
+          set -uo pipefail
+          rev="$(git log -1 --format=%H -- services/cf-access-guard || true)"
+          echo "GUARD_REVISION=$rev" >> "$GITHUB_ENV"
+          echo "cf-access-guard source revision: ${rev:-<could not resolve>}"
+
       - name: Build cf-access-guard
         # EXPLICIT, because `up -d` builds only when the image is MISSING — it does
         # not notice that the source changed. Without this step an edit to the guard
@@ -293,10 +310,10 @@ jobs:
         # image, env, ports, networks or command — so an unapplied env or digest change is
         # invisible to it and it prints "No drift" on exactly the thing being asked about.
         #
-        # cf-access-guard needs its own reasoning here, because it is build-only and can
-        # never appear in a scope list. It is covered by the `services/cf-access-guard/**`
-        # push path above rather than by riding along on the scoped `up` — see the note in
-        # the SCOPED branch for the measurement that decided that.
+        # cf-access-guard is the one exception to that caveat, because it is the one place
+        # where an unapplied change is invisible to every gate. It is build-only and can
+        # never appear in a scope list, so the SCOPED branch compares its source revision
+        # explicitly and recreates it when — and only when — it is behind. See there.
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: |
           set -euo pipefail
@@ -314,30 +331,36 @@ jobs:
                 echo "unscoped compose command that would look like a scoped one."
                 exit 1
               fi
-              echo "Scoped deploy (SERV-109): ${services[*]}"
+              # cf-access-guard can never appear in the scope list — it is build-only, so
+              # no versions.env pin can name it — but it still has to be CORRECT after a
+              # scoped deploy, and it is the service where a stale binary is least visible:
+              # assert-healthy passes (the old guard is healthy) and check-edge-auth passes
+              # (the old binary still refuses a spoofed Host).
+              #
+              # Appending it unconditionally is the obvious move and is wrong: BuildKit
+              # gives a new image ID on every build even on a full cache hit, so compose
+              # would recreate the container deciding whether requests are authenticated on
+              # EVERY promote and rollback. Hence the revision label — recreate exactly when
+              # the source differs, which on an ordinary promote is never.
+              #
+              # This is what closes the pending-run window. `concurrency` does NOT serialise
+              # a queued deploy: cancel-in-progress governs the RUNNING run only, and GitHub
+              # cancels any previously pending run when a newer one arrives. So a guard
+              # change queued behind an in-flight deploy is discarded when a promote lands,
+              # and its own always-FULL deploy never runs. The comparison below does not care
+              # why the guard is behind, only that it is.
+              # Two lists, because the guard is BUILT and never pulled: `services` is what
+              # moves in the registry, `recreate` is what compose must act on.
+              recreate=("${services[@]}")
+              guard_running="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' cf-access-guard 2>/dev/null || true)"
+              if [ -z "${GUARD_REVISION:-}" ] || [ "$guard_running" != "$GUARD_REVISION" ]; then
+                echo "cf-access-guard is on '${guard_running:-<no label>}', checkout is '${GUARD_REVISION:-<unresolved>}' — recreating it too."
+                recreate+=(cf-access-guard)
+              fi
+
+              echo "Scoped deploy (SERV-109): pull ${services[*]} | recreate ${recreate[*]}"
               docker compose pull "${services[@]}"
-              # cf-access-guard is deliberately NOT appended here, and this is worth
-              # reading before "fixing" it. It is build-only (SERV-106), so no
-              # versions.env pin can name it and the scope list can never contain it —
-              # which raises the fair question of whether a scoped deploy could leave a
-              # rebuilt guard unapplied. Two facts settle it:
-              #
-              #   1. `docker compose build cf-access-guard` produces a NEW image ID on
-              #      every run even on a full layer-cache hit — measured, three builds of
-              #      identical source gave three IDs. So appending it here would recreate
-              #      the container that decides whether requests are authenticated on
-              #      EVERY promote and rollback. That is collateral in the auth path, and
-              #      collateral is the thing this ticket removes.
-              #   2. It does not need to be here. `services/cf-access-guard/**` is now a
-              #      push path above, so a guard source change fires its own deploy — and
-              #      that commit touches more than versions.env, so it is always FULL and
-              #      always applies the build.
-              #
-              # Residual, stated rather than hidden: if a guard change's own deploy fails
-              # BEFORE this step, the guard stays stale until the next full deploy, and a
-              # promote in between will not converge it. That is the general caveat above,
-              # not a special case — settle it with a workflow_dispatch re-run.
-              docker compose up -d --no-deps "${services[@]}"
+              docker compose up -d --no-deps "${recreate[@]}"
               ;;
             *)
               docker compose pull && docker compose up -d --remove-orphans

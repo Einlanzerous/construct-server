@@ -38,6 +38,23 @@ RUN go test ./...
 # container that sits in front of every tunneled app — and the reason the
 # healthcheck runs the binary itself with -healthcheck rather than curl.
 FROM scratch
+
+# The commit this binary was built from, stamped so the deploy can tell whether the
+# RUNNING container is current (SERV-109). Nothing else can answer that for this image:
+# it carries no pin, and the image ID is useless as an identity because BuildKit
+# re-exports the config on every build — three builds of identical source produce three
+# IDs, measured. Comparing on the ID would therefore recreate the container that decides
+# whether requests are authenticated on every single deploy.
+#
+# Deliberately the SAME label the rest of the estate is compared on (SERV-88), so
+# `make versions cf-access-guard` reports a revision like every other first-party image.
+#
+# `unknown` when nothing passes it — a hand-build on the box, say. That is the loud
+# direction: it will not match a real commit, so the deploy recreates the guard rather
+# than assuming an unlabelled image is current.
+ARG GUARD_REVISION=unknown
+LABEL org.opencontainers.image.revision=$GUARD_REVISION
+
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/cf-access-guard /cf-access-guard
 
