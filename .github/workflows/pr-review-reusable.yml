@@ -470,6 +470,30 @@ jobs:
           rm -f "$IGNORE_ERR"
           PATTERNS=$(grep -vE '^[[:space:]]*(#|$)' <<<"${IGNORE:-}" || true)
 
+          # grep exits 2 on a MALFORMED pattern and 1 on no-match, and the
+          # `|| true` below cannot tell those apart. One unbalanced paren in this
+          # per-repo file therefore emptied BOTH lists — every path landed in
+          # neither "generated" nor "reviewable" — and twenty lines on, the empty
+          # REVIEWABLE read as "the generator wrote all of it" and skipped the PR
+          # green with `only generated files changed` while the actual diff went
+          # unread. A silent pass with a false explanation attached, from a typo,
+          # in exactly the class SERV-87 exists to close. The two grep warnings on
+          # stderr were the only trace, in a log these comments elsewhere concede
+          # nobody opens.
+          #
+          # So validate every pattern first, against empty input: 0 or 1 is a
+          # working regex, anything above is not. Named per-pattern, because
+          # "review-ignore is broken" without saying which line is a worse error
+          # than the one it replaces.
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            grep -qE -- "$p" </dev/null 2>/dev/null && rc=0 || rc=$?
+            if [ "$rc" -gt 1 ]; then
+              echo "::error::.github/review-ignore on ${BASE_REF} has an invalid extended regex, so nothing can be classified as generated or reviewable: ${p}"
+              exit 1
+            fi
+          done <<<"${PATTERNS:-}"
+
           if [ -n "$PATTERNS" ]; then
             # A blank pattern in a -f file matches every line, which would put
             # the whole diff out of scope. The comment/blank strip above is what
@@ -541,6 +565,17 @@ jobs:
           # sensitive is the one thing this workflow genuinely cannot know.
           if [ -z "${SENSITIVE_RE//[[:space:]]/}" ]; then
             echo "::error::sensitive_paths is empty. It is an ERE matched against changed paths; empty matches everything and would put every PR on the expensive tier. See docs/pr-reviewer.md."
+            exit 1
+          fi
+          # The mirror of the empty check above, and the more dangerous half.
+          # `if grep -qE` runs with errexit off, so a malformed regex — an
+          # unbalanced paren in a hand-written ERE full of escapes — exits 2,
+          # takes the `else` branch, and puts every PR on the CHEAP tier. Empty
+          # over-escalates and is caught loudly; invalid de-escalates and was not
+          # caught at all, which is the wrong way round.
+          grep -qE -- "$SENSITIVE_RE" </dev/null 2>/dev/null && rc=0 || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::sensitive_paths is not a valid extended regex, so every PR would silently take the cheaper tier: ${SENSITIVE_RE}"
             exit 1
           fi
           if grep -qE "$SENSITIVE_RE" <<<"$REVIEWABLE"; then
