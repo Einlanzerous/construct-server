@@ -30,3 +30,12 @@ services/argosy-derrick/
 
 # Python
 __pycache__/
+
+# PR reviewer scratch, written into the workspace by the reusable reviewer
+# workflow and by the reviewer itself. Ignored so a reviewer running
+# `git status` sees a clean tree and does not mistake its own scratch for part
+# of the diff under review.
+.review-scope/
+review-verdict.json
+review-body.md
+ticket-comment.md

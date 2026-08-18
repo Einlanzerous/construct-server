@@ -1,0 +1,1244 @@
+name: PR Review (reusable)
+
+# Fresh-context review of every pull request (SERV-59).
+#
+# Switchyard is the second repo on this reviewer and the first with real churn:
+# ~1,250 changed lines per PR against construct-server's handful, plus Postgres
+# migrations and a two-dimensional permission model — the two blind spots
+# SERV-59 was written about, so this is where it earns its keep.
+#
+# Note the circularity: the reviewer reads tickets from the service it is
+# reviewing. A PR that breaks the ticket API degrades the reviewer rather than
+# failing it — the prompt falls back to reviewing the diff on its own terms.
+#
+# The point of running this in CI rather than asking for it in a session is that
+# the reviewer structurally cannot share context with whatever wrote the code,
+# and it fires whether or not anyone remembers to ask for it.
+#
+# Auth is a Claude subscription token, not an API key. At current throughput
+# (800+ tickets a quarter, 1-3 review cycles each) per-token billing would run
+# into four figures a quarter for the same work the subscription already covers.
+# Swapping to `anthropic_api_key` is a one-line change if that calculus shifts.
+# SERV-64 tracks moving the backend to local gemma, which drops the cost to zero
+# and is why the reviewer itself lives in `.github/review-prompt.md` rather than
+# inline here — the prompt is the deliverable, the model behind it is config.
+#
+# Runs on the self-hosted runner so the reviewer sits on `construct_net` and can
+# reach Switchyard and Ollama directly, without negotiating the access edge.
+#
+# Triggering is risk-based rather than uniform. Reviewing every push at every
+# depth is the expensive default; instead docs-only diffs are skipped, sensitive
+# paths get a deeper pass, and re-review on push is opt-in per PR via a label.
+#
+# ---------------------------------------------------------------------------
+# SERV-87: the check's colour is the product, and it used to be noise.
+#
+# Measured over 40 runs before this change: of 22 `pull_request` runs, 18 were
+# green having never reviewed anything (triage declined, step exited 0, job went
+# green), 1 was green and reviewed, and of 3 reds, 2 were *complete reviews*
+# failed after the fact. Green meant "reviewed" once in nineteen times, and red
+# meant "no review" one time in three. Three things changed:
+#
+#   1. Triage is its own job, so declining to review leaves the `review` job
+#      natively SKIPPED — grey, with the reason in the check name — rather than
+#      green. Gray-vs-green is the whole point: a green `review` now means a
+#      reviewer ran.
+#   2. The workflow, not the action, decides the outcome. `claude-code-action`
+#      throws when `num_turns` exceeds `--max-turns` even on a run the SDK let
+#      finish (base-action/src/run-claude-sdk.ts:211-220) — its limiter and its
+#      own turn accounting disagree, so PRs #184 (42 turns) and #187 (44) were
+#      failed having posted complete reviews. Worse, the failure SKIPPED the
+#      Gate step, discarding `review-verdict.json` in exactly the cases where a
+#      review existed. The Review step is now `continue-on-error` and the result
+#      message in the execution file is what the Gate reads.
+#   3. Generated artifacts are dropped from the diff the reviewer reads. See
+#      `.github/review-ignore`.
+#
+# Raising `--max-turns` alone would have fixed none of this — it moves the cliff
+# without changing what the check reports on either side of it.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# This is the SHARED definition (SERV-92). Four repos ran hand-copied forks of
+# it; by the time SERV-87 was done they had drifted to 998 / 465 / 370 / 360
+# lines, and the drift ran BOTH ways — signet independently grew the release-PR
+# skip and the reviews-before/after assertion, which switchyard then copied
+# back. Every fix cost four edits, and three of the four repos were still
+# shipping all three SERV-87 failure modes a week after they were fixed in the
+# fourth. signet#32 merged with seven changed files and three green `review`
+# checks, none of which reviewed anything.
+#
+# Callers are ~20 lines. See `docs/pr-reviewer.md` for the template and for what
+# each input is for.
+#
+# It lives in construct-server because construct-server is PUBLIC: a public
+# repo's reusable workflows are callable from any repo, private ones included,
+# with no Actions-access configuration. switchyard and amber are private, so
+# hosting it in either would have needed that configuration loosened. That is
+# the open question SERV-92 filed, resolved by checking rather than assuming.
+#
+# What is per-repo lives in inputs; what is judgement lives in the calling
+# repo's own REVIEW.md / CLAUDE.md; what is procedure lives in this repo's
+# `.github/review-prompt.md`, fetched at run time so there is exactly one copy.
+# `.github/review-ignore` stays per-repo and is read from the CALLER, because
+# which artifacts are generated is a fact about the caller.
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      sensitive_paths:
+        description: >-
+          ERE matched against changed paths. A hit escalates the review to the
+          deeper tier. This is the one input with no sensible default: it is the
+          repo's own answer to "where does a mistake widen access, lose data,
+          leak a secret, or compromise the runner". Matching everything is the
+          same as matching nothing — SGNT-36 is signet doing exactly that with
+          `^(internal/|cmd/|...)`, which is its whole source tree, so every PR
+          got the expensive tier and the tier stopped carrying information.
+        required: true
+        type: string
+      standards_files:
+        description: >-
+          ERE for files that are .md but are NOT documentation — the reviewer's
+          own standards. A diff touching only these is a governance change and
+          must not be skipped as docs-only.
+        default: '^(REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/review-ignore)$'
+        type: string
+      docs_skip_extra:
+        description: >-
+          Extra alternatives folded into the docs-only test, without the
+          surrounding parens — e.g. `^graphify-out/|` for a repo that commits a
+          knowledge-graph cache. Note the trailing pipe.
+        default: ''
+        type: string
+      max_turns:
+        description: >-
+          Runaway tripwire, not a budget. Completed reviews measured 9-50 turns
+          (median 33) over 18 runs, so a cap near 40 sits INSIDE the normal
+          distribution and clips roughly one review in five. `timeout_minutes`
+          is what actually bounds a runaway. Turns are not billed.
+        default: 80
+        type: number
+      high_effort_model:
+        default: opus
+        type: string
+      low_effort_model:
+        default: sonnet
+        type: string
+      high_effort:
+        default: high
+        type: string
+      low_effort:
+        default: medium
+        type: string
+      switchyard_url:
+        description: Switchyard is on the runner's host, so this is localhost by default.
+        default: http://localhost:4002
+        type: string
+      runs_on:
+        description: Runner label. Must reach Switchyard, so a self-hosted runner on the host.
+        default: self-hosted
+        type: string
+      timeout_minutes:
+        default: 30
+        type: number
+      release_branch_prefix:
+        description: >-
+          Branch prefix for automated release PRs. A bot-authored PR on this
+          prefix carrying only `release_files` is skipped: claude-code-action
+          refuses bot-initiated runs outright, so without this the check is red
+          on every release, permanently.
+        default: 'release-please--'
+        type: string
+      release_files:
+        description: Newline-separated file list a release PR may contain and still be skipped.
+        default: "CHANGELOG.md\n.release-please-manifest.json"
+        type: string
+      prompt_repo:
+        description: >-
+          Override where `review-prompt.md` is fetched from. Empty means "the
+          repo hosting this workflow, at the exact commit of this workflow" —
+          derived from `github.job_workflow_ref` / `job_workflow_sha`, so the
+          procedure and the workflow can never be a version apart.
+        default: ''
+        type: string
+      prompt_ref:
+        default: ''
+        type: string
+    secrets:
+      claude_code_oauth_token:
+        required: true
+      switchyard_token:
+        required: true
+
+# Declared here so a caller cannot forget them. A caller may narrow these but
+# not widen them — the calling workflow's own `permissions` is still the ceiling,
+# which is why the template in docs/pr-reviewer.md sets the same three.
+#
+# The reviewer reads code and writes comments. It never needs to write contents,
+# and withholding that is what actually stops it from pushing — the instruction
+# in the prompt is belt to this braces.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+concurrency:
+  # Deliberately here rather than in each caller: this key is the accumulated
+  # result of three separate silent-pass incidents, and it is not something four
+  # repos should each be maintaining a copy of.
+  #
+  # A rapid push series should cost one review, not one per push — but the
+  # trigger is part of the key so a `synchronize` cannot cancel an in-flight
+  # `@claude review`. Sharing the group let a push kill a requested review whose
+  # replacement then skipped at triage, producing a green check and no review:
+  # the same silent pass the Gate step exists to prevent, through another door.
+  # The action is in the key as well as the event: `opened` and `synchronize`
+  # are both `pull_request`, so keying on the event alone still let a fixup
+  # pushed minutes after opening cancel the opening review — whose replacement
+  # then skipped at triage for lacking the label, green and unreviewed. That is
+  # the same silent pass, third variant; it was closed for the manual path and
+  # left open on the path that runs for every PR.
+  #
+  # Variants four and five were the triage skip and the turn-cap failure, and
+  # they are closed structurally rather than by key surgery (SERV-87): a skip is
+  # now a skipped job, not a green one. Keep this key as it is anyway — a
+  # cancelled run still reports as cancelled, which is neither.
+  group: pr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}-${{ github.event.action }}
+  cancel-in-progress: true
+
+jobs:
+  # Triage is a separate job so that declining to review can be expressed as a
+  # SKIPPED job rather than a green one (SERV-87). It deliberately does not
+  # check out: everything it needs comes from the event payload and the API, and
+  # keeping it checkout-free is what makes it cheap enough to always run.
+  triage:
+    # `pull_request` on a self-hosted runner is the classic fork-execution hole.
+    # This repo is private and single-author so it is largely theoretical, but
+    # inheriting it silently is how it stops being theoretical later.
+    #
+    # The comment path needs the same guard and originally had none, which was
+    # worse: it is the only path that checks out PR code, so any commenter could
+    # have put their own review-prompt.md in the workspace and had it run with
+    # Bash on a runner holding SWITCHYARD_TOKEN. `author_association` gates who
+    # may ask; the head-repo check in the next step gates what gets checked out.
+    #
+    # This guard lives on triage rather than on review because a skipped `needs`
+    # dependency skips its dependents — so guarding here guards both.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       startsWith(github.event.comment.body, '@claude review') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                github.event.comment.author_association))
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 10
+
+    # gh resolves the repository from --repo, then GH_REPO, then the working
+    # directory's git remotes — it does NOT read GITHUB_REPOSITORY. This job
+    # deliberately never checks out, so it has no remotes to fall back on and
+    # every gh call here depends on this variable. Without it the job still
+    # passes on this runner, but only because $GITHUB_WORKSPACE holds the .git
+    # a *previous* run's checkout left behind (`git clean -ffdx` does not remove
+    # .git, and nothing here recreates it) — so it would fail on a newly
+    # registered runner, a wiped _work, or any repo adopting this workflow
+    # before its first checkout lands. Signet's copy carries the same variable
+    # for the same reason; this is the estate's second time learning it.
+    env:
+      GH_REPO: ${{ github.repository }}
+
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      manual: ${{ steps.pr.outputs.manual }}
+      base_ref: ${{ steps.pr.outputs.base_ref }}
+      review: ${{ steps.triage.outputs.review }}
+      reason: ${{ steps.triage.outputs.reason }}
+      effort: ${{ steps.triage.outputs.effort }}
+      model: ${{ steps.triage.outputs.model }}
+      # Newline-separated path lists, base64'd because a job output is a single
+      # string. The review job decodes them rather than recomputing the split —
+      # one source of truth for "what is in scope", and it is this one.
+      reviewable_b64: ${{ steps.triage.outputs.reviewable_b64 }}
+      generated_b64: ${{ steps.triage.outputs.generated_b64 }}
+
+    steps:
+      # First, because every later step depends on these. The runner is a systemd
+      # service with a bare system PATH, so anything installed under $HOME is
+      # invisible to it — the trap SERV-62 hit twice, whose lesson is to fail
+      # with a clear reason rather than as `command not found` three layers down.
+      # This step sat after four steps that already used gh and curl, so it could
+      # only ever have caught a missing jq. It is unconditional: it is three
+      # `command -v` calls, and gating it on triage would put it back after the
+      # first gh call.
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          for tool in gh jq curl base64; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "$tool is not on the runner PATH: $PATH" >&2
+              exit 1
+            fi
+          done
+          echo "gh $(gh --version | head -1), jq $(jq --version)"
+
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            N="${{ github.event.issue.number }}"
+            # The comment payload carries no head repo, so resolve it before
+            # anything can check out PR code onto this runner.
+            HEAD=$(gh pr view "$N" --json headRepositoryOwner,headRepository \
+                     --jq '"\(.headRepositoryOwner.login)/\(.headRepository.name)"')
+            if [ "$HEAD" != "$GITHUB_REPOSITORY" ]; then
+              echo "::error::PR #$N head is $HEAD, not $GITHUB_REPOSITORY — refusing to check out fork code on a self-hosted runner."
+              exit 1
+            fi
+            echo "number=$N" >> "$GITHUB_OUTPUT"
+            # An explicit ask overrides every skip rule below, including drafts.
+            echo "manual=true" >> "$GITHUB_OUTPUT"
+            # The comment payload carries no base ref either, and the review
+            # scope is read from it (see the review-ignore fetch below).
+            echo "base_ref=$(gh pr view "$N" --json baseRefName --jq .baseRefName)" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "manual=false" >> "$GITHUB_OUTPUT"
+            echo "base_ref=${{ github.event.pull_request.base.ref }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Triage — should this be reviewed, and how deeply
+        id: triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          MANUAL: ${{ steps.pr.outputs.manual }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          ACTION: ${{ github.event.action }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          # Passed as env rather than interpolated into the script body: these
+          # are caller-supplied regexes full of backslashes, pipes and parens,
+          # and `${{ }}` splices text into the shell BEFORE bash parses it. An
+          # input containing a quote would end the string and run as code. As
+          # env they are data the whole way down.
+          SENSITIVE_RE: ${{ inputs.sensitive_paths }}
+          DOCS_EXTRA_RE: ${{ inputs.docs_skip_extra }}
+          STANDARDS_RE: ${{ inputs.standards_files }}
+          RELEASE_PREFIX: ${{ inputs.release_branch_prefix }}
+          RELEASE_FILE_LIST: ${{ inputs.release_files }}
+        run: |
+          set -euo pipefail
+
+          # `reason` is not decoration. The `review` job going grey says a review
+          # did not happen; this says why, and it goes to the job summary rather
+          # than only to this log — the summary is one click from the checks
+          # list, the log is several and nobody opens it.
+          skip() {
+            echo "review=false" >> "$GITHUB_OUTPUT"
+            echo "reason=$1"    >> "$GITHUB_OUTPUT"
+            echo "→ skipping: $1"
+            {
+              echo "## No review: $1"
+              echo
+              echo "The \`review\` check is **skipped**, not passing — nothing read this diff."
+              echo "Comment \`@claude review\` to force one."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          if [ "$MANUAL" != "true" ]; then
+            if [ "$IS_DRAFT" = "true" ]; then
+              skip "draft PR (comment '@claude review' to force one)"
+            fi
+
+            # Re-reviewing on every push is the single largest cost multiplier,
+            # and most pushes are a typo fix on a PR that was already read. Opt
+            # in per PR with the label when a change is worth watching closely.
+            if [ "$ACTION" = "synchronize" ] && [[ ",$LABELS," != *",review:always,"* ]]; then
+              skip "push without the 'review:always' label"
+            fi
+          fi
+
+          FILES=$(gh pr diff "$PR_NUMBER" --name-only)
+          if [ -z "$FILES" ]; then
+            skip "empty diff"
+          fi
+
+          # A release PR is a generated CHANGELOG and a version manifest, opened
+          # by the release bot. There is nothing for a fresh-context reviewer to
+          # say about it, and claude-code-action refuses a bot-initiated run
+          # outright ("Workflow initiated by non-human actor: …ind-release-bot —
+          # Add bot to allowed_bots list"), so without this the check is red on
+          # every release, permanently, and on exactly the PRs that most need to
+          # look trustworthy at a glance. Observed on #200 (run 31772576197):
+          # Claude never started, no execution file, and the Gate correctly
+          # called it a malfunction — correctly, and uselessly, forever.
+          #
+          # Ported from signet, which hit this first and whose comment predicted
+          # this repo would. The docs-only rule below nearly covers it and does
+          # not: CHANGELOG.md is .md, .release-please-manifest.json is not.
+          #
+          # Keyed on all three of author, branch and file list, because each one
+          # alone is a claim the other two do not enforce:
+          #
+          #   author  — the reason this rule exists is that the INITIATING ACTOR
+          #             is a bot. Keying on the branch alone would let a human
+          #             push `release-please--anything` touching exactly these
+          #             two files and skip review, and per CLAUDE.md
+          #             ("Release-please owns CHANGELOG.md and versions. Don't
+          #             hand-edit.") a hand-edit of those two is precisely the
+          #             change worth a look. `user.type` is `Bot` for the release
+          #             app and `User` for a person; verified on #200 and #205.
+          #   branch  — scopes it to the release train rather than any bot.
+          #   files   — `extra-files` in release-please-config.json (the usual
+          #             reason being to stamp the version into a source file
+          #             rather than at link time) would put real code in a
+          #             release PR. Skipping that on a branch name would be the
+          #             silent pass this whole ticket exists to close.
+          #
+          # What the fall-through actually does, because it is NOT a review:
+          # nothing configures `allowed_bots`, so a bot-authored PR that reaches
+          # the review job is rejected by claude-code-action exactly as before —
+          # Claude never starts and the Gate reports a malfunction. That red is
+          # deliberate and is the point: unreviewed code riding a release PR
+          # should be loud, and a loud red beats a quiet skip. It is not a
+          # reviewed verdict, and the annotation says so rather than leaving the
+          # next reader to expect one.
+          #
+          # A HUMAN-authored `release-please--*` branch falls out of this
+          # condition entirely and gets an ordinary review, which is the case the
+          # author check adds. `@claude review` also still forces a real review
+          # on any of these, because the initiating actor is then the commenter.
+          if [ "$MANUAL" != "true" ] && [ "$AUTHOR_TYPE" = "Bot" ] && [[ "$HEAD_BRANCH" == "$RELEASE_PREFIX"* ]]; then
+            # SUBSET, not set equality. Equality also requires the release PR
+            # to carry every file in the list, and a repo can legitimately carry
+            # fewer: construct-server runs release-please in non-manifest mode,
+            # so its release commits touch CHANGELOG.md and nothing else, and an
+            # equality test never fires there. The question this rule is asking
+            # is "is there anything here that ISN'T generated release material",
+            # which is a subset test; expressing it as equality made it silently
+            # inapplicable to the repo hosting it.
+            RELEASE_FILES=$(printf '%s\n' "$RELEASE_FILE_LIST" | sed '/^[[:space:]]*$/d' | sort -u)
+            UNEXPECTED=$(comm -23 <(sort -u <<<"$FILES") <(printf '%s\n' "$RELEASE_FILES"))
+            if [ -z "$UNEXPECTED" ]; then
+              skip "release PR (generated release material only)"
+            fi
+            echo "::warning::Release branch carries $(grep -c . <<<"$UNEXPECTED") path(s) beyond the generated release material ($(tr '\n' ' ' <<<"$UNEXPECTED")), so it is NOT being skipped here. Whether it gets reviewed depends on the rules below; if it reaches the reviewer it will fail, because the author is a bot and claude-code-action refuses bot-initiated runs. Comment '@claude review' to get an actual review of it."
+          fi
+
+          # --- Generated artifacts come out of scope here (SERV-87) ----------
+          #
+          # Read from the BASE ref, never the workspace. A PR that widens its own
+          # ignore list should not get the widened list applied to itself — the
+          # realistic failure is an over-broad pattern silently suppressing
+          # review of the very change that introduced it, not an attacker. (A
+          # same-repo PR can already edit this workflow and have its version run;
+          # what bounds that is the fork guard above plus the repo being private
+          # and single-author. This is defence against the mistake, not the
+          # adversary, and `.github/review-ignore` being in SENSITIVE below is
+          # what makes the deeper pass read the edit.)
+          #
+          # A 404 is the ordinary case in a repo that has not adopted one yet:
+          # no file means no exclusions, which must not be an error. Everything
+          # else is a fetch failure and says so — an empty read and a failed read
+          # both end up reviewing the whole diff, which is the safe direction,
+          # but they are not the same event and a silent `|| true` over both is
+          # how "the filter quietly stopped working" becomes invisible. Same
+          # lesson as the Switchyard ticket fetch below, which discriminates on
+          # status for the same reason.
+          IGNORE_ERR=$(mktemp)
+          if IGNORE=$(gh api -H 'Accept: application/vnd.github.raw' \
+                        "repos/$GITHUB_REPOSITORY/contents/.github/review-ignore?ref=$BASE_REF" \
+                        2>"$IGNORE_ERR"); then
+            :
+          else
+            IGNORE=""
+            if grep -qi 'not found' "$IGNORE_ERR"; then
+              echo "→ no .github/review-ignore on $BASE_REF; nothing is excluded"
+            else
+              echo "::warning::Could not read .github/review-ignore from $BASE_REF ($(tr -d '\n' <"$IGNORE_ERR" | head -c 200)) — reviewing the whole diff, generated files included. This costs budget; it does not narrow the review."
+            fi
+          fi
+          rm -f "$IGNORE_ERR"
+          PATTERNS=$(grep -vE '^[[:space:]]*(#|$)' <<<"${IGNORE:-}" || true)
+
+          # grep exits 2 on a MALFORMED pattern and 1 on no-match, and the
+          # `|| true` below cannot tell those apart. One unbalanced paren in this
+          # per-repo file therefore emptied BOTH lists — every path landed in
+          # neither "generated" nor "reviewable" — and twenty lines on, the empty
+          # REVIEWABLE read as "the generator wrote all of it" and skipped the PR
+          # green with `only generated files changed` while the actual diff went
+          # unread. A silent pass with a false explanation attached, from a typo,
+          # in exactly the class SERV-87 exists to close. The two grep warnings on
+          # stderr were the only trace, in a log these comments elsewhere concede
+          # nobody opens.
+          #
+          # So validate every pattern first, against empty input: 0 or 1 is a
+          # working regex, anything above is not. Named per-pattern, because
+          # "review-ignore is broken" without saying which line is a worse error
+          # than the one it replaces.
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            grep -qE -- "$p" </dev/null 2>/dev/null && rc=0 || rc=$?
+            if [ "$rc" -gt 1 ]; then
+              echo "::error::.github/review-ignore on ${BASE_REF} has an invalid extended regex, so nothing can be classified as generated or reviewable: ${p}"
+              exit 1
+            fi
+          done <<<"${PATTERNS:-}"
+
+          if [ -n "$PATTERNS" ]; then
+            # A blank pattern in a -f file matches every line, which would put
+            # the whole diff out of scope. The comment/blank strip above is what
+            # prevents that, so keep the two together.
+            GENERATED=$(grep -E -f <(printf '%s\n' "$PATTERNS") <<<"$FILES" || true)
+            REVIEWABLE=$(grep -vE -f <(printf '%s\n' "$PATTERNS") <<<"$FILES" || true)
+            echo "→ $(grep -c . <<<"${GENERATED:-}" || true) of $(grep -c . <<<"$FILES") changed paths are generated; out of scope"
+          else
+            # Either there is no ignore file, or it is all comments, or the fetch
+            # failed — all three already said so above.
+            GENERATED=""
+            REVIEWABLE="$FILES"
+          fi
+
+          # Nothing left once the generator output is removed. This is a real
+          # skip, not a degenerate one: `bun run api:gen` on its own is a
+          # regeneration commit, and there is no hand-written line to review.
+          #
+          # An explicit `@claude review` overrides every other skip rule, so it
+          # has to override this one too — and "review nothing" is not a coherent
+          # way to honour it. Asking for a review of a regeneration-only PR means
+          # asking about the regeneration, so put the whole diff back in scope
+          # rather than handing the reviewer an empty patch.
+          if [ -z "$REVIEWABLE" ]; then
+            if [ "$MANUAL" != "true" ]; then
+              printf 'reviewable_b64=\ngenerated_b64=\n' >> "$GITHUB_OUTPUT"
+              skip "only generated files changed"
+            fi
+            echo "→ every changed path is generated, but this review was asked for; reviewing them"
+            REVIEWABLE="$FILES"
+            GENERATED=""
+          fi
+
+          {
+            echo "reviewable_b64=$(printf '%s\n' "$REVIEWABLE" | base64 -w0)"
+            echo "generated_b64=$(printf '%s\n' "${GENERATED:-}" | base64 -w0)"
+          } >> "$GITHUB_OUTPUT"
+
+          # Docs-only changes get nothing out of a correctness reviewer. Written
+          # as "is anything here NOT docs?" rather than a negated -q test: with
+          # -q, grep short-circuits and reports no selection even when a
+          # non-matching line exists, which silently skipped any PR that touched
+          # code and a .md file together.
+          #
+          # Asked of REVIEWABLE rather than FILES: a PR of docs plus regenerated
+          # types has nothing for a correctness reviewer either, and running it
+          # against FILES would have called that a code change.
+          CODE=$(grep -vE '(^docs/|'"$DOCS_EXTRA_RE"'\.md$)' <<<"$REVIEWABLE" || true)
+          # The reviewer's own standards are .md but are not documentation.
+          STANDARDS=$(grep -E "$STANDARDS_RE" <<<"$REVIEWABLE" || true)
+          if [ -z "$CODE" ] && [ -z "$STANDARDS" ] && [ "$MANUAL" != "true" ]; then
+            skip "documentation only"
+          fi
+
+          # Paths where a mistake widens access, loses data, leaks a secret, or
+          # compromises the runner. These get the deeper pass.
+          # routes/auth.ts is the SSO login endpoint and scripts/authz-guard.ts is
+          # the mechanical check (wired at ci.yml:35) enforcing the permission
+          # invariants REVIEW.md asks about by hand — deleting its invocation was
+          # caught, gutting its logic was not. REVIEW.md / CLAUDE.md /
+          # review-prompt.md / review-ignore are the reviewer's own standards and
+          # its own scope: a PR that loosens them is a governance change, not
+          # documentation.
+          # An empty ERE matches every line, so an unset `sensitive_paths`
+          # would silently route every PR to the expensive tier — the same
+          # "empty is not a value" shape as the rest of this estate. The input is
+          # `required: true`, but required only stops it being omitted, not being
+          # passed as "". Refuse it rather than guess a default: what counts as
+          # sensitive is the one thing this workflow genuinely cannot know.
+          if [ -z "${SENSITIVE_RE//[[:space:]]/}" ]; then
+            echo "::error::sensitive_paths is empty. It is an ERE matched against changed paths; empty matches everything and would put every PR on the expensive tier. See docs/pr-reviewer.md."
+            exit 1
+          fi
+          # The mirror of the empty check above, and the more dangerous half.
+          # `if grep -qE` runs with errexit off, so a malformed regex — an
+          # unbalanced paren in a hand-written ERE full of escapes — exits 2,
+          # takes the `else` branch, and puts every PR on the CHEAP tier. Empty
+          # over-escalates and is caught loudly; invalid de-escalates and was not
+          # caught at all, which is the wrong way round.
+          grep -qE -- "$SENSITIVE_RE" </dev/null 2>/dev/null && rc=0 || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::sensitive_paths is not a valid extended regex, so every PR would silently take the cheaper tier: ${SENSITIVE_RE}"
+            exit 1
+          fi
+          if grep -qE "$SENSITIVE_RE" <<<"$REVIEWABLE"; then
+            echo "effort=${{ inputs.high_effort }}"      >> "$GITHUB_OUTPUT"
+            echo "model=${{ inputs.high_effort_model }}" >> "$GITHUB_OUTPUT"
+            echo "→ sensitive paths touched; reviewing at ${{ inputs.high_effort }} effort"
+          else
+            echo "effort=${{ inputs.low_effort }}"      >> "$GITHUB_OUTPUT"
+            echo "model=${{ inputs.low_effort_model }}" >> "$GITHUB_OUTPUT"
+            echo "→ reviewing at ${{ inputs.low_effort }} effort"
+          fi
+          echo "review=true" >> "$GITHUB_OUTPUT"
+          echo "reason=" >> "$GITHUB_OUTPUT"
+
+  review:
+    needs: triage
+    if: needs.triage.outputs.review == 'true'
+    # Static, and it has to be. This carried a `${{ ... }}` expression putting
+    # the skip reason in the check name, which read well and did not work:
+    # GitHub does not evaluate a job's `name` when the job is SKIPPED, so the
+    # checks list rendered the raw expression source as the check name — for
+    # exactly the case the expression existed to serve. Verified on this PR
+    # (run 31771786370); the name evaluates correctly when the job runs, which
+    # is what makes the failure easy to miss. Do not reinstate it.
+    #
+    # The grey conclusion is what carries "this was not reviewed" (SERV-87
+    # AC 3), and that works — a skipped job is visually distinct from a green
+    # one at a glance. The reason lands in triage's job summary instead, one
+    # click from the checks list and not buried in the log. If the reason is
+    # ever wanted in the list itself, a posted check run with `checks: write`
+    # is the mechanism that can do it.
+    name: review
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+
+    env:
+      # A tripwire for a runaway, not a budget. Completed reviews measured
+      # 9-50 turns (median 33) across the 18 that ran in the week after SERV-87
+      # landed, so the old 40 sat inside the normal distribution and clipped
+      # roughly one review in five. (An earlier count of 19-47/median 29 was the
+      # PRE-fix sample of 16 and is superseded; keep ONE number here, because
+      # the whole argument for 80 rests on it.) Turns are not billed —
+      # `timeout-minutes` above is what actually bounds a runaway — so the cap
+      # is set clear of observed work rather than close to it.
+      REVIEW_MAX_TURNS: "${{ inputs.max_turns }}"
+      SCOPE_DIR: .review-scope
+      # Set here too even though this job does check out: the gh calls that
+      # matter run before anything guarantees a remote, and relying on job
+      # ordering for repo resolution is what broke triage. See the triage job.
+      GH_REPO: ${{ github.repository }}
+      # The identity the reviewer posts its review as. The prompt posts through
+      # `gh api` with `github_token: ${{ github.token }}`, which authors as
+      # github-actions[bot]; the before/after count filters on it so a human
+      # review landing mid-run cannot satisfy the "a review appeared" assertion.
+      # If this ever stops matching, the assertion fails loudly on every run
+      # rather than passing silently — which is the right way round.
+      REVIEWER_LOGIN: "github-actions[bot]"
+
+    steps:
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          for tool in gh jq curl base64; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "$tool is not on the runner PATH: $PATH" >&2
+              exit 1
+            fi
+          done
+
+      # No workspace-integrity assertion here, deliberately — and twice now it has
+      # looked like there should be. checkout defaults to `clean: true`
+      # (`git clean -ffdx` + `git reset --hard`), so a stale file from a previous
+      # job on this long-lived runner is already gone before any later step could
+      # see it. And the config swap that does matter — claude-code-action
+      # restoring CLAUDE.md from base — happens inside the Review step, after any
+      # step here could observe it. The prompt handles that by reading both
+      # copies knowingly (SERV-67). A guard here can only ever pass.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The reviewer reads history on the changed paths to spot changes that
+          # re-break something already fixed.
+          fetch-depth: 0
+
+      - name: Check out the PR head
+        if: needs.triage.outputs.manual == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr checkout "${{ needs.triage.outputs.number }}"
+
+      # Half the job is "did this do what the ticket asked", which needs the
+      # ticket. Resolved here rather than in the prompt so it is deterministic
+      # and visible in the log. Convention is the key in the PR title —
+      # `fix(signet): ... (SERV-62)` — with the branch as a fallback. Not every
+      # PR has one (#74 did not), and that is not an error.
+      - name: Resolve the Switchyard ticket
+        id: ticket
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.triage.outputs.number }}
+          SWITCHYARD_URL: ${{ inputs.switchyard_url }}
+          SWITCHYARD_TOKEN: ${{ secrets.switchyard_token }}
+        run: |
+          set -euo pipefail
+          TITLE=$(gh pr view "$PR_NUMBER" --json title --jq .title)
+          BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)
+
+          # Anchored on an opening bracket so a bare token like UTF-8 in a title
+          # is not mistaken for a key, and not on the closing one so the
+          # multi-ticket form `(SERV-33/40)` still resolves to its first key.
+          # Both delimiters are in use across the estate: construct-server
+          # writes `(SERV-62)`, switchyard writes `[SWY-198]`.
+          KEY=$(grep -oE '[(\[][A-Z]+-[0-9]+' <<<"$TITLE" | tr -d '([' | head -1 || true)
+          SOURCE=title
+          if [ -z "$KEY" ]; then
+            KEY=$(grep -oiE '\b[a-z]+-[0-9]+\b' <<<"$BRANCH" | head -1 | tr '[:lower:]' '[:upper:]' || true)
+            SOURCE=branch
+          fi
+
+          # A branch-derived key can be a false positive: `claude/pr-review-2026`
+          # yields REVIEW-2026, so confirm the key names a real ticket. Branch on
+          # the status, NOT on curl's exit: `curl -sf` returns 22 for both 404 and
+          # 401, so the first version of this dropped a perfectly good key when the
+          # token was wrong or Switchyard was mid-restart — which happens on every
+          # deploy of this repo, since migrations run at container start. The
+          # review then stated there was no ticket when the title named one, and
+          # skipped ticket fidelity entirely. An absent secret lands here too: it
+          # arrives as an empty string rather than unset, so `set -u` does not
+          # catch it and the request goes out as `Bearer ` and 401s — the SWY-172
+          # blank-read-as-configured shape, in the workflow instead of env.ts.
+          #
+          # Only a 404 means "this ticket does not exist". Anything else keeps the
+          # key and lets the reviewer report the fetch failure as a caveat, which
+          # .github/review-prompt.md already instructs it to do.
+          if [ -n "$KEY" ]; then
+            # curl already writes 000 when it cannot connect, so no `|| echo 000`
+            # here — that appended a second one and reported status 000000.
+            STATUS=$(curl -s -o /dev/null -m 10 -w '%{http_code}' \
+                       -H "Authorization: Bearer $SWITCHYARD_TOKEN" \
+                       "$SWITCHYARD_URL/v1/tickets/$KEY" 2>/dev/null) || true
+            [ -n "$STATUS" ] || STATUS=000
+            case "$STATUS" in
+              200) ;;
+              404) echo "→ $KEY does not exist in Switchyard; treating as no ticket"; KEY="" ;;
+              *)
+                # Keeping the key on a non-200 is right for a title-derived key
+                # and wrong for a branch-name guess: `claude/pr-review-2026`
+                # yields REVIEW-2026, and with Switchyard down the reviewer would
+                # report a caveat about a ticket that never existed — which
+                # REVIEW.md explicitly forbids inventing from a branch name.
+                if [ "$SOURCE" = "branch" ]; then
+                  echo "→ Switchyard returned $STATUS and $KEY is only a branch-name guess; treating as no ticket"
+                  KEY=""
+                else
+                  echo "::warning::Switchyard returned $STATUS for $KEY — keeping the title-derived key; the reviewer will report the fetch failure."
+                fi ;;
+            esac
+          fi
+
+          if [ -z "$KEY" ]; then
+            echo "→ no ticket key in title or branch; reviewing the diff on its own terms"
+          else
+            echo "→ ticket $KEY"
+          fi
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+      # Hands the reviewer a diff with the generator output already removed,
+      # rather than asking it to skip past 3,400 lines of regenerated types on
+      # its own budget (SERV-87). Writing the patch here rather than instructing
+      # the reviewer to filter is deliberate: an instruction is a request, a file
+      # is a fact, and the whole failure being fixed is a budget the reviewer
+      # cannot see itself spending.
+      #
+      # The per-file breakdown matters as much as the exclusion. A single
+      # `gh pr diff` of a 6,900-line PR overruns the Bash tool's output cap, so
+      # the reviewer pages through it blind, one turn per chunk; scope.md lets it
+      # decide what to open and in what order.
+      - name: Scope the diff
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.triage.outputs.number }}
+          BASE_REF: ${{ needs.triage.outputs.base_ref }}
+          REVIEWABLE_B64: ${{ needs.triage.outputs.reviewable_b64 }}
+          GENERATED_B64: ${{ needs.triage.outputs.generated_b64 }}
+        run: |
+          set -euo pipefail
+          # No rm first: checkout runs `git clean -ffdx`, so nothing from a
+          # previous job on this long-lived runner is here to clear.
+          mkdir -p "$SCOPE_DIR"
+
+          base64 -d <<<"$REVIEWABLE_B64" | grep -v '^$' > "$SCOPE_DIR/reviewable.txt" || true
+          base64 -d <<<"$GENERATED_B64"  | grep -v '^$' > "$SCOPE_DIR/generated.txt"  || true
+
+          # --paginate emits one JSON array per page; `jq -s add` welds them into
+          # one. Going through the files API rather than parsing `gh pr diff`
+          # gets per-file line counts and correct rename attribution for free,
+          # and avoids hand-rolling a unified-diff splitter.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+            | jq -s 'add // []' > "$SCOPE_DIR/files.json"
+
+          # Not a valid unified diff, and not trying to be — nothing applies this
+          # patch, a reviewer reads it. Reconstructing faithful `---`/`+++`
+          # headers for renames, mode changes and binaries is work that buys
+          # nothing; a labelled hunk stream is easier to read and cannot
+          # misrepresent what it came from. GitHub's `.patch` already carries the
+          # `@@` hunk headers.
+          jq -r --rawfile keep "$SCOPE_DIR/reviewable.txt" '
+            ($keep | split("\n") | map(select(length > 0)) | INDEX(.)) as $k
+            | .[]
+            | select($k[.filename] != null)
+            | select(.patch != null)
+            | "=== \(.filename) — \(.status)\(if .previous_filename then " (was \(.previous_filename))" else "" end), +\(.additions)/-\(.deletions) ===\n\(.patch)\n"
+          ' "$SCOPE_DIR/files.json" > "$SCOPE_DIR/review-diff.patch"
+
+          # GitHub omits `patch` for binary files and for diffs over its size
+          # limit. Those files are IN scope and simply have no hunks to ship, so
+          # they get named rather than dropped — a scope file that quietly loses
+          # a path is the same silent narrowing this ticket is about.
+          jq -r --rawfile keep "$SCOPE_DIR/reviewable.txt" '
+            ($keep | split("\n") | map(select(length > 0)) | INDEX(.)) as $k
+            | .[] | select($k[.filename] != null) | select(.patch == null) | .filename
+          ' "$SCOPE_DIR/files.json" > "$SCOPE_DIR/no-patch.txt"
+
+          stat_of() { jq -r --rawfile keep "$1" '
+            ($keep | split("\n") | map(select(length > 0)) | INDEX(.)) as $k
+            | [ .[] | select($k[.filename] != null) ]
+            | "\(length) files, \([.[] | .additions + .deletions] | add // 0) lines"
+          ' "$SCOPE_DIR/files.json"; }
+
+          TOTAL=$(jq -r '"\(length) files, \([.[] | .additions + .deletions] | add // 0) lines"' "$SCOPE_DIR/files.json")
+          IN_SCOPE=$(stat_of "$SCOPE_DIR/reviewable.txt")
+          EXCLUDED=$(stat_of "$SCOPE_DIR/generated.txt")
+
+          {
+            echo "# Review scope"
+            echo
+            echo "PR #${PR_NUMBER} against \`${BASE_REF}\` — ${TOTAL} changed in total."
+            echo
+            echo "## In scope — ${IN_SCOPE}"
+            echo
+            echo "The hunks are in \`${SCOPE_DIR}/review-diff.patch\`, in this order."
+            echo
+            jq -r --rawfile keep "$SCOPE_DIR/reviewable.txt" '
+              ($keep | split("\n") | map(select(length > 0)) | INDEX(.)) as $k
+              | [ .[] | select($k[.filename] != null) ]
+              | sort_by(-(.additions + .deletions))[]
+              | "- `\(.filename)` — \(.status), +\(.additions)/-\(.deletions)"
+            ' "$SCOPE_DIR/files.json"
+            if [ -s "$SCOPE_DIR/no-patch.txt" ]; then
+              echo
+              echo "### In scope, but GitHub shipped no hunks"
+              echo
+              echo "Binary, or past GitHub's per-file diff limit. Read these from the"
+              echo "working tree — they are in scope, they just are not in the patch."
+              sed 's/^/- `/; s/$/`/' "$SCOPE_DIR/no-patch.txt"
+            fi
+            if [ -s "$SCOPE_DIR/generated.txt" ]; then
+              echo
+              echo "## Excluded as generated — ${EXCLUDED}"
+              echo
+              echo "Matched \`.github/review-ignore\` as it stands on \`${BASE_REF}\`."
+              echo "These are regenerated artifacts: if one is wrong the fix is to re-run"
+              echo "the generator, so a line comment on its diff has nowhere to land. They"
+              echo "are excluded from your budget, not from your judgement — if the diff"
+              echo "you *can* see implies the generator was not re-run, or was run against"
+              echo "different sources, that is a finding and you should say so."
+              echo
+              jq -r --rawfile drop "$SCOPE_DIR/generated.txt" '
+                ($drop | split("\n") | map(select(length > 0)) | INDEX(.)) as $k
+                | [ .[] | select($k[.filename] != null) ]
+                | sort_by(-(.additions + .deletions))[]
+                | "- `\(.filename)` — +\(.additions)/-\(.deletions)"
+              ' "$SCOPE_DIR/files.json"
+            fi
+          } > "$SCOPE_DIR/scope.md"
+
+          echo "in scope: ${IN_SCOPE}; excluded: ${EXCLUDED}"
+          cat "$SCOPE_DIR/scope.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # The procedure is fetched from the repo hosting THIS workflow, not from
+      # the repo being reviewed — that is what makes `review-prompt.md` exist in
+      # exactly one place (SERV-92). Three copies had already drifted: switchyard
+      # and argosy were byte-identical to each other and construct-server carried
+      # ten extra lines (the PRINCIPLES.md section from SERV-83) that were simply
+      # never copied across, while the file's own first paragraph claimed it was
+      # "intentionally identical across repositories".
+      #
+      # Pinned to `job_workflow_sha`, the exact commit of the workflow being run,
+      # so procedure and workflow can never be a version apart — a caller pinned
+      # to an old tag gets that tag's prompt. `prompt_repo`/`prompt_ref` override
+      # it for testing a prompt change before merging.
+      - name: Fetch the reviewer prompt
+        id: fetch_prompt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
+          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+          PROMPT_REPO_IN: ${{ inputs.prompt_repo }}
+          PROMPT_REF_IN: ${{ inputs.prompt_ref }}
+        run: |
+          set -euo pipefail
+
+          # job_workflow_ref looks like
+          #   owner/repo/.github/workflows/file.yml@refs/heads/main
+          # so the repo is the first two path segments. Both contexts are only
+          # populated for a job that came from a reusable workflow, which is the
+          # only way this file runs.
+          PROMPT_REPO="${PROMPT_REPO_IN:-$(cut -d/ -f1,2 <<<"${JOB_WORKFLOW_REF:-}")}"
+          PROMPT_REF="${PROMPT_REF_IN:-${JOB_WORKFLOW_SHA:-}}"
+
+          # Fall back to the CALLING repo at the commit under test. This is not
+          # the silent-fallback-to-a-local-copy that would recreate the drift:
+          # it resolves to a repo, and the fetch below still has to find the file
+          # there. For the repo that HOSTS this workflow (a `uses: ./` call, where
+          # caller and host are the same repo) it is exactly right. For a remote
+          # caller it can only reach a repo with no `review-prompt.md`, so it
+          # 404s and names the repo it tried — which is a better error than an
+          # empty-variable one.
+          PROMPT_REPO="${PROMPT_REPO:-${GITHUB_REPOSITORY:-}}"
+          PROMPT_REF="${PROMPT_REF:-${GITHUB_SHA:-}}"
+
+          # Fail loudly rather than fall back to a copy in the calling repo. A
+          # fallback is how you get four copies again: it would work silently in
+          # whichever repo still had a stale local file, which is precisely the
+          # state this change exists to end.
+          if [ -z "$PROMPT_REPO" ] || [ -z "$PROMPT_REF" ]; then
+            echo "::error::Could not resolve the prompt source (job_workflow_ref='${JOB_WORKFLOW_REF:-}', job_workflow_sha='${JOB_WORKFLOW_SHA:-}'). Pass prompt_repo/prompt_ref explicitly."
+            exit 1
+          fi
+
+          echo "→ prompt from ${PROMPT_REPO}@${PROMPT_REF}"
+          if ! gh api -H 'Accept: application/vnd.github.raw' \
+                 "repos/${PROMPT_REPO}/contents/.github/review-prompt.md?ref=${PROMPT_REF}" \
+                 > "$RUNNER_TEMP/review-prompt.md" 2>"$RUNNER_TEMP/prompt-err"; then
+            echo "::error::Could not fetch .github/review-prompt.md from ${PROMPT_REPO}@${PROMPT_REF}: $(tr -d '\n' <"$RUNNER_TEMP/prompt-err" | head -c 200)"
+            exit 1
+          fi
+          if [ ! -s "$RUNNER_TEMP/review-prompt.md" ]; then
+            echo "::error::Fetched an empty .github/review-prompt.md from ${PROMPT_REPO}@${PROMPT_REF}."
+            exit 1
+          fi
+          echo "→ $(wc -l < "$RUNNER_TEMP/review-prompt.md") lines"
+
+      - name: Assemble the reviewer prompt
+        id: prompt
+        env:
+          PR_NUMBER: ${{ needs.triage.outputs.number }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'text<<REVIEW_PROMPT_EOF'
+            cat "$RUNNER_TEMP/review-prompt.md"
+            echo
+            echo "## This run"
+            echo
+            echo "- \`PR_NUMBER\` is ${PR_NUMBER}."
+            echo "- \`GITHUB_REPOSITORY\` is ${GITHUB_REPOSITORY}."
+            echo "- The scoped diff is \`${SCOPE_DIR}/review-diff.patch\`; what it covers"
+            echo "  and what was excluded is \`${SCOPE_DIR}/scope.md\`. Read the scope"
+            echo "  first — it is how you decide what to spend the budget on."
+            echo 'REVIEW_PROMPT_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # "Did a review appear on the PR" is not answerable from the reviewer's own
+      # report, so it is measured from outside. Ported from signet's copy, which
+      # grew it first.
+      - name: Count reviews before
+        id: before
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.triage.outputs.number }}
+        run: |
+          set -euo pipefail
+          N=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
+                 --jq ".[] | select(.user.login == \"$REVIEWER_LOGIN\") | .id" | wc -l)
+          echo "count=$N" >> "$GITHUB_OUTPUT"
+          echo "reviews before: $N"
+
+      - name: Review
+        id: review
+        # The action's exit code is an input to the verdict, not the verdict.
+        # It throws on a turn overshoot that the SDK itself allowed, and that
+        # throw used to skip the Gate and discard a complete review. What the run
+        # actually did is in the execution file; the next step reads it.
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        env:
+          PR_NUMBER: ${{ needs.triage.outputs.number }}
+          TICKET_KEY: ${{ steps.ticket.outputs.key }}
+          # Switchyard is on this host, so the reviewer reads tickets over
+          # localhost rather than negotiating the Cloudflare Access edge. The
+          # token is scoped tickets:read + comments:write — deliberately not
+          # tickets:write, so a reviewer cannot transition or edit what it reads.
+          SWITCHYARD_URL: ${{ inputs.switchyard_url }}
+          SWITCHYARD_TOKEN: ${{ secrets.switchyard_token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          github_token: ${{ github.token }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          # Tools must be granted explicitly: the first run denied 17 calls and
+          # produced nothing while still reporting success, because every step of
+          # the prompt is Bash (cat the standards, curl the ticket, gh for the
+          # diff and the review post) and Bash was never allowed.
+          #
+          # Edit/Write stay denied so the reviewer cannot drift into authoring,
+          # but the boundary that actually holds is the job token being
+          # contents:read — a tool list is a guardrail, not a permission model.
+          claude_args: >-
+            --effort ${{ needs.triage.outputs.effort }}
+            --model ${{ needs.triage.outputs.model }}
+            --max-turns ${{ env.REVIEW_MAX_TURNS }}
+            --allowedTools Bash,Read,Grep,Glob
+            --disallowedTools Edit,Write,NotebookEdit
+
+      # Three outcomes, and the old workflow could not tell them apart because it
+      # only had the action's exit code, which conflates the first two:
+      #
+      #   completed   — the SDK returned success. A turn count over the cap is
+      #                 the action's own post-hoc assertion, not a real failure:
+      #                 #184 (42) and #187 (44) both posted complete reviews.
+      #   exhausted   — subtype error_max_turns. The run stopped mid-flight;
+      #                 #179 run 1 died here having posted nothing.
+      #   malfunction — anything else, including success-with-is_error (seen on
+      #                 a 3-turn run) and no result message at all.
+      - name: Classify the run
+        id: outcome
+        env:
+          REVIEW_STEP: ${{ steps.review.outcome }}
+          EXEC_HINT: ${{ steps.review.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+
+          # The action sets this output even when it throws
+          # (base-action/src/index.ts:73), but a composite action that fails
+          # mid-way is not guaranteed to surface outputs at all — so fall back to
+          # the path the action computes deterministically from RUNNER_TEMP.
+          EXEC="${EXEC_HINT:-}"
+          if [ -z "$EXEC" ] || [ ! -f "$EXEC" ]; then
+            EXEC="$RUNNER_TEMP/claude-execution-output.json"
+          fi
+          echo "exec=$EXEC" >> "$GITHUB_OUTPUT"
+          echo "Review step outcome: ${REVIEW_STEP}; execution file: $EXEC"
+
+          # `detail` is flattened to one line before it goes near GITHUB_OUTPUT:
+          # it carries SDK error text, and a `key=value` line containing a
+          # newline silently truncates the output file at that point, which would
+          # leave `state` set and `detail` half-written.
+          emit() {
+            local detail
+            detail=$(printf '%s' "$3" | tr '\n\r' '  ')
+            echo "state=$1"       >> "$GITHUB_OUTPUT"
+            echo "turns=$2"       >> "$GITHUB_OUTPUT"
+            echo "detail=$detail" >> "$GITHUB_OUTPUT"
+            echo "→ $1 (turns: $2) — $detail"
+            exit 0
+          }
+
+          if [ ! -f "$EXEC" ]; then
+            emit malfunction 0 "no execution file was written; the run died before Claude started"
+          fi
+
+          RESULT=$(jq -c 'map(select(.type == "result")) | last // {}' "$EXEC")
+          SUBTYPE=$(jq -r '.subtype  // ""' <<<"$RESULT")
+          TURNS=$(jq -r '.num_turns  // 0'  <<<"$RESULT")
+          ERRORS=$(jq -r '(.errors // []) | join("; ")' <<<"$RESULT")
+          # NOT `.is_error // true`. jq's `//` fires on `false` as well as on
+          # `null`, so the default swallows the exact value that means "this run
+          # was fine" and reports every completed review as a malfunction — the
+          # same shape as the empty-env-var invariant in CLAUDE.md, in jq. Absent
+          # must still default to true, so test presence explicitly.
+          IS_ERROR=$(jq -r 'if has("is_error") then (.is_error | tostring) else "true" end' <<<"$RESULT")
+
+          if [ -z "$SUBTYPE" ]; then
+            emit malfunction "$TURNS" "no result message in the execution file"
+          fi
+          if [ "$SUBTYPE" = "success" ] && [ "$IS_ERROR" = "false" ]; then
+            if [ "$TURNS" -gt "$REVIEW_MAX_TURNS" ]; then
+              echo "::notice::Review completed in ${TURNS} turns, over the ${REVIEW_MAX_TURNS} cap. The SDK allowed it; the action's post-hoc assertion is what failed the step. Treating it as complete."
+            fi
+            emit completed "$TURNS" "the reviewer ran to completion"
+          fi
+          if [ "$SUBTYPE" = "error_max_turns" ]; then
+            emit exhausted "$TURNS" "${ERRORS:-turn budget exhausted}"
+          fi
+          emit malfunction "$TURNS" "result subtype ${SUBTYPE}, is_error ${IS_ERROR}${ERRORS:+ — $ERRORS}"
+
+      # Silence is the worst possible output: a red check with nothing on the PR
+      # is indistinguishable from a broken token or a dead runner (SERV-87 AC 2).
+      # So say what was reached and what was not, and say it on the PR rather
+      # than in a log nobody opens.
+      - name: Report what went unread
+        if: steps.outcome.outputs.state == 'exhausted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.triage.outputs.number }}
+          EXEC: ${{ steps.outcome.outputs.exec }}
+          TURNS: ${{ steps.outcome.outputs.turns }}
+          BEFORE: ${{ steps.before.outputs.count }}
+        run: |
+          set -euo pipefail
+
+          # Tool INPUTS only, and never printed. A Bash input is a command line,
+          # which can carry an expanded credential; Actions masks secrets in logs
+          # but not in a PR comment posted through the API. This file is a
+          # substring haystack and nothing else — only path names derived from
+          # the changed-file list ever leave this step.
+          # Two inputs are deliberately NOT in the haystack, because both mark
+          # files as read that were never looked at:
+          #
+          #   - `git log --oneline -15 -- <changed paths>`, which review-prompt.md
+          #     §3 tells the reviewer to run, puts EVERY changed path into a
+          #     single Bash command. Counting that as evidence would empty this
+          #     report permanently after one call — the one run where it matters
+          #     is the one where it would say "everything was read".
+          #   - Grep's `pattern` is a search expression, not a path. A grep for a
+          #     filename is not a read of it.
+          #
+          # Erring toward "not referenced" is the right direction: over-reporting
+          # an unread file wastes a glance, under-reporting hides the gap this
+          # whole comment exists to show.
+          HAYSTACK="$RUNNER_TEMP/review-tool-inputs.txt"
+          jq -r '
+            [ .[]
+              | select(.type == "assistant")
+              | (.message.content // [])[]
+              | select(.type == "tool_use")
+              | (.input // {})
+              | [ .file_path?, .path?, .notebook_path?,
+                  (.command? | select(type == "string")
+                             | select(test("(^|[;&|]\\s*)git\\s+log") | not))
+                ]
+              | .[] | select(type == "string")
+            ] | join("\n")
+          ' "$EXEC" > "$HAYSTACK" || : > "$HAYSTACK"
+
+          : > "$RUNNER_TEMP/unread.txt"
+          : > "$RUNNER_TEMP/opened.txt"
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            if grep -qF -- "$f" "$HAYSTACK"; then
+              echo "$f" >> "$RUNNER_TEMP/opened.txt"
+            else
+              echo "$f" >> "$RUNNER_TEMP/unread.txt"
+            fi
+          done < "$SCOPE_DIR/reviewable.txt"
+
+          AFTER=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
+                 --jq ".[] | select(.user.login == \"$REVIEWER_LOGIN\") | .id" | wc -l)
+
+          {
+            echo "## ⚠️ Review incomplete — the reviewer ran out of turns"
+            echo
+            echo "It stopped after **${TURNS} turns** (cap ${REVIEW_MAX_TURNS}) without finishing."
+            if [ "$AFTER" -gt "$BEFORE" ]; then
+              echo "A review **was** posted before it stopped — read it as partial, not as a verdict on the whole change."
+            else
+              echo "**No review was posted.** This is a budget failure, not a judgement on the change —"
+              echo "nothing here says the code is wrong, only that it was not finished being read."
+            fi
+            echo
+            if [ -s "$RUNNER_TEMP/unread.txt" ]; then
+              echo "### Not referenced by any file-opening call"
+              echo
+              echo "No \`Read\`, \`Grep\`, or \`Bash\` call named these paths. Bulk path"
+              echo "listings (\`git log -- <paths>\`) and grep patterns do not count as"
+              echo "reads, so this errs toward listing a file you did glance at rather"
+              echo "than hiding one you did not:"
+              echo
+              sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/unread.txt"
+              echo
+            else
+              echo "Every in-scope path was named by at least one file-opening call, so the"
+              echo "budget ran out during analysis or while posting rather than before reading."
+              echo
+            fi
+            if [ -s "$RUNNER_TEMP/opened.txt" ]; then
+              echo "<details><summary>Opened during the run</summary>"
+              echo
+              sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/opened.txt"
+              echo
+              echo "</details>"
+              echo
+            fi
+            if [ -s "$SCOPE_DIR/generated.txt" ]; then
+              echo "<details><summary>Excluded as generated before the run started</summary>"
+              echo
+              sed 's/^/- `/; s/$/`/' "$SCOPE_DIR/generated.txt"
+              echo
+              echo "</details>"
+              echo
+            fi
+            echo "---"
+            echo
+            echo "Comment \`@claude review\` to retry, or split the PR. If this keeps happening"
+            echo "on the same shape of change, the paths above are the evidence for widening"
+            echo "\`.github/review-ignore\` or raising \`REVIEW_MAX_TURNS\` (SERV-87)."
+          } > "$RUNNER_TEMP/exhaustion.md"
+
+          gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/exhaustion.md"
+          echo "posted the exhaustion report to PR #${PR_NUMBER}"
+
+      - name: Gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.triage.outputs.number }}
+          STATE: ${{ steps.outcome.outputs.state }}
+          TURNS: ${{ steps.outcome.outputs.turns }}
+          DETAIL: ${{ steps.outcome.outputs.detail }}
+          BEFORE: ${{ steps.before.outputs.count }}
+          # Left off until the finding quality is trusted: a reviewer that wedges
+          # merges while it is still being tuned trains you to bypass it. Set the
+          # repository variable to 'true' to make Important findings blocking.
+          BLOCKING: ${{ vars.PR_REVIEW_BLOCKING || 'false' }}
+        run: |
+          set -euo pipefail
+
+          # This step is the only thing that decides red or green, and it runs on
+          # every path — including the ones where the Review step failed. That is
+          # the point: the old workflow gated the Gate on the Review step
+          # succeeding, so a complete review that tripped the turn assertion took
+          # `review-verdict.json` down with it, unread.
+          case "$STATE" in
+            completed) ;;
+            exhausted)
+              echo "::error::Turn budget exhausted after ${TURNS} turns — ${DETAIL}. The unread paths are reported on the PR."
+              exit 1 ;;
+            *)
+              echo "::error::Reviewer malfunctioned — ${DETAIL}. This is not a finding about the change."
+              exit 1 ;;
+          esac
+
+          # A missing verdict is a reviewer malfunction, not a clean review, and
+          # it is deliberately fatal regardless of PR_REVIEW_BLOCKING. The first
+          # run on switchyard exited green having posted nothing at all; a check
+          # that goes green when no review happened is worse than no check.
+          # PR_REVIEW_BLOCKING gates on *findings* — this gates on the reviewer
+          # having run.
+          if [ ! -f review-verdict.json ]; then
+            echo "::error::Reviewer produced no verdict file — the review did not complete."
+            echo "Check the Review step for permission denials or a truncated run." >&2
+            exit 1
+          fi
+
+          # The verdict is the reviewer's own account of itself, so it cannot
+          # answer "did a review actually land on the PR". Measure that from
+          # outside.
+          AFTER=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
+                 --jq ".[] | select(.user.login == \"$REVIEWER_LOGIN\") | .id" | wc -l)
+          if [ "$AFTER" -le "$BEFORE" ]; then
+            echo "::error::Reviewer produced a verdict but no review appeared on the PR (${BEFORE} before, ${AFTER} after)."
+            echo "The findings are in the Review step log; the review was written but not posted." >&2
+            exit 1
+          fi
+
+          IMPORTANT=$(jq -r '.important // 0' review-verdict.json)
+          NIT=$(jq -r '.nit // 0' review-verdict.json)
+          echo "Findings: ${IMPORTANT} important, ${NIT} nit (${TURNS} turns)"
+
+          if [ "$IMPORTANT" -gt 0 ]; then
+            if [ "$BLOCKING" = "true" ]; then
+              echo "::error::${IMPORTANT} important finding(s); see the PR review."
+              exit 1
+            fi
+            echo "::warning::${IMPORTANT} important finding(s); not blocking (PR_REVIEW_BLOCKING is off)."
+          fi
