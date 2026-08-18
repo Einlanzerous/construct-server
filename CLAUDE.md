@@ -188,16 +188,20 @@ anything deploys or gets versioned.
   pulls and recreates only the services behind the pins that actually moved, `--no-deps`.
   **Every other deploy still pulls the whole stack**, deliberately: that is where the patch
   float is supposed to land. Three things this does *not* bound, and do not write that it
-  does: one pin can cover two services (switchyard and interlock ship a backend and a
-  frontend from one release); the pin is still major.minor, so rolling back to `0.13` gets
+  does: four of the ten pins cover two services each and recreate in pairs — `APERTURE_TAG`,
+  `CENTRIFUGE_TAG`, `SWITCHYARD_TAG` (backend + frontend) and `INTERLOCK_TAG` (web +
+  worker); the pin is still major.minor, so rolling back to `0.13` gets
   the newest `0.13` patch and **not necessarily the image prod ran the last time it was on
   `0.13`**; and a version bump merged inside a larger PR is not a pure pin change, so it
   takes the whole-stack path. The script **refuses rather than guesses**, and every refusal
   falls back to the full pull — the dangerous direction is a scope that narrows to nothing,
   which would be a deploy that goes green having shipped no change at all. The cost of the
   trade: a scoped deploy converges nothing it did not name, so after a **failed** deploy a
-  later promote's green tick no longer means the stack matches `main` —
-  `./scripts/check-compose-drift.sh` answers that, not the deploy's exit code.
+  later promote's green tick no longer means the stack matches `main`. Settle that by
+  re-running `deploy.yml` from the Actions tab — a `workflow_dispatch` carries no push
+  range, so it always takes the full path. **Not** with `check-compose-drift.sh`, which
+  compares mounts and the compose project root and nothing else, so an unapplied env or
+  digest change is invisible to it.
   The `:-latest` fallback is a bootstrap convenience and a hazard in prod, and
   both halves matter. It cannot simply be deleted: an unset **or empty** var
   interpolates to `image: …/argosy:`, which is neither an error nor `latest`, and

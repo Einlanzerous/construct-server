@@ -31,9 +31,11 @@
 # WHAT IT DELIBERATELY DOES NOT BOUND. Scoping the pull bounds what MOVES. It does not
 # make the deploy touch exactly one container in every sense:
 #
-#   * One pin can cover several services. SWITCHYARD_TAG and INTERLOCK_TAG each cover two
-#     images, because a repo's backend and frontend ship from one release (versions.env).
-#     Those recreate together, which is correct — they are one version.
+#   * One pin can cover several services, and four of the ten do: APERTURE_TAG,
+#     CENTRIFUGE_TAG and SWITCHYARD_TAG (backend + frontend) and INTERLOCK_TAG (web +
+#     worker). A repo's images ship from one release (versions.env), so those recreate
+#     together, which is correct — they are one version — but only six pins name exactly
+#     one container.
 #   * The pinned tag is still major.minor, so pulling purser at 0.13 gets the newest 0.13
 #     patch, not the exact image that was running at 0.13 before. That float is the
 #     deliberate one; removing it is option 2 of SERV-109 and was not taken.
@@ -45,11 +47,16 @@
 # not converge anything it did not name, so if an EARLIER deploy left a compose change
 # unapplied — it failed before `up -d`, say — a promote landing afterwards rsyncs that
 # compose file to the deploy root and does not apply it. Before this, the promote's
-# whole-stack `up -d` would have. The state is visible rather than silent
-# (`./scripts/check-compose-drift.sh`, and the next ordinary deploy converges it), but a
-# green promote no longer implies the running stack matches main. That is the right trade
-# for a rollback — it runs when prod is broken, and "and also apply whatever the last
-# failed deploy was trying to do" is not what you want from it — but it is a trade.
+# whole-stack `up -d` would have. So a green promote no longer implies the running stack
+# matches main. That is the right trade for a rollback — it runs when prod is broken, and
+# "also apply whatever the last failed deploy was attempting" is not what you want from it
+# — but it is a trade, and the way to settle it is to re-run deploy.yml from the Actions
+# tab: a workflow_dispatch carries no push range, so it always takes the FULL path.
+#
+# Do NOT reach for check-compose-drift.sh to answer this. It compares declared vs live
+# MOUNTS and the compose project root, and nothing else — not the image, env, ports,
+# networks or command — so an unapplied env or digest change is invisible to it and it
+# will print "No drift" on exactly the question being asked.
 #
 # Usage:
 #   deploy-scope.sh <BASE> <HEAD> [docker-compose.yml]

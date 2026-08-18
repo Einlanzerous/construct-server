@@ -38,9 +38,11 @@ name: Promote / Rollback a Version
 #
 # What is still NOT bounded, and should not be written as if it were:
 #
-#   * One pin can cover two services. SWITCHYARD_TAG and INTERLOCK_TAG each cover a backend
-#     and a frontend, which ship from one release and therefore recreate together. That is
-#     correct — they are one version — but it is two containers.
+#   * FOUR of the ten pins cover two services each, so they recreate in pairs:
+#     APERTURE_TAG, CENTRIFUGE_TAG and SWITCHYARD_TAG (backend + frontend) and
+#     INTERLOCK_TAG (web + worker). Correct — a repo's images ship from one release — but
+#     it is two containers, and interlock-worker is one of the Node services SERV-102 is
+#     about. Only six of the ten pins name exactly one container.
 #   * The pin is major.minor, so rolling purser back to 0.13 fetches the newest 0.13 PATCH.
 #     That is not necessarily the image prod was running the last time it was on 0.13. If
 #     the exact code matters, compare the org.opencontainers.image.revision label via
