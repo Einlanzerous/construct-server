@@ -172,16 +172,32 @@ anything deploys or gets versioned.
   inline in `docker-compose.yml` — the tag is provenance, the digest is the pin. Before it,
   `docker compose pull` moved every floating tag, and the first real rollback recreated
   purser, ollama and semaphore when only purser was asked for.
-  **This does not make a promote's blast radius the one service named, and do not write
-  that it does.** The major.minor pins above are moving tags by design, so a purser rollback
-  still recreates lyceum if lyceum cut a patch in the meantime — and that is worse than the
-  leaf case, since first-party services have dependents and the Node ones do not recover
-  from a peer recreate on their own. Scoping the pull is SERV-109. A "stable-looking" tag is not a pin —
+  A "stable-looking" tag is not a pin —
   `traefik:v3.3` moves on patch releases and `crowdsec:v1.7.8` can be rebuilt in place,
   the same trap as `postgres:16.15-alpine`. **The four watchtower opt-ins stay floating**
   (dozzle, uptime-kuma, datadog, watchtower): watchtower is their update path and it cannot
   roll a digest-pinned container, so pinning them disables the mechanism rather than making
   anything deliberate.
+  **A promote or rollback pulls only what it repointed** (SERV-109) — pinning alone could
+  not deliver that, because the major.minor pins above are moving tags *by design*, so a
+  whole-stack `docker compose pull` moved every first-party service that had published
+  since the last deploy. A purser rollback recreated lyceum if lyceum cut a patch in the
+  meantime, which is worse than the third-party leaf case since these have dependents.
+  `deploy.yml` now asks `scripts/deploy-scope.sh` whether the commit range touches
+  `versions.env` and **nothing else** — the exact shape `promote.yml` writes — and if so
+  pulls and recreates only the services behind the pins that actually moved, `--no-deps`.
+  **Every other deploy still pulls the whole stack**, deliberately: that is where the patch
+  float is supposed to land. Three things this does *not* bound, and do not write that it
+  does: one pin can cover two services (switchyard and interlock ship a backend and a
+  frontend from one release); the pin is still major.minor, so rolling back to `0.13` gets
+  the newest `0.13` patch and **not necessarily the image prod ran the last time it was on
+  `0.13`**; and a version bump merged inside a larger PR is not a pure pin change, so it
+  takes the whole-stack path. The script **refuses rather than guesses**, and every refusal
+  falls back to the full pull — the dangerous direction is a scope that narrows to nothing,
+  which would be a deploy that goes green having shipped no change at all. The cost of the
+  trade: a scoped deploy converges nothing it did not name, so after a **failed** deploy a
+  later promote's green tick no longer means the stack matches `main` —
+  `./scripts/check-compose-drift.sh` answers that, not the deploy's exit code.
   The `:-latest` fallback is a bootstrap convenience and a hazard in prod, and
   both halves matter. It cannot simply be deleted: an unset **or empty** var
   interpolates to `image: …/argosy:`, which is neither an error nor `latest`, and

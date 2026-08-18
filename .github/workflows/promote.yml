@@ -11,32 +11,43 @@ name: Promote / Rollback a Version
 # recreated containers itself would be a second way for prod to change, which is exactly
 # what that ticket spent its length removing.
 #
-# THE RECREATE IS NOT SCOPED TO THE NAMED SERVICE. Two earlier versions of this comment got
-# this wrong in opposite directions, so state it precisely.
+# THE RECREATE IS NOW SCOPED TO THE PINS THIS WORKFLOW MOVED — with caveats, listed below.
+# Three earlier versions of this comment got the bound wrong in both directions, so state
+# it precisely rather than approximately.
 #
-# deploy.yml runs a plain `docker compose up -d` with no --force-recreate, so compose
-# recreates what drifted — but it PULLS first, and a pull moves every image whose reference
-# is not immutable. The named service drifts because its pin changed. So does anything else
-# that moved since the last pull.
+# The history, because the shape of the fix only makes sense against it. deploy.yml PULLED
+# the whole stack before `up -d`, and a pull moves every image whose reference is not
+# immutable — so the named service drifted because its pin changed, and so did anything
+# else that had published since the last deploy. Measured, not theorised: the first real
+# rollback through this workflow (purser 0.13 -> 0.12, 2026-08-17) recreated purser, ollama
+# AND semaphore. Only purser was named. SERV-105 pinned the third-party images by digest,
+# which took ollama and semaphore out of it. SERV-109 scoped the pull, which took out the
+# larger first-party half — larger because those services have dependents, and per SERV-102
+# the Node ones do not recover on their own from a peer recreate that moves an address.
 #
-# Measured, not theorised: the first real rollback through this workflow (purser 0.13 ->
-# 0.12, 2026-08-17) recreated purser, ollama AND semaphore. Only purser was named.
+# Pinning could not have fixed the first-party half. Eight of the ten values in versions.env
+# are `LYCEUM_TAG=1.10`-shaped and that tag MOVES on a patch release *deliberately*, so
+# security fixes land without an edit. The float is the feature; scoping is what makes it
+# not apply to a rollback.
 #
-# What SERV-105 fixed: the third-party images are now pinned by digest, so ollama and
-# semaphore can no longer do that. What it did NOT fix, and what remains the larger half:
+# HOW THE SCOPING FINDS A PROMOTE: this workflow commits versions.env and NOTHING ELSE, and
+# deploy.yml matches on exactly that shape (scripts/deploy-scope.sh), then pulls and
+# recreates only the services behind the pins that actually changed, with --no-deps.
+# KEEP THIS WORKFLOW'S COMMIT PURE. Adding any second file to it does not fail — it
+# silently drops the deploy back to a whole-stack pull, and quietly un-fixes SERV-109.
 #
-#   * First-party services on a major.minor pin. Eight of the ten values in versions.env
-#     are `LYCEUM_TAG=1.10`-shaped, and that tag MOVES on a patch release — deliberately,
-#     so security fixes land without an edit. Roll purser back while lyceum has cut 1.10.4
-#     since the last deploy and you recreate lyceum too. This is worse than the leaf case:
-#     first-party services have dependents, and per SERV-102 the Node ones do not recover
-#     on their own from a peer recreate that moves an address.
-#   * The four watchtower opt-ins (dozzle, uptime-kuma, datadog, watchtower), left floating
-#     because watchtower cannot roll a digest-pinned container.
+# What is still NOT bounded, and should not be written as if it were:
 #
-# SERV-109 is scoping the pull, which is what would actually bound this. Until then: a
-# rollback is a stack-wide pull with one intended change, so check what actually moved
-# rather than assuming the diff describes it.
+#   * One pin can cover two services. SWITCHYARD_TAG and INTERLOCK_TAG each cover a backend
+#     and a frontend, which ship from one release and therefore recreate together. That is
+#     correct — they are one version — but it is two containers.
+#   * The pin is major.minor, so rolling purser back to 0.13 fetches the newest 0.13 PATCH.
+#     That is not necessarily the image prod was running the last time it was on 0.13. If
+#     the exact code matters, compare the org.opencontainers.image.revision label via
+#     `make versions` — a digest comparison alone invents drift that is not there (SERV-88).
+#   * The four watchtower opt-ins (dozzle, uptime-kuma, datadog, watchtower) still float,
+#     because watchtower cannot roll a digest-pinned container. They are outside this
+#     workflow either way: nothing here can repoint a third-party image.
 #
 # SERV-63's --no-deps concern is a different thing and genuinely does not arise here: that
 # is about --force-recreate propagating through depends_on, and this path never forces.

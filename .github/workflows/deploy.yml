@@ -45,6 +45,16 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          # Full history, because the deploy-scope step (SERV-109) diffs the commit range
+          # this push covers and checkout's default depth-1 clone cannot resolve
+          # `github.event.before`. Cheap on this runner: `_work/` persists between runs,
+          # so only the first fetch is a full one.
+          #
+          # Getting this wrong is not dangerous, only wasteful — deploy-scope.sh refuses
+          # on an unresolvable ref and the deploy falls back to a whole-stack pull. That
+          # is verified, not assumed: run against a --depth 1 clone it exits 3.
+          fetch-depth: 0
 
       - name: Verify deploy root exists
         # Fail loudly rather than creating it here: /opt is root-owned and the
@@ -187,24 +197,114 @@ jobs:
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: docker compose build cf-access-guard
 
+      - name: Determine deploy scope
+        # SERV-109. A promote or rollback commit touches versions.env and nothing else
+        # (promote.yml writes exactly that), which makes it recognisable — and it is the
+        # one deploy where "and also whatever else moved" is unacceptable, because a
+        # rollback runs with prod already broken and its value is being predictable.
+        #
+        # Runs in the CHECKOUT rather than the deploy root: the deploy root is an rsync
+        # target with no git history, and this question is entirely about the commit range.
+        #
+        # THE FALLBACK DIRECTION IS THE WHOLE SAFETY ARGUMENT. Anything unexpected — a
+        # dispatch with no push range, an unresolvable ref, a pin that maps to no service —
+        # sets FULL, which is byte-for-byte the deploy this workflow did before SERV-109.
+        # Nothing may set the scope to "no services" except deploy-scope.sh exiting 0 with
+        # an empty list, which means no image reference changed at all. A scope that
+        # silently narrowed to nothing would be a deploy that goes green and ships nothing,
+        # the same class of failure as the stale-image incident in the rsync step above.
+        env:
+          BASE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          if [ -z "${BASE:-}" ]; then
+            echo "This run has no push range (workflow_dispatch or repository_dispatch)."
+            echo "A dispatch can be for anything, so it deploys the whole stack."
+            echo "DEPLOY_SCOPE=FULL" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if scope="$(./scripts/deploy-scope.sh "$BASE" "$GITHUB_SHA")"; then
+            if [ -z "$scope" ]; then
+              echo "=> scope: NONE (no image reference changed)"
+              echo "DEPLOY_SCOPE=NONE" >> "$GITHUB_ENV"
+              echo "### Deploy scope: nothing to pull" >> "$GITHUB_STEP_SUMMARY"
+              echo "\`versions.env\` changed but no pin value did." >> "$GITHUB_STEP_SUMMARY"
+            else
+              services="$(printf '%s' "$scope" | tr '\n' ' ')"
+              echo "=> scope: SCOPED to ${services% }"
+              echo "DEPLOY_SCOPE=SCOPED" >> "$GITHUB_ENV"
+              echo "DEPLOY_SERVICES=$services" >> "$GITHUB_ENV"
+              echo "### Deploy scope: version change only" >> "$GITHUB_STEP_SUMMARY"
+              echo "Pulling and recreating **only**: \`${services% }\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "=> scope: FULL (whole stack)"
+            echo "DEPLOY_SCOPE=FULL" >> "$GITHUB_ENV"
+          fi
+
       - name: Deploy Stack
-        # Pulls new images, recreates containers with config changes, removes old ones.
-        # Deliberately whole-stack and deliberately NOT --force-recreate: compose
-        # recreates only what actually drifted, so the blast radius already matches the
-        # intent. Do not add --force-recreate here — it would rebuild every container on
-        # the box, including the shared postgres, on every push (SERV-63).
+        # Deliberately NOT --force-recreate in either path: compose recreates only what
+        # actually drifted, so the blast radius already matches the intent. Do not add it —
+        # it would rebuild every container on the box, including the shared postgres, on
+        # every push (SERV-63).
         #
         # Running from the deploy root is what resolves the relative bind mounts
         # (./config, ./db, ./aperture) against it rather than against this checkout,
         # and what binds the compose project to a stable path.
         #
-        # `pull` stays, and is no longer the blunt instrument it was under `:latest`
-        # (SERV-88). First-party images are pinned to major.minor, so a pull fetches
-        # patch releases under the pin and nothing else — which is the one bit of
-        # float we kept deliberately, so security fixes still land without a secret
-        # edit. Services with no semver are pinned to a sha, where pull is a no-op.
+        # TWO PATHS, because `pull` means different things on the two kinds of deploy
+        # (SERV-109):
+        #
+        #   FULL — an ordinary merge, or any dispatch. A whole-stack pull, which under the
+        #     major.minor pins fetches patch releases and nothing else. That float is the
+        #     one we keep deliberately (SERV-88), so a security fix lands without an edit.
+        #
+        #   SCOPED — the commit changed versions.env and nothing else, i.e. a promote or a
+        #     rollback. Only the services behind the pins that actually moved are pulled and
+        #     recreated. Without this, rolling purser back also recreates lyceum if lyceum
+        #     cut a patch since the last deploy — collateral nobody named, and worse than
+        #     the third-party case SERV-105 closed, because these services have dependents
+        #     and per SERV-102 the Node ones do not recover from a peer recreate on their own.
+        #
+        # --no-deps on the scoped path for the SERV-63 reason: every service with a database
+        # depends on postgres, so an unscoped compose action aimed at one container reaches
+        # the shared database. Same flag `make recreate` bakes in.
+        #
+        # --remove-orphans stays on the FULL path only. A commit that touched nothing but
+        # versions.env cannot have removed a service, so there are no orphans it could mean.
+        #
+        # WHAT THE SCOPED PATH GIVES UP: it converges nothing it did not name. If an earlier
+        # deploy left a compose change unapplied — it failed before reaching this step — a
+        # promote landing afterwards rsyncs that compose file to the deploy root and does not
+        # apply it, where the old whole-stack `up -d` would have. So a green promote no longer
+        # implies the running stack matches main. That is the right trade for a rollback, but
+        # it is a trade: after a FAILED deploy, run `./scripts/check-compose-drift.sh` rather
+        # than reading the next promote's green tick as convergence.
         working-directory: ${{ env.DEPLOY_ROOT }}
-        run: docker compose pull && docker compose up -d --remove-orphans
+        run: |
+          set -euo pipefail
+          case "${DEPLOY_SCOPE:-FULL}" in
+            NONE)
+              echo "versions.env changed but no pin did — nothing to pull, nothing to recreate."
+              ;;
+            SCOPED)
+              # An empty array here would make `up -d` mean the WHOLE STACK, which is the
+              # footgun `make force-recreate` guards against by refusing an empty svc=.
+              # Guard it the same way rather than trusting the step above.
+              read -r -a services <<< "${DEPLOY_SERVICES:-}"
+              if [ ${#services[@]} -eq 0 ]; then
+                echo "Error: scope is SCOPED but names no service. Refusing to run an"
+                echo "unscoped compose command that would look like a scoped one."
+                exit 1
+              fi
+              echo "Scoped deploy (SERV-109): ${services[*]}"
+              docker compose pull "${services[@]}"
+              docker compose up -d --no-deps "${services[@]}"
+              ;;
+            *)
+              docker compose pull && docker compose up -d --remove-orphans
+              ;;
+          esac
 
       - name: Ensure databases exist
         # Idempotent — creates any missing users/databases without affecting existing ones
