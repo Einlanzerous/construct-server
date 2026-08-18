@@ -1107,6 +1107,13 @@ services:
   cf-access-guard:
     build:
       context: ./services/cf-access-guard
+      args:
+        # deploy.yml sets this from `git log -1 -- services/cf-access-guard`; see the
+        # Dockerfile for why the image needs a source identity at all (SERV-109).
+        # `:-unknown` and not `:-`: an empty build arg would stamp an empty label, which
+        # would compare equal to a container that has no label, and "no evidence" would
+        # silently read as "up to date".
+        GUARD_REVISION: ${GUARD_REVISION:-unknown}
     container_name: cf-access-guard
     restart: unless-stopped
     environment:

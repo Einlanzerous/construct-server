@@ -283,22 +283,35 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
 - *It **does not deploy**. It edits one line of `versions.env` and commits; `deploy.yml`
   already fires on a push touching that file, and is the only thing that deploys
   (SERV-76). This keeps the deploy path single.*
-- *The recreate is **not** scoped to the named service, which this document asserted without
-  measuring. `deploy.yml` pulls before `up -d`, so compose recreates the named service **and
-  anything else whose reference moved since the last pull**. The first real rollback (purser
-  0.13 → 0.12) recreated purser, ollama and semaphore; only purser was named.*
+- *The recreate **is now** scoped to the pins the workflow moved. It took two tickets to get
+  there, and this document asserted the bound before measuring it — so record both halves.*
 
+  - ***As surveyed, the claim was wrong.** `deploy.yml` pulled before `up -d`, so compose
+    recreated the named service **and anything else whose reference moved since the last
+    pull**. The first real rollback (purser 0.13 → 0.12) recreated purser, ollama and
+    semaphore; only purser was named.*
   - ***SERV-105** removed the third-party half, pinning those images by digest — including
     `traefik:v3.3` and `crowdsec:v1.7.8`, which look like pins and are not, since a minor tag
     moves on patch releases and a patch tag can be rebuilt in place. Four stay floating by
     design: the watchtower opt-ins, which cannot be rolled by watchtower once pinned.*
-  - ***The first-party half is still open, and it is the larger one.** Eight of the ten values
-    in `versions.env` are major.minor, and that tag moves on a patch release — deliberately,
-    which is the point of the convention. So a purser rollback also recreates lyceum if lyceum
-    cut `1.10.4` in the meantime. Unlike ollama and semaphore these have dependents, and per
-    SERV-102 the Node services do not recover on their own from a peer recreate. Scoping the
-    pull is **SERV-109**; until it lands, a rollback is a stack-wide pull with one intended
-    change.*
+  - ***SERV-109** removed the first-party half, the larger one. Pinning could not close it:
+    eight of the ten values in `versions.env` are major.minor and that tag moves on a patch
+    release *deliberately*, which is the whole point of the convention — so the fix is to
+    scope rather than to pin harder. `scripts/deploy-scope.sh` recognises the one commit
+    shape a promote produces (`versions.env` and nothing else) and `deploy.yml` then pulls
+    and recreates only the services behind the pins that changed, `--no-deps`. Ordinary
+    merges still pull the whole stack, which is where the patch float is meant to land. The
+    script refuses rather than guesses, and every refusal degrades to the old whole-stack
+    pull — the dangerous direction is a scope narrowing to nothing, which would be a green
+    deploy that shipped no change at all.*
+  - ***What is deliberately still unbounded:** four of the ten pins cover two images each and
+    recreate in pairs — `APERTURE_TAG`, `CENTRIFUGE_TAG`, `SWITCHYARD_TAG` (backend +
+    frontend) and `INTERLOCK_TAG` (web + worker), which ship from one release; and a rollback to
+    `0.13` fetches the newest `0.13` patch rather than the digest prod ran the last time it
+    was on `0.13`. Exact-version pins — SERV-109's option 2 — would close the second and cost
+    the "a security fix lands without an edit" property, which was chosen on purpose and
+    kept. Keeping it means "roll back to 0.13" is a statement about the version, not about
+    the bytes; `make versions` and the `revision` label are what answer the bytes question.*
 - *It verifies the tag exists in the registry **before** committing, across every image
   behind the pin — a repo's backend and frontend ship from one release, so a version
   that published for one and not the other is refused rather than half-deployed.*

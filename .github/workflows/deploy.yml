@@ -17,6 +17,13 @@ on:
       # (SERV-78, SERV-79) will commit it — so a push that repoints a tag has to be
       # able to reach the box on its own.
       - 'versions.env'
+      # cf-access-guard is the one first-party service BUILT on the box rather than
+      # pulled (SERV-106), which makes its source a stack file. Without this a guard
+      # change merges and then waits for an unrelated deploy to carry it — and since
+      # SERV-109 that carrier might be a scoped one, which would not apply it at all.
+      # Narrow to the one directory on purpose: services/ also holds argosy-acquisition,
+      # which is not part of this stack.
+      - 'services/cf-access-guard/**'
 
 # Two deploys running at once would race on the same deploy root, the same rendered .env
 # and the same containers. That was unlikely while a deploy only ever came from a person
@@ -45,6 +52,16 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          # Full history, because the deploy-scope step (SERV-109) diffs the commit range
+          # this push covers and checkout's default depth-1 clone cannot resolve
+          # `github.event.before`. Cheap on this runner: `_work/` persists between runs,
+          # so only the first fetch is a full one.
+          #
+          # Getting this wrong is not dangerous, only wasteful — deploy-scope.sh refuses
+          # on an unresolvable ref and the deploy falls back to a whole-stack pull. That
+          # is verified, not assumed: run against a --depth 1 clone it exits 3.
+          fetch-depth: 0
 
       - name: Verify deploy root exists
         # Fail loudly rather than creating it here: /opt is root-owned and the
@@ -175,6 +192,23 @@ jobs:
           GITHUB_PAT=$(grep '^GITHUB_PAT=' "$DEPLOY_ROOT/.env" | cut -d'=' -f2)
           echo "$GITHUB_PAT" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
 
+      - name: Resolve the guard's source revision
+        # cf-access-guard is built on the box rather than pulled (SERV-106), so unlike
+        # every pinned image nothing records which SOURCE the running container was built
+        # from — and SERV-109 needs that, because a scoped deploy has to decide whether to
+        # recreate it. The image ID cannot answer: BuildKit re-exports the config on every
+        # build, so a full cache hit still yields a new ID and an ID comparison would
+        # recreate the auth-path container on every deploy.
+        #
+        # Runs in the CHECKOUT: the deploy root is an rsync target with no git history.
+        # An empty result is not fatal and must not read as a match — the scoped path
+        # below recreates the guard whenever it cannot prove the running one is current.
+        run: |
+          set -uo pipefail
+          rev="$(git log -1 --format=%H -- services/cf-access-guard || true)"
+          echo "GUARD_REVISION=$rev" >> "$GITHUB_ENV"
+          echo "cf-access-guard source revision: ${rev:-<could not resolve>}"
+
       - name: Build cf-access-guard
         # EXPLICIT, because `up -d` builds only when the image is MISSING — it does
         # not notice that the source changed. Without this step an edit to the guard
@@ -187,24 +221,187 @@ jobs:
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: docker compose build cf-access-guard
 
+      - name: Determine deploy scope
+        # SERV-109. A promote or rollback commit touches versions.env and nothing else
+        # (promote.yml writes exactly that), which makes it recognisable — and it is the
+        # one deploy where "and also whatever else moved" is unacceptable, because a
+        # rollback runs with prod already broken and its value is being predictable.
+        #
+        # Runs in the CHECKOUT rather than the deploy root: the deploy root is an rsync
+        # target with no git history, and this question is entirely about the commit range.
+        #
+        # THE FALLBACK DIRECTION IS THE WHOLE SAFETY ARGUMENT. Anything unexpected — a
+        # dispatch with no push range, an unresolvable ref, a pin that maps to no service —
+        # sets FULL, which is byte-for-byte the deploy this workflow did before SERV-109.
+        # Nothing may set the scope to "no services" except deploy-scope.sh exiting 0 with
+        # an empty list, which means no image reference changed at all. A scope that
+        # silently narrowed to nothing would be a deploy that goes green and ships nothing,
+        # the same class of failure as the stale-image incident in the rsync step above.
+        env:
+          BASE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          if [ -z "${BASE:-}" ]; then
+            echo "This run has no push range (workflow_dispatch or repository_dispatch)."
+            echo "A dispatch can be for anything, so it deploys the whole stack."
+            echo "DEPLOY_SCOPE=FULL" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if scope="$(./scripts/deploy-scope.sh "$BASE" "$GITHUB_SHA")"; then
+            if [ -z "$scope" ]; then
+              echo "=> scope: NONE (no image reference changed)"
+              echo "DEPLOY_SCOPE=NONE" >> "$GITHUB_ENV"
+              echo "### Deploy scope: nothing to pull" >> "$GITHUB_STEP_SUMMARY"
+              echo "\`versions.env\` changed but no pin value did." >> "$GITHUB_STEP_SUMMARY"
+            else
+              services="$(printf '%s' "$scope" | tr '\n' ' ')"
+              echo "=> scope: SCOPED to ${services% }"
+              echo "DEPLOY_SCOPE=SCOPED" >> "$GITHUB_ENV"
+              echo "DEPLOY_SERVICES=$services" >> "$GITHUB_ENV"
+              echo "### Deploy scope: version change only" >> "$GITHUB_STEP_SUMMARY"
+              echo "Pulling and recreating **only**: \`${services% }\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "=> scope: FULL (whole stack)"
+            echo "DEPLOY_SCOPE=FULL" >> "$GITHUB_ENV"
+          fi
+
       - name: Deploy Stack
-        # Pulls new images, recreates containers with config changes, removes old ones.
-        # Deliberately whole-stack and deliberately NOT --force-recreate: compose
-        # recreates only what actually drifted, so the blast radius already matches the
-        # intent. Do not add --force-recreate here — it would rebuild every container on
-        # the box, including the shared postgres, on every push (SERV-63).
+        # Deliberately NOT --force-recreate in either path: compose recreates only what
+        # actually drifted, so the blast radius already matches the intent. Do not add it —
+        # it would rebuild every container on the box, including the shared postgres, on
+        # every push (SERV-63).
         #
         # Running from the deploy root is what resolves the relative bind mounts
         # (./config, ./db, ./aperture) against it rather than against this checkout,
         # and what binds the compose project to a stable path.
         #
-        # `pull` stays, and is no longer the blunt instrument it was under `:latest`
-        # (SERV-88). First-party images are pinned to major.minor, so a pull fetches
-        # patch releases under the pin and nothing else — which is the one bit of
-        # float we kept deliberately, so security fixes still land without a secret
-        # edit. Services with no semver are pinned to a sha, where pull is a no-op.
+        # TWO PATHS, because `pull` means different things on the two kinds of deploy
+        # (SERV-109):
+        #
+        #   FULL — an ordinary merge, or any dispatch. A whole-stack pull, which under the
+        #     major.minor pins fetches patch releases and nothing else. That float is the
+        #     one we keep deliberately (SERV-88), so a security fix lands without an edit.
+        #
+        #   SCOPED — the commit changed versions.env and nothing else, i.e. a promote or a
+        #     rollback. Only the services behind the pins that actually moved are pulled and
+        #     recreated. Without this, rolling purser back also recreates lyceum if lyceum
+        #     cut a patch since the last deploy — collateral nobody named, and worse than
+        #     the third-party case SERV-105 closed, because these services have dependents
+        #     and per SERV-102 the Node ones do not recover from a peer recreate on their own.
+        #
+        # --no-deps on the scoped path for the SERV-63 reason: every service with a database
+        # depends on postgres, so an unscoped compose action aimed at one container reaches
+        # the shared database. Same flag `make recreate` bakes in.
+        #
+        # --remove-orphans stays on the FULL path only. A commit that touched nothing but
+        # versions.env cannot have removed a service, so there are no orphans it could mean.
+        #
+        # WHAT THE SCOPED PATH GIVES UP: it converges nothing it did not name. If an earlier
+        # deploy left a compose change unapplied, a promote landing afterwards rsyncs that
+        # compose file to the deploy root and does not apply it, where the old whole-stack
+        # `up -d` would have. So a green promote no longer implies the running stack matches
+        # main.
+        #
+        # TWO WAYS an earlier deploy leaves a change unapplied, and the second is the easy
+        # one to miss: it FAILED before reaching this step, or it was CANCELLED while still
+        # pending. `concurrency` holds at most one pending run per group and a newer run
+        # supersedes it — `cancel-in-progress: false` protects the RUNNING deploy, not the
+        # queued one. A cancelled run leaves nothing red in the Actions tab, so there is no
+        # failure to prompt the re-run below. That is the right trade for a rollback, but
+        # it is a trade, and the way to settle it is to re-run THIS workflow from the Actions
+        # tab: a workflow_dispatch carries no push range, so it always takes the FULL path.
+        #
+        # Do NOT reach for check-compose-drift.sh to answer that question. It compares
+        # declared vs live MOUNTS and the compose project root and nothing else — not the
+        # image, env, ports, networks or command — so an unapplied env or digest change is
+        # invisible to it and it prints "No drift" on exactly the thing being asked about.
+        #
+        # cf-access-guard is the one exception to that caveat, because it is the one place
+        # where an unapplied change is invisible to every gate. It is build-only and can
+        # never appear in a scope list, so the SCOPED branch compares its source revision
+        # explicitly and recreates it when — and only when — it is behind. See there.
         working-directory: ${{ env.DEPLOY_ROOT }}
-        run: docker compose pull && docker compose up -d --remove-orphans
+        run: |
+          set -euo pipefail
+
+          # ── Is cf-access-guard behind? Decided ONCE, above the case. ──────────────────
+          #
+          # Deliberately not inside a branch. The guard can never appear in a scope list —
+          # it is build-only, so no versions.env pin can name it — but whether it is STALE
+          # has nothing to do with what this particular deploy is for, and putting the
+          # check inside SCOPED left NONE unable to notice. It is the service where a
+          # stale binary is least visible: assert-healthy sees a healthy container and
+          # check-edge-auth sees the old binary still refusing a spoofed Host, so nothing
+          # downstream catches it.
+          #
+          # Compared on the source revision, not the image ID. BuildKit re-exports the
+          # image config on every build, so a full cache hit still yields a new ID and an
+          # ID comparison would recreate the container that decides whether requests are
+          # authenticated on EVERY deploy. The label recreates it exactly when the source
+          # moved, which on an ordinary promote is never.
+          #
+          # This is what covers the pending-run window. `concurrency` does NOT serialise
+          # queued deploys: cancel-in-progress governs the RUNNING run only, and GitHub
+          # cancels any previously pending run when a newer one arrives. So a guard change
+          # queued behind an in-flight deploy is discarded when the next push lands, and
+          # its own FULL deploy never runs at all. This comparison does not care why the
+          # guard is behind, only that it is — which is the point of asking the container
+          # rather than reasoning about triggers.
+          #
+          # Ambiguity recreates: no label, no container, or an unresolved revision.
+          guard=()
+          guard_running="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' cf-access-guard 2>/dev/null || true)"
+          if [ -z "${GUARD_REVISION:-}" ] || [ "$guard_running" != "$GUARD_REVISION" ]; then
+            echo "cf-access-guard is behind: running '${guard_running:-<no label>}', checkout '${GUARD_REVISION:-<unresolved>}'."
+            guard=(cf-access-guard)
+          fi
+
+          case "${DEPLOY_SCOPE:-FULL}" in
+            NONE)
+              # No image reference changed, so nothing is pulled and nothing pinned is
+              # recreated — but the guard is not pinned, and a versions.env comment edit
+              # is still a deploy that rsynced and rebuilt its source one step earlier.
+              echo "versions.env changed but no pin did — nothing to pull."
+              if [ ${#guard[@]} -gt 0 ]; then
+                echo "Recreating cf-access-guard, which is not pinned and so is not in scope."
+                docker compose up -d --no-deps "${guard[@]}"
+              else
+                echo "Nothing to recreate either."
+              fi
+              ;;
+            SCOPED)
+              # An empty array here would make `up -d` mean the WHOLE STACK, which is the
+              # footgun `make force-recreate` guards against by refusing an empty svc=.
+              # Guard it the same way rather than trusting the step above.
+              read -r -a services <<< "${DEPLOY_SERVICES:-}"
+              if [ ${#services[@]} -eq 0 ]; then
+                echo "Error: scope is SCOPED but names no service. Refusing to run an"
+                echo "unscoped compose command that would look like a scoped one."
+                exit 1
+              fi
+              # Two lists, because the guard is BUILT and never pulled: `services` is what
+              # moves in the registry, `recreate` is what compose must act on.
+              recreate=("${services[@]}" "${guard[@]}")
+              echo "Scoped deploy (SERV-109): pull ${services[*]} | recreate ${recreate[*]}"
+              docker compose pull "${services[@]}"
+              docker compose up -d --no-deps "${recreate[@]}"
+              ;;
+            *)
+              # FULL needs no guard handling, and NOT because of the BuildKit re-export
+              # quirk — do not tie this branch's correctness to that, or a future
+              # reproducible-build fix will look like it broke this. Enumerate instead: if
+              # the source moved the image differs on any builder; if a hand-build stamped
+              # the label `unknown` the image config differs; if there is no container
+              # `up -d` creates one. Every way the guard can be behind is a way compose
+              # already recreates it here.
+              #
+              # The re-export quirk only means FULL ALSO recreates it when nothing changed,
+              # every single time. That is waste, pre-existing and tracked separately — it
+              # is not what makes this branch correct.
+              docker compose pull && docker compose up -d --remove-orphans
+              ;;
+          esac
 
       - name: Ensure databases exist
         # Idempotent — creates any missing users/databases without affecting existing ones

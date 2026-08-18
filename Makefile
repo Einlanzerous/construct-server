@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions deploy-scope db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
@@ -107,6 +107,17 @@ edge-auth-check:
 #        make versions svc=purser (one service)
 versions:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/report-versions.sh $(svc)
+
+# What would deploying this commit range actually pull and recreate? (SERV-109) A promote
+# or rollback commit touches versions.env and nothing else, and deploy.yml scopes that case
+# to the services behind the pins that moved; every other deploy pulls the whole stack.
+# Reads git and docker-compose.yml only — it touches neither the box nor the deploy root,
+# so it answers "what will this do" BEFORE the merge rather than after.
+# Usage: make deploy-scope                          (HEAD^..HEAD)
+#        make deploy-scope base=main head=my-branch
+deploy-scope:
+	@./scripts/deploy-scope.sh $(or $(base),HEAD^) $(or $(head),HEAD) \
+	  || echo "=> the whole stack would be pulled, for the reason above"
 
 # Start only the postgres service
 db-up: deploy-root network

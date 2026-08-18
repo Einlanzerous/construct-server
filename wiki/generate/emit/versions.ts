@@ -51,10 +51,23 @@ export function emitVersions(estate: Estate): Page {
 
       section(
         "What each style means on the next pull",
-        table(
-          ["Style", "Behaviour"],
-          [...new Set(estate.pins.map((p) => p.style))].map((style) => [style, pinBehaviour(style)]),
-        ),
+        [
+          table(
+            ["Style", "Behaviour"],
+            [...new Set(estate.pins.map((p) => p.style))].map((style) => [style, pinBehaviour(style)]),
+          ),
+          "\n**Which pull, though.** The table above is what a *whole-stack* pull does, and",
+          "that is what an ordinary merge runs — the `major.minor` float exists precisely so a",
+          "patch release lands there without anyone editing this file. A **promote or rollback**",
+          "does not: its commit touches `versions.env` and nothing else, which `deploy.yml`",
+          "recognises (SERV-109) and uses to pull and recreate only the services behind the pins",
+          "that actually changed. Before that, repointing one service also recreated every other",
+          "one that had published since the last deploy.\n\n",
+          "Two things it still does not bound. A pin covering two images recreates both, which",
+          "is correct — they are one release. And rolling back to a `major.minor` fetches the",
+          "newest patch under it, *not* the image that was running the last time that pin was in",
+          "effect: \"roll back to 0.13\" is a claim about the version, not about the bytes.\n\n",
+        ].join("\n"),
       ),
 
       section(
