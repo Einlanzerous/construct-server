@@ -388,10 +388,17 @@ jobs:
               docker compose up -d --no-deps "${recreate[@]}"
               ;;
             *)
-              # FULL needs no guard handling: the rebuild above always yields a new image
-              # ID, so the whole-stack `up -d` recreates it whether or not the source moved.
-              # (That it recreates the guard on EVERY full deploy is wasteful and
-              # pre-existing — a reproducible-build problem, not this branch's to fix.)
+              # FULL needs no guard handling, and NOT because of the BuildKit re-export
+              # quirk — do not tie this branch's correctness to that, or a future
+              # reproducible-build fix will look like it broke this. Enumerate instead: if
+              # the source moved the image differs on any builder; if a hand-build stamped
+              # the label `unknown` the image config differs; if there is no container
+              # `up -d` creates one. Every way the guard can be behind is a way compose
+              # already recreates it here.
+              #
+              # The re-export quirk only means FULL ALSO recreates it when nothing changed,
+              # every single time. That is waste, pre-existing and tracked separately — it
+              # is not what makes this branch correct.
               docker compose pull && docker compose up -d --remove-orphans
               ;;
           esac
