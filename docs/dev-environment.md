@@ -226,10 +226,13 @@ none.
 
 Two things have to be decided together there, which is why it is its own ticket:
 
-- **Auth.** Whatever routes dev must not reopen the hole above. Either the prod
-  `internal` routers gain a source restriction and dev gets its own Traefik, or
-  SERV-25 lands and the internal entrypoint stops relying on network position for
-  its security.
+- **Auth.** Whatever routes dev must not reopen the hole above — which is now
+  closed from both directions: the `internal` entrypoint binds one address that
+  only cloudflared shares (SERV-107), and every router on it validates the Access
+  JWT at the origin (SERV-106). A dev hostname on the prod Traefik would be
+  *refused*, because a host with no entry in `CF_ACCESS_AUD_MAP` fails closed. So
+  the remaining decision is not "how do we avoid the hole" but "does dev get its
+  own Access applications and AUDs on the prod Traefik, or its own Traefik".
 - **The tunnel.** `cloudflared` runs a dashboard-managed token tunnel
   (`tunnel --no-autoupdate run`, no config file), so hostname→origin ingress and
   the Access applications live in the Zero Trust dashboard, not in this repo. A

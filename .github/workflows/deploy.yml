@@ -69,6 +69,20 @@ jobs:
           rsync -a --delete ./db/        "$DEPLOY_ROOT/db/"
           rsync -a --delete ./aperture/  "$DEPLOY_ROOT/aperture/"
           rsync -a --delete ./scripts/   "$DEPLOY_ROOT/scripts/"
+          # cf-access-guard is the one service built on the box (SERV-106), so its
+          # source is a stack file. Named explicitly rather than syncing ./services/
+          # wholesale: that directory also holds argosy-acquisition, which carries a
+          # real .env and a live sqlite database that have no business in the deploy
+          # root. --delete is scoped to this one subdirectory for the same reason.
+          #
+          # mkdir first: rsync creates the LAST component of a destination path, not
+          # missing parents, so on a root that has never had services/ the sync fails
+          # with "No such file or directory". The build step then does not fail with
+          # it — `up -d` happily starts whatever image is already in the local daemon
+          # cache — so without this the deploy would look green while running stale
+          # guard code. Seen for real on the first rehearsal.
+          mkdir -p "$DEPLOY_ROOT/services"
+          rsync -a --delete ./services/cf-access-guard/ "$DEPLOY_ROOT/services/cf-access-guard/"
           rsync -a docker-compose.yml Makefile versions.env "$DEPLOY_ROOT/"
 
       - name: Restore Secrets
@@ -161,6 +175,18 @@ jobs:
           GITHUB_PAT=$(grep '^GITHUB_PAT=' "$DEPLOY_ROOT/.env" | cut -d'=' -f2)
           echo "$GITHUB_PAT" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
 
+      - name: Build cf-access-guard
+        # EXPLICIT, because `up -d` builds only when the image is MISSING — it does
+        # not notice that the source changed. Without this step an edit to the guard
+        # would rsync to the deploy root and then be ignored for as long as a stale
+        # image existed, which for a service that decides whether requests are
+        # authenticated is the worst possible kind of silent no-op.
+        #
+        # Cheap after the first run: the source is stdlib-only Go with no module
+        # downloads, so an unchanged tree is a layer-cache hit.
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: docker compose build cf-access-guard
+
       - name: Deploy Stack
         # Pulls new images, recreates containers with config changes, removes old ones.
         # Deliberately whole-stack and deliberately NOT --force-recreate: compose
@@ -202,6 +228,20 @@ jobs:
         # SERV-79; keeping it exit-code-clean is what lets that reuse it unchanged.
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: ./scripts/assert-healthy.sh --timeout 300
+
+      - name: Assert the origin still rejects a spoofed Host
+        # SERV-106. The config half of this runs against files and would pass in a
+        # checkout; the point of running it HERE is the live half, which asks the
+        # deployed edge the one question that matters — does a request with no valid
+        # Cloudflare Access assertion get served? A middleware that is present in
+        # routers.yml but not in effect (guard down, guard in audit mode, guard
+        # holding no signing keys, address Traefik cannot reach) reads as correct
+        # everywhere except here.
+        #
+        # Runs after assert-healthy so a guard that never came up is reported as the
+        # unhealthy container it is, rather than as a mysterious 500 in a probe.
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: ./scripts/check-edge-auth.sh
 
       - name: Prune Images
         # Clean up old docker images to save disk space

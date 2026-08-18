@@ -1038,9 +1038,11 @@ services:
     restart: unless-stopped
     # Host 443 -> Traefik's `public` entrypoint (:8443) for the Argosy WAN path (SERV-26).
     # Tailscale Funnel previously held 443; it was moved off (the Switchyard GitHub webhook
-    # now rides cloudflared — SERV-45), freeing the port. The `internal` (:9080) and
-    # dashboard (:8080) entrypoints stay construct_net-only (unpublished), so the open WAN
-    # port can only ever reach the Argosy router — never a tunneled app.
+    # now rides cloudflared — SERV-45), freeing the port. Neither the `internal` (:9080)
+    # nor the dashboard (:8080) entrypoint is published, so the open WAN port can only ever
+    # reach the Argosy router — never a tunneled app. `internal` additionally binds a single
+    # address on construct_edge_net (SERV-107) and every router on it is now gated by
+    # cf-access-guard below (SERV-106).
     ports:
       - "443:8443"   # WAN 443 -> host 443 -> public entrypoint (:8443)
     environment:
@@ -1057,7 +1059,7 @@ services:
       - traefik_letsencrypt:/letsencrypt
       - traefik_access_logs:/var/log/traefik
     networks:
-      # Both, and for different jobs (SERV-106). construct_net is how Traefik reaches the
+      # Both, and for different jobs (SERV-107). construct_net is how Traefik reaches the
       # backends it proxies to; construct_edge_net is the only place the `internal`
       # entrypoint listens. The static address is not cosmetic — traefik.yml binds
       # `internal` to exactly 172.31.240.10:9080, so this value and that one have to
@@ -1065,6 +1067,81 @@ services:
       construct_net: {}
       construct_edge_net:
         ipv4_address: 172.31.240.10
+    depends_on:
+      # Ordering only, not a health gate. Traefik retries forwardAuth per request,
+      # so a guard that is still starting costs a few seconds of 500s on the
+      # tunneled hosts; waiting for it to report healthy would instead hold the
+      # WAN/Argosy path down for the same window, which is the worse trade.
+      - cf-access-guard
+
+  # --- ORIGIN AUTH (cf-access-guard) — SERV-106 ---
+  # Validates the Cloudflare Access JWT at the ORIGIN. Cloudflare Access is enforced
+  # at Cloudflare's edge; until this shipped the origin re-checked nothing, so anything
+  # that could open a connection to the `internal` entrypoint got the tunneled apps by
+  # setting a Host header — demonstrated, not theorised:
+  #
+  #   curl -H "Host: switchyard.zerogravity.industries" http://traefik:9080/   -> 200
+  #
+  # unauthenticated production Switchyard. SERV-107 bound that entrypoint to one address
+  # on construct_edge_net so construct_net can no longer reach it, but that makes the
+  # request UNROUTABLE, not rejected — and anything with host access or the docker socket
+  # still reaches the port. The two are complementary: SERV-107 restored the boundary,
+  # this removes the dependence on there being one.
+  #
+  # Wired in as a Traefik `forwardAuth` target (see config/traefik/dynamic/routers.yml),
+  # not as a Traefik plugin. A plugin runs Yaegi-interpreted inside Traefik, so a fault in
+  # it takes the whole edge down — including the public Argosy path, which this has nothing
+  # to do with. As a sidecar its worst failure is a 503 on the three tunneled hosts, and it
+  # can be tested with `go test` instead of by restarting the edge.
+  #
+  # construct_edge_net ONLY, deliberately: Traefik is the sole caller, and the guard has no
+  # business being reachable from the ~30 containers on construct_net. It does need egress,
+  # to fetch the team's signing keys from <team>.cloudflareaccess.com.
+  #
+  # BUILT here rather than pinned to a published tag, which is the one exception to the
+  # first-party pinning invariant (SERV-96). It is stdlib-only Go with no dependencies to
+  # resolve and no release cadence of its own, and its source sits beside the compose file
+  # it protects; deploy.yml builds it explicitly so a source edit lands on the next deploy.
+  # `docker compose config --images` reports it as `construct-server-cf-access-guard`, which
+  # is not a ghcr.io/einlanzerous ref, so the pinning assertion correctly ignores it.
+  cf-access-guard:
+    build:
+      context: ./services/cf-access-guard
+    container_name: cf-access-guard
+    restart: unless-stopped
+    environment:
+      # Public identifiers, not secrets — same reasoning (and the same values) as the
+      # CF_ACCESS_* pairs switchyard and lyceum already carry for their own SSO sign-in
+      # (SWY-161, LYCM-803). The AUD is an application identifier; possession of one grants
+      # nothing, and every check here is cryptographic. Keeping them tracked makes an Access
+      # application change a reviewable diff.
+      - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      # host=aud, one entry per router on the `internal` entrypoint. Each Access
+      # application has its OWN AUD while every token on the team domain is signed by the
+      # same key — so without the per-host mapping a token minted for the wiki would open
+      # Switchyard. A host missing from this map is REFUSED, not waved through: a new
+      # tunneled router that nobody mapped is unreachable, which is loud, rather than
+      # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
+      # and the routers agree, so they cannot drift apart silently.
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2
+      # enforce | audit. `audit` logs the decision it WOULD have made and allows the
+      # request anyway — it exists so the cutover could be rehearsed against real traffic
+      # before three live routers went fail-closed at once, and it is not a steady state.
+      # check-edge-auth.sh fails while it is set, which is what stops it surviving here.
+      - CF_ACCESS_GUARD_MODE=${CF_ACCESS_GUARD_MODE:-enforce}
+    networks:
+      - construct_edge_net
+    healthcheck:
+      # The image is FROM scratch — no shell, no wget, no curl — so the binary probes
+      # itself. /healthz goes 503 when no signing key set has ever loaded, and when
+      # refreshes have been failing long enough that the cached keys may no longer be the
+      # ones Cloudflare signs with. Both are states where every request is about to start
+      # failing, which is exactly what a healthcheck should be able to say (SERV-102).
+      test: ["CMD", "/cf-access-guard", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # --- CROWDSEC (SERV-27) — behavioral IPS for the open WAN path ---
   # Parses Traefik's JSON access log (shared volume, read-only) with the
@@ -1106,7 +1183,7 @@ services:
       # Same token you stored in .env for the host run — reused verbatim.
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
-      # construct_edge_net ONLY, deliberately (SERV-106). Every ingress rule on this
+      # construct_edge_net ONLY, deliberately (SERV-107). Every ingress rule on this
       # tunnel points at http://traefik:9080 — verified from the running config, which is
       # remotely managed and therefore not in this repo:
       #
@@ -1252,7 +1329,7 @@ networks:
   construct_net:
     external: true
 
-  # The cloudflared -> Traefik leg, and nothing else (SERV-106).
+  # The cloudflared -> Traefik leg, and nothing else (SERV-107).
   #
   # Traefik's `internal` entrypoint used to listen on :9080 across every interface,
   # which on a shared network means every neighbour. Demonstrated, not theorised —
@@ -1271,9 +1348,11 @@ networks:
   # and cannot assign one without being recreated, which would recreate every container
   # on the box.
   #
-  # This authenticates nothing. It restores the boundary that SERV-25's deferral quietly
-  # depended on; validating Cf-Access-Jwt-Assertion is still the fix that would let the
-  # boundary not matter, and is still SERV-106's option 1.
+  # This authenticates nothing on its own — that is cf-access-guard's job (SERV-106),
+  # and the two are complementary rather than alternatives. This restored the boundary
+  # that SERV-25's deferral quietly depended on; the guard removed the dependence on
+  # there being one. Keep both: the bind decides who can connect, the middleware
+  # decides who is served, and neither makes the other redundant.
   construct_edge_net:
     name: construct_edge_net
     ipam:

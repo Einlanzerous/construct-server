@@ -241,21 +241,46 @@ anything deploys or gets versioned.
   provisions real accounts across four services, so a dev purser with prod
   credentials does not fail safely — it succeeds, against production. **Nothing
   is on both networks**, which is what makes "dev cannot reach prod" true rather
-  than merely intended. Do not attach Traefik to `construct_dev_net` to route
-  dev hostnames. The prod routers on the `internal` entrypoint have **no auth
-  middleware**, so anything that can reach it gets prod Switchyard and Lyceum by
-  setting a Host header — Cloudflare Access is enforced at Cloudflare's edge, not
-  here. SERV-107 narrowed *what can reach it*: `internal` binds a single address on
-  `construct_edge_net`, which only cloudflared shares, so a container on
-  `construct_net` no longer connects. **That does not make attaching a second
-  network safe** — it makes the entrypoint reachable from that network, which is
-  exactly what the bind stopped. The protection is topology, not authentication.
-  **Do not read SERV-25 as covering this**: it shipped the Access policies and
-  explicitly deferred the origin-side `Cf-Access-Jwt-Assertion` validation, then
-  closed — so it reads `done` while the origin still authenticates nothing.
-  **SERV-106** is that deferred half and is what would make the boundary stop
-  mattering. Giving dev an edge is SERV-93. Isolation is asserted by
-  `make dev-verify-isolation`; dev-vs-prod config drift by `make dev-parity`.
+  than merely intended. Still do not attach Traefik to `construct_dev_net` casually,
+  but the reason has changed and shrunk. Two things now stand between a neighbour
+  and prod Switchyard: `internal` binds a single address on `construct_edge_net`,
+  which only cloudflared shares (SERV-107), and every router on it validates the
+  Access JWT at the origin (SERV-106). A dev hostname routed through the same
+  Traefik would be **refused** rather than served, because a host absent from
+  `CF_ACCESS_AUD_MAP` fails closed — so SERV-93's remaining work is giving dev
+  its own Access applications and AUDs, not re-litigating the hole. Isolation is
+  asserted by `make dev-verify-isolation`; dev-vs-prod config drift by
+  `make dev-parity`.
+- **The origin validates the Access JWT — reaching the entrypoint is not enough**
+  (SERV-106). Cloudflare Access is enforced at Cloudflare's **edge**. The origin
+  used to re-check nothing, so anything that could connect to Traefik's `internal`
+  entrypoint got the tunneled apps by naming one in a `Host` header; that was
+  demonstrated, not theorised, and returned unauthenticated prod Switchyard. Every
+  router on that entrypoint now carries the `cf-access-jwt` forwardAuth middleware,
+  pointed at `cf-access-guard` (`services/cf-access-guard/`), which verifies the
+  token against the team's published signing keys and **the AUD registered for that
+  exact host**. Per-host matters: every app on the team domain is signed by the same
+  key, so a single static audience would let a wiki token open Switchyard.
+  **SERV-107 did not close this and neither closes the other.** The bind decides who
+  can *connect*; the middleware decides who is *served*. "Unroutable" is not
+  "rejected" — conflating them is how SERV-25's deferral stayed invisible for six
+  weeks. A host with no AUD entry is refused, so a new tunneled router that nobody
+  mapped is unreachable (loud) rather than unauthenticated (silent), and
+  `scripts/check-edge-auth.sh` fails if a router lacks the middleware or the map and
+  the routers disagree. **There is exactly one exemption and it is an allowlist, not
+  a pattern**: `switchyard-github-webhook`, because GitHub cannot authenticate to
+  Access — Access carries a Bypass policy on that path and injects no assertion at
+  all, so without an exempt router the webhook 403s and external-ref updates and
+  PR-merge auto-close stop silently (SERV-45). It is not unauthenticated; it is
+  HMAC-gated by `GITHUB_WEBHOOK_SECRET`, which is authentication Access cannot
+  express. The exemption is one host and one **exact** `Path()` — the checker refuses
+  a `PathPrefix()` as too broad to verify — and an internal router that is neither
+  gated nor on the allowlist fails the check. It also runs the exploit itself against the live edge, from
+  the **host** — an unpublished container port is still routable from there, which no
+  container-side probe sees. `deploy.yml` runs it as a post-deploy gate; locally it is
+  `make edge-auth-check`. The guard is the one first-party image **built on the box**
+  rather than pinned (stdlib-only Go, no deps), so `deploy.yml` builds it explicitly —
+  `up -d` alone would keep running a stale image without complaint.
 - **The wiki is generated, and its generator must never read a resolved
   environment** (SERV-101). `wiki/docs/` is wiped and rewritten on every run, so a
   hand-written page there is deleted without warning — anything a person wants to

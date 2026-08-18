@@ -1,0 +1,39 @@
+name: cf-access-guard tests
+
+# The guard decides whether requests to every tunneled app are authenticated
+# (SERV-106), and guard_test.go's bypass table — alg=none, HS256 algorithm
+# confusion, cross-application audience, expired, no exp at all, tampered payload,
+# unknown kid — is the only real test suite in this repo. Until this workflow
+# existed, nothing ran it: the tests could rot silently and the first symptom would
+# have been at the edge.
+#
+# Runs through the service's own Dockerfile (`--target test`) rather than with
+# `setup-go`, so there is exactly ONE toolchain pin in the repo. CI cannot end up on
+# a different compiler than the one that builds the deployed binary — which for an
+# auth gate is worth more than the seconds a native runner would save. Nothing
+# downstream depends on that stage, so ordinary builds and deploys skip it.
+
+on:
+  push:
+    paths:
+      - 'services/cf-access-guard/**'
+      - '.github/workflows/cf-access-guard.yml'
+  pull_request:
+    paths:
+      - 'services/cf-access-guard/**'
+      - '.github/workflows/cf-access-guard.yml'
+
+jobs:
+  test:
+    # GitHub-hosted, matching ansible-lint.yml. Deliberately NOT the self-hosted
+    # runner: this needs no access to the box, and the runner is a systemd service
+    # with a bare system PATH that cannot see the host's Go anyway (it lives under
+    # $HOME) — the CLAUDE.md invariant that bit SERV-62 twice.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: gofmt, go vet, go test
+        # The build fails on the first of the three that fails, and names which.
+        run: docker build --target test services/cf-access-guard
