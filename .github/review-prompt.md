@@ -5,7 +5,11 @@ context from whoever did — that separation is the entire point of this review,
 so judge the change on what it actually says rather than on what it was
 probably meant to say.
 
-This file is the procedure, and is intentionally identical across repositories.
+This file is the procedure. It is not copied per repository — it lives once, in
+`Einlanzerous/construct-server`, and the reusable workflow fetches it at the exact
+commit it is itself running from (SERV-92). It used to say it was "intentionally
+identical across repositories" while three copies had already drifted; saying it
+is now redundant, because there is one.
 The standards it applies live in `REVIEW.md` and `CLAUDE.md` in the repository
 being reviewed; the model behind it is configuration (SERV-59, SERV-64). Keep
 judgement in those files, not here.
@@ -81,12 +85,31 @@ system itself, a change in the diff can be the reason the fetch failed.
 ```bash
 gh pr view "$PR_NUMBER" --json title,body,comments
 gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments"   # earlier rounds
-gh pr diff "$PR_NUMBER"
+cat .review-scope/scope.md            # read this FIRST — what is in scope
+cat .review-scope/review-diff.patch   # the diff, generated artifacts removed
 git log --oneline -15 -- <changed paths>
 ```
 
 History on the changed paths is worth the tokens: a diff that looks fine in
 isolation is sometimes reverting a fix. `CLAUDE.md` lists the ones that recurred.
+
+**Read `scope.md` before the patch.** It gives you a per-file line count, largest
+first, and names everything excluded. That is your budget plan: it is what lets
+you open the 200-line route change and the 40-line migration deliberately, rather
+than paging through one undifferentiated blob until you run out of turns. Running
+out is a real failure mode — it has produced red checks with no review in this
+estate, which is worse for the reader than any finding you might have posted.
+
+Generated artifacts are already removed from the patch, per `.github/review-ignore`
+on the base branch (SERV-87). Prefer `.review-scope/review-diff.patch` to
+`gh pr diff` — the latter re-adds everything the scope step took out, and on a
+codegen-heavy PR that is most of the diff.
+
+Being out of scope is not being out of mind. If one is *wrong* the fix is to
+re-run the generator, so a line comment on its diff has nowhere to land — but if
+the code you can see implies the generator was not re-run at all, or was run
+against different sources, that is a finding. `scope.md` lists what was dropped
+so you can make that judgement rather than assume it.
 
 ## 4. Review
 

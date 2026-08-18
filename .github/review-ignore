@@ -1,0 +1,27 @@
+# Paths the PR reviewer does not read (SERV-87).
+#
+# One extended regex per line, matched against the repository-relative path of
+# every changed file. `#` comments and blank lines are ignored.
+#
+# This file stays PER-REPO even though the workflow itself is now shared
+# (SERV-92): which artifacts are generated is a fact about this repository, not
+# a knob on the reviewer. The shared workflow reads it from the BASE ref of the
+# PR under review, so widening it in a PR does not exempt that PR.
+#
+# What belongs here is regenerated artifacts, not merely large files. The test
+# is: if this file is wrong, is the fix to edit it? For a generated file the
+# answer is no — you re-run the generator — so a reviewer's comment on its diff
+# has nowhere to land. A large hand-written file is exactly what the reviewer
+# should be spending its budget on. `docker-compose.yml` is 68KB and hand-
+# written; it is the single most review-worthy file in this repo.
+
+# release-please owns this and rewrites it wholesale on every release. Editing
+# it by hand is already forbidden by CLAUDE.md, so there is nothing here a
+# review could ask for. It is also `.md`, so the docs-only rule already covers
+# it on a release PR; this covers the case where it rides along with code.
+^CHANGELOG\.md$
+
+# npm's resolved dependency tree for the wiki. Reviewing it line by line finds
+# nothing actionable; what matters is which dependency moved, and that is in
+# package.json, which is not excluded.
+^wiki/package-lock\.json$
