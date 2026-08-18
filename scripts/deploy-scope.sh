@@ -45,8 +45,11 @@
 #
 # AND ONE THING IT GIVES UP, which is the honest cost of the trade. A scoped deploy does
 # not converge anything it did not name, so if an EARLIER deploy left a compose change
-# unapplied — it failed before `up -d`, say — a promote landing afterwards rsyncs that
-# compose file to the deploy root and does not apply it. Before this, the promote's
+# unapplied — it failed before `up -d`, or it was CANCELLED while still queued, since
+# `concurrency` supersedes a pending run and `cancel-in-progress: false` only protects the
+# running one — a promote landing afterwards rsyncs that compose file to the deploy root
+# and does not apply it. The cancelled case leaves nothing red in the Actions tab to
+# prompt a re-run, which is what makes it the easy one to miss. Before this, the promote's
 # whole-stack `up -d` would have. So a green promote no longer implies the running stack
 # matches main. That is the right trade for a rollback — it runs when prod is broken, and
 # "also apply whatever the last failed deploy was attempting" is not what you want from it

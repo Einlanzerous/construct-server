@@ -298,10 +298,17 @@ jobs:
         # versions.env cannot have removed a service, so there are no orphans it could mean.
         #
         # WHAT THE SCOPED PATH GIVES UP: it converges nothing it did not name. If an earlier
-        # deploy left a compose change unapplied — it failed before reaching this step — a
-        # promote landing afterwards rsyncs that compose file to the deploy root and does not
-        # apply it, where the old whole-stack `up -d` would have. So a green promote no longer
-        # implies the running stack matches main. That is the right trade for a rollback, but
+        # deploy left a compose change unapplied, a promote landing afterwards rsyncs that
+        # compose file to the deploy root and does not apply it, where the old whole-stack
+        # `up -d` would have. So a green promote no longer implies the running stack matches
+        # main.
+        #
+        # TWO WAYS an earlier deploy leaves a change unapplied, and the second is the easy
+        # one to miss: it FAILED before reaching this step, or it was CANCELLED while still
+        # pending. `concurrency` holds at most one pending run per group and a newer run
+        # supersedes it — `cancel-in-progress: false` protects the RUNNING deploy, not the
+        # queued one. A cancelled run leaves nothing red in the Actions tab, so there is no
+        # failure to prompt the re-run below. That is the right trade for a rollback, but
         # it is a trade, and the way to settle it is to re-run THIS workflow from the Actions
         # tab: a workflow_dispatch carries no push range, so it always takes the FULL path.
         #
@@ -317,9 +324,51 @@ jobs:
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: |
           set -euo pipefail
+
+          # ── Is cf-access-guard behind? Decided ONCE, above the case. ──────────────────
+          #
+          # Deliberately not inside a branch. The guard can never appear in a scope list —
+          # it is build-only, so no versions.env pin can name it — but whether it is STALE
+          # has nothing to do with what this particular deploy is for, and putting the
+          # check inside SCOPED left NONE unable to notice. It is the service where a
+          # stale binary is least visible: assert-healthy sees a healthy container and
+          # check-edge-auth sees the old binary still refusing a spoofed Host, so nothing
+          # downstream catches it.
+          #
+          # Compared on the source revision, not the image ID. BuildKit re-exports the
+          # image config on every build, so a full cache hit still yields a new ID and an
+          # ID comparison would recreate the container that decides whether requests are
+          # authenticated on EVERY deploy. The label recreates it exactly when the source
+          # moved, which on an ordinary promote is never.
+          #
+          # This is what covers the pending-run window. `concurrency` does NOT serialise
+          # queued deploys: cancel-in-progress governs the RUNNING run only, and GitHub
+          # cancels any previously pending run when a newer one arrives. So a guard change
+          # queued behind an in-flight deploy is discarded when the next push lands, and
+          # its own FULL deploy never runs at all. This comparison does not care why the
+          # guard is behind, only that it is — which is the point of asking the container
+          # rather than reasoning about triggers.
+          #
+          # Ambiguity recreates: no label, no container, or an unresolved revision.
+          guard=()
+          guard_running="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' cf-access-guard 2>/dev/null || true)"
+          if [ -z "${GUARD_REVISION:-}" ] || [ "$guard_running" != "$GUARD_REVISION" ]; then
+            echo "cf-access-guard is behind: running '${guard_running:-<no label>}', checkout '${GUARD_REVISION:-<unresolved>}'."
+            guard=(cf-access-guard)
+          fi
+
           case "${DEPLOY_SCOPE:-FULL}" in
             NONE)
-              echo "versions.env changed but no pin did — nothing to pull, nothing to recreate."
+              # No image reference changed, so nothing is pulled and nothing pinned is
+              # recreated — but the guard is not pinned, and a versions.env comment edit
+              # is still a deploy that rsynced and rebuilt its source one step earlier.
+              echo "versions.env changed but no pin did — nothing to pull."
+              if [ ${#guard[@]} -gt 0 ]; then
+                echo "Recreating cf-access-guard, which is not pinned and so is not in scope."
+                docker compose up -d --no-deps "${guard[@]}"
+              else
+                echo "Nothing to recreate either."
+              fi
               ;;
             SCOPED)
               # An empty array here would make `up -d` mean the WHOLE STACK, which is the
@@ -331,38 +380,18 @@ jobs:
                 echo "unscoped compose command that would look like a scoped one."
                 exit 1
               fi
-              # cf-access-guard can never appear in the scope list — it is build-only, so
-              # no versions.env pin can name it — but it still has to be CORRECT after a
-              # scoped deploy, and it is the service where a stale binary is least visible:
-              # assert-healthy passes (the old guard is healthy) and check-edge-auth passes
-              # (the old binary still refuses a spoofed Host).
-              #
-              # Appending it unconditionally is the obvious move and is wrong: BuildKit
-              # gives a new image ID on every build even on a full cache hit, so compose
-              # would recreate the container deciding whether requests are authenticated on
-              # EVERY promote and rollback. Hence the revision label — recreate exactly when
-              # the source differs, which on an ordinary promote is never.
-              #
-              # This is what closes the pending-run window. `concurrency` does NOT serialise
-              # a queued deploy: cancel-in-progress governs the RUNNING run only, and GitHub
-              # cancels any previously pending run when a newer one arrives. So a guard
-              # change queued behind an in-flight deploy is discarded when a promote lands,
-              # and its own always-FULL deploy never runs. The comparison below does not care
-              # why the guard is behind, only that it is.
               # Two lists, because the guard is BUILT and never pulled: `services` is what
               # moves in the registry, `recreate` is what compose must act on.
-              recreate=("${services[@]}")
-              guard_running="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' cf-access-guard 2>/dev/null || true)"
-              if [ -z "${GUARD_REVISION:-}" ] || [ "$guard_running" != "$GUARD_REVISION" ]; then
-                echo "cf-access-guard is on '${guard_running:-<no label>}', checkout is '${GUARD_REVISION:-<unresolved>}' — recreating it too."
-                recreate+=(cf-access-guard)
-              fi
-
+              recreate=("${services[@]}" "${guard[@]}")
               echo "Scoped deploy (SERV-109): pull ${services[*]} | recreate ${recreate[*]}"
               docker compose pull "${services[@]}"
               docker compose up -d --no-deps "${recreate[@]}"
               ;;
             *)
+              # FULL needs no guard handling: the rebuild above always yields a new image
+              # ID, so the whole-stack `up -d` recreates it whether or not the source moved.
+              # (That it recreates the guard on EVERY full deploy is wasteful and
+              # pre-existing — a reproducible-build problem, not this branch's to fix.)
               docker compose pull && docker compose up -d --remove-orphans
               ;;
           esac

@@ -196,8 +196,11 @@ anything deploys or gets versioned.
   takes the whole-stack path. The script **refuses rather than guesses**, and every refusal
   falls back to the full pull — the dangerous direction is a scope that narrows to nothing,
   which would be a deploy that goes green having shipped no change at all. The cost of the
-  trade: a scoped deploy converges nothing it did not name, so after a **failed** deploy a
-  later promote's green tick no longer means the stack matches `main`. `cf-access-guard` is
+  trade: a scoped deploy converges nothing it did not name, so once an earlier deploy has
+  left a change unapplied — it **failed**, or it was **cancelled while still queued**, since
+  `concurrency` supersedes a pending run and `cancel-in-progress: false` protects only the
+  running one — a later promote's green tick no longer means the stack matches `main`. The
+  cancelled case leaves nothing red in the Actions tab, so nothing prompts you to look. `cf-access-guard` is
   the one exception, checked explicitly by revision, because it is the one service where a
   stale binary passes every gate — `assert-healthy` sees a healthy container and
   `check-edge-auth` sees the old binary still refusing a spoofed `Host`. Settle the rest by
