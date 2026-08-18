@@ -42,10 +42,27 @@ jobs:
       #
       # `db/` is the idempotent bootstrap that runs against live Postgres on
       # every deploy; `ansible/` holds the privilege grants; `caddy/`, `config/`
-      # and `docker-compose.yml` are the access edge; `scripts/` includes the
-      # drift guardrail. `creds/` is gitignored and can only ever appear here as
-      # a mistake, which is the point of listing it.
-      sensitive_paths: '^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|docker-compose\.dev\.yml|versions\.env|REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/review-ignore)'
+      # and the compose files are the access edge; `scripts/` includes the drift
+      # guardrail. `creds/` is gitignored and can only ever appear here as a
+      # mistake, which is the point of listing it.
+      #
+      # This is DELIBERATELY WIDER than the list the old local workflow carried,
+      # which SERV-92 AC 3 asks to preserve unchanged. Four paths are new and all
+      # of them postdate that list: `versions.env` and `dev-versions.env` are the
+      # image pins (SERV-96) — editing one is a deploy, and the `DEV_` prefixing
+      # and deliberate `latest` in the dev file are exactly the invariant a
+      # careless edit breaks; `docker-compose.dev.yml` is the second compose
+      # project (SERV-77); and `.github/review-ignore` is the reviewer's own
+      # scope, where a widened pattern silently shrinks what gets read. Every
+      # addition escalates and none de-escalates, so the direction is safe.
+      sensitive_paths: '^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|docker-compose\.dev\.yml|versions\.env|dev-versions\.env|REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/review-ignore)'
+
+      # release-please runs here in non-manifest mode, so a release PR is
+      # CHANGELOG.md alone — there is no .release-please-manifest.json in this
+      # tree. The default list is a superset and the rule is a subset test, so
+      # the default would work; naming it is cheaper than making the next reader
+      # check which mode this repo uses.
+      release_files: 'CHANGELOG.md'
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       switchyard_token: ${{ secrets.SWITCHYARD_REVIEWER_TOKEN }}

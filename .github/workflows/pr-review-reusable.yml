@@ -330,6 +330,7 @@ jobs:
           # input containing a quote would end the string and run as code. As
           # env they are data the whole way down.
           SENSITIVE_RE: ${{ inputs.sensitive_paths }}
+          DOCS_EXTRA_RE: ${{ inputs.docs_skip_extra }}
           STANDARDS_RE: ${{ inputs.standards_files }}
           RELEASE_PREFIX: ${{ inputs.release_branch_prefix }}
           RELEASE_FILE_LIST: ${{ inputs.release_files }}
@@ -417,11 +418,20 @@ jobs:
           # author check adds. `@claude review` also still forces a real review
           # on any of these, because the initiating actor is then the commenter.
           if [ "$MANUAL" != "true" ] && [ "$AUTHOR_TYPE" = "Bot" ] && [[ "$HEAD_BRANCH" == "$RELEASE_PREFIX"* ]]; then
-            RELEASE_FILES=$(printf '%s\n' "$RELEASE_FILE_LIST" | sort)
-            if [ "$(sort <<<"$FILES")" = "$RELEASE_FILES" ]; then
-              skip "release PR (generated changelog and version manifest)"
+            # SUBSET, not set equality. Equality also requires the release PR
+            # to carry every file in the list, and a repo can legitimately carry
+            # fewer: construct-server runs release-please in non-manifest mode,
+            # so its release commits touch CHANGELOG.md and nothing else, and an
+            # equality test never fires there. The question this rule is asking
+            # is "is there anything here that ISN'T generated release material",
+            # which is a subset test; expressing it as equality made it silently
+            # inapplicable to the repo hosting it.
+            RELEASE_FILES=$(printf '%s\n' "$RELEASE_FILE_LIST" | sed '/^[[:space:]]*$/d' | sort -u)
+            UNEXPECTED=$(comm -23 <(sort -u <<<"$FILES") <(printf '%s\n' "$RELEASE_FILES"))
+            if [ -z "$UNEXPECTED" ]; then
+              skip "release PR (generated release material only)"
             fi
-            echo "::warning::Release branch carries more than the changelog and manifest, so it is NOT being skipped. It will not be reviewed either: the author is a bot and claude-code-action refuses bot-initiated runs, so this run will fail at the Gate as a malfunction. That failure is deliberate — comment '@claude review' to get an actual review of it."
+            echo "::warning::Release branch carries $(grep -c . <<<"$UNEXPECTED") path(s) beyond the generated release material ($(tr '\n' ' ' <<<"$UNEXPECTED")), so it is NOT being skipped here. Whether it gets reviewed depends on the rules below; if it reaches the reviewer it will fail, because the author is a bot and claude-code-action refuses bot-initiated runs. Comment '@claude review' to get an actual review of it."
           fi
 
           # --- Generated artifacts come out of scope here (SERV-87) ----------
@@ -507,7 +517,7 @@ jobs:
           # Asked of REVIEWABLE rather than FILES: a PR of docs plus regenerated
           # types has nothing for a correctness reviewer either, and running it
           # against FILES would have called that a code change.
-          CODE=$(grep -vE '(^docs/|${{ inputs.docs_skip_extra }}\.md$)' <<<"$REVIEWABLE" || true)
+          CODE=$(grep -vE '(^docs/|'"$DOCS_EXTRA_RE"'\.md$)' <<<"$REVIEWABLE" || true)
           # The reviewer's own standards are .md but are not documentation.
           STANDARDS=$(grep -E "$STANDARDS_RE" <<<"$REVIEWABLE" || true)
           if [ -z "$CODE" ] && [ -z "$STANDARDS" ] && [ "$MANUAL" != "true" ]; then
@@ -568,8 +578,11 @@ jobs:
 
     env:
       # A tripwire for a runaway, not a budget. Completed reviews measured
-      # 19-47 turns (median ~29), so the old 40 sat inside the normal
-      # distribution and clipped one review in four. Turns are not billed —
+      # 9-50 turns (median 33) across the 18 that ran in the week after SERV-87
+      # landed, so the old 40 sat inside the normal distribution and clipped
+      # roughly one review in five. (An earlier count of 19-47/median 29 was the
+      # PRE-fix sample of 16 and is superseded; keep ONE number here, because
+      # the whole argument for 80 rests on it.) Turns are not billed —
       # `timeout-minutes` above is what actually bounds a runaway — so the cap
       # is set clear of observed work rather than close to it.
       REVIEW_MAX_TURNS: "${{ inputs.max_turns }}"

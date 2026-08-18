@@ -127,10 +127,13 @@ source — for exactly the case the expression existed to serve.
    case; a green check after pushing fixes usually means this fired.** Comment
    `@claude review` to force a re-review.
 4. Empty diff → skip.
-5. Bot-authored release PR carrying only `release_files` → skip. Anything more on
-   a release branch falls through and **fails**, deliberately: `claude-code-action`
-   refuses bot-initiated runs, so it cannot be reviewed, and unreviewed code
-   riding a release PR should be loud.
+5. Bot-authored release PR whose changed paths are all in `release_files` → skip.
+   The test is a **subset**, not set equality: a repo running release-please in
+   non-manifest mode touches only `CHANGELOG.md`, and an equality test would
+   never fire there. Anything *outside* the list falls through to the rules
+   below; if it reaches the reviewer it fails, deliberately, because
+   `claude-code-action` refuses bot-initiated runs and unreviewed code riding a
+   release PR should be loud.
 6. Everything in `.github/review-ignore` → out of scope. Nothing left → skip.
 7. Documentation only → skip.
 8. Otherwise review, at the deeper tier if `sensitive_paths` matched.
