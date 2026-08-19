@@ -63,10 +63,23 @@ done
 # Read off the running container rather than from versions.env, so the prober
 # tracks what is actually deployed rather than what the pins say should be. If
 # the two ever disagree, the running one is the one whose API this posts to.
-image="$(docker inspect -f '{{.Config.Image}}' "$SWITCHYARD_CONTAINER" 2>/dev/null || true)"
-[ -n "$image" ] || die "container '$SWITCHYARD_CONTAINER' is not running — nothing to take the prober from, and its API is where the results go anyway."
+#
+# Run the resolved image ID, not the tag. `.Config.Image` is the reference as
+# written in compose — `…/backend:${SWITCHYARD_TAG}`, a major.minor tag that
+# CLAUDE.md documents as deliberately MOVING. Running that resolves whatever the
+# tag points at locally right now, which is not necessarily what the live
+# container was created from: any pull-without-recreate opens the gap, and a
+# scoped SERV-109 deploy or a queue-cancelled one leaves exactly that state with
+# nothing red in the Actions tab. In that window the tag would run a newer
+# probe-delivery.ts against the older ingest it is posting to — the precise skew
+# "prober and ingest are always the same build" claims to remove. `.Image` is the
+# image ID the container actually runs, and `docker run` takes it directly.
+image_ref="$(docker inspect -f '{{.Config.Image}}' "$SWITCHYARD_CONTAINER" 2>/dev/null || true)"
+image_id="$(docker inspect -f '{{.Image}}' "$SWITCHYARD_CONTAINER" 2>/dev/null || true)"
+[ -n "$image_id" ] || die "container '$SWITCHYARD_CONTAINER' is not running — nothing to take the prober from, and its API is where the results go anyway."
 
-echo "[probe-delivery] image=$image script=$IN_IMAGE_SCRIPT env=$PROBE_ENVIRONMENT"
+# Both: the ref is what a human recognises, the ID is what actually ran.
+echo "[probe-delivery] image=$image_ref id=${image_id#sha256:} script=$IN_IMAGE_SCRIPT env=$PROBE_ENVIRONMENT"
 
 # ── run ─────────────────────────────────────────────────────────────────────
 # --network host is what makes this work at all: the dev tier publishes on
@@ -77,15 +90,23 @@ echo "[probe-delivery] image=$image script=$IN_IMAGE_SCRIPT env=$PROBE_ENVIRONME
 # Env is passed BY NAME (-e VAR, no `=value`), so the token is inherited from
 # this process's environment instead of appearing in the container's argv, which
 # is world-readable via /proc for the life of the run.
-out=""
+#
+# Streamed through `tee`, not captured into a variable. Buffering the whole run
+# and echoing it at the end loses ALL of it on the one failure the unit's
+# TimeoutStartSec=120 exists to catch: systemd SIGTERMs the unit's cgroup, bash
+# included, so a final `printf` never runs and the journal keeps only the header
+# line above. `make probe-status` would report `failed` with nothing to say why.
+# tee puts every line in the journal as it happens and leaves a copy to grep.
+log="$(mktemp)"
+# PrivateTmp=true in the unit gives this run its own /tmp, so the file is not
+# visible to anything else on the box and dies with the unit either way.
+trap 'rm -f "$log"' EXIT
+
 rc=0
-out="$(docker run --rm --network host \
+docker run --rm --network host \
   -e SWITCHYARD_URL -e SWITCHYARD_TOKEN -e PROBE_ENVIRONMENT -e PROBE_TARGETS \
   ${PROBE_TIMEOUT_MS:+-e PROBE_TIMEOUT_MS} \
-  "$image" bun "/app/$IN_IMAGE_SCRIPT" 2>&1)" || rc=$?
-
-# Straight to the journal, whatever happened.
-printf '%s\n' "$out"
+  "$image_id" bun "/app/$IN_IMAGE_SCRIPT" 2>&1 | tee "$log" || rc=$?
 
 [ "$rc" -eq 0 ] || die "prober exited $rc"
 
@@ -101,7 +122,7 @@ printf '%s\n' "$out"
 # deliberate one: the alternative is trusting an exit code that is documented
 # not to carry this. If probe-delivery.ts ever grows a real exit code, delete
 # this block rather than keeping both.
-if printf '%s' "$out" | grep -q "POST failed"; then
+if grep -q "POST failed" "$log"; then
   die "at least one result was NOT recorded (see the POST failed lines above).
   A 401/403 means the token is expired or missing deployments:observe.
   A 404 means the service is not in Switchyard's inventory — a probe that got no
@@ -111,6 +132,6 @@ fi
 # Not fatal: the prober falls back to /healthz for every target and says so. But
 # it silently means a service with a custom health_path is being probed at the
 # wrong URL, which reads as `unreachable` for something that is running fine.
-if printf '%s' "$out" | grep -q "could not read /v1/services"; then
+if grep -q "could not read /v1/services" "$log"; then
   echo "[probe-delivery] WARNING: health paths came from the fallback, not the inventory." >&2
 fi
