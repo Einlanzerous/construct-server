@@ -56,9 +56,14 @@ Then add two files to the repo itself:
 Do **not** add a `concurrency:` key. The shared workflow owns it, and that key
 is the accumulated result of three separate silent-pass incidents.
 
-Do **not** copy `review-prompt.md`. The workflow fetches it from this repo at
-the exact commit it is itself running, so the procedure and the workflow can
-never be a version apart.
+Do **not** copy `review-prompt.md`. The workflow fetches it from this repo —
+`prompt_repo` / `prompt_ref`, defaulting to `Einlanzerous/construct-server@main`.
+
+This was meant to derive from `github.job_workflow_sha` so the procedure would
+pin to the workflow commit automatically. That context and `job_workflow_ref` are
+both **empty** on this Actions version (verified on argosy#211 and signet#37), so
+they are explicit inputs instead: **if you pin `uses: ...@<tag>`, pin
+`prompt_ref` to the same tag**, because nothing links them for you.
 
 ## Inputs
 
