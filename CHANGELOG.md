@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.19.0](https://github.com/Einlanzerous/construct-server/compare/v4.18.0...v4.19.0) (2026-08-19)
+
+
+### Features
+
+* **ci:** extract the PR reviewer into a reusable workflow (SERV-92) ([c766960](https://github.com/Einlanzerous/construct-server/commit/c7669604b546a2db5e52b653987f573abf9c4c15))
+* **delivery:** schedule the dev-tier delivery prober on a systemd timer (SERV-111) ([#123](https://github.com/Einlanzerous/construct-server/issues/123)) ([6392293](https://github.com/Einlanzerous/construct-server/commit/639229303d27a7d0b3d2516ecf96cb333eb39b67))
+* **deploy:** deploy dev on a schedule and pin the third-party images (SERV-97, SERV-105) ([#116](https://github.com/Einlanzerous/construct-server/issues/116)) ([c0aeaab](https://github.com/Einlanzerous/construct-server/commit/c0aeaabdb44723cefa44382efd06ad1c69c44d71))
+* **edge:** validate the Cloudflare Access JWT at the origin (SERV-106) ([#119](https://github.com/Einlanzerous/construct-server/issues/119)) ([e064ade](https://github.com/Einlanzerous/construct-server/commit/e064ade6af9ef3d198270dfcf432f0d6bbfc273b))
+
+
+### Bug Fixes
+
+* **ci:** the prompt source cannot derive from job_workflow_ref (SERV-92) ([#122](https://github.com/Einlanzerous/construct-server/issues/122)) ([d4d835f](https://github.com/Einlanzerous/construct-server/commit/d4d835f5d9b50e95195d769b0e539ade93ea7db8))
+* **deploy:** scope a promote's pull to the pins it moved (SERV-109) ([#120](https://github.com/Einlanzerous/construct-server/issues/120)) ([9b2fe27](https://github.com/Einlanzerous/construct-server/commit/9b2fe27c425faf5e2965033ef4b91d0f6ef78611))
+
 ## [4.18.0](https://github.com/Einlanzerous/construct-server/compare/v4.17.1...v4.18.0) (2026-08-17)
 
 
