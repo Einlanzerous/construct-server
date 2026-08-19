@@ -157,14 +157,20 @@ on:
         type: string
       prompt_repo:
         description: >-
-          Override where `review-prompt.md` is fetched from. Empty means "the
-          repo hosting this workflow, at the exact commit of this workflow" —
-          derived from `github.job_workflow_ref` / `job_workflow_sha`, so the
-          procedure and the workflow can never be a version apart.
-        default: ''
+          Where `review-prompt.md` is fetched from. Defaults to the repo hosting
+          this workflow. See the note on prompt_ref about pinning.
+        default: 'Einlanzerous/construct-server'
         type: string
       prompt_ref:
-        default: ''
+        description: >-
+          Ref to fetch the prompt at. This was meant to derive from
+          `github.job_workflow_sha` so the procedure and the workflow could never
+          be a version apart — but that context and `job_workflow_ref` are BOTH
+          EMPTY on this Actions version, verified on argosy#211 and signet#37,
+          where the derivation fell through and the fetch 404'd. So it is an
+          explicit default instead: a caller pinning `uses: ...@<tag>` should pin
+          this to the same tag, because nothing links them automatically.
+        default: 'main'
         type: string
     secrets:
       claude_code_oauth_token:
@@ -864,46 +870,52 @@ jobs:
       # never copied across, while the file's own first paragraph claimed it was
       # "intentionally identical across repositories".
       #
-      # Pinned to `job_workflow_sha`, the exact commit of the workflow being run,
-      # so procedure and workflow can never be a version apart — a caller pinned
-      # to an old tag gets that tag's prompt. `prompt_repo`/`prompt_ref` override
-      # it for testing a prompt change before merging.
+      # The source is `prompt_repo`/`prompt_ref`, defaulting to this repo on
+      # `main`. It is NOT pinned to the workflow's own commit: `job_workflow_sha`
+      # and `job_workflow_ref` would have given that for free and are empty on
+      # this Actions version, which is what 404'd the first cross-repo calls
+      # (argosy#211, signet#37). So a caller pinning `uses: ...@<tag>` must pin
+      # `prompt_ref` to the same tag — nothing links them.
       - name: Fetch the reviewer prompt
         id: fetch_prompt
         env:
           GH_TOKEN: ${{ github.token }}
-          JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
-          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
           PROMPT_REPO_IN: ${{ inputs.prompt_repo }}
           PROMPT_REF_IN: ${{ inputs.prompt_ref }}
         run: |
           set -euo pipefail
 
-          # job_workflow_ref looks like
-          #   owner/repo/.github/workflows/file.yml@refs/heads/main
-          # so the repo is the first two path segments. Both contexts are only
-          # populated for a job that came from a reusable workflow, which is the
-          # only way this file runs.
-          PROMPT_REPO="${PROMPT_REPO_IN:-$(cut -d/ -f1,2 <<<"${JOB_WORKFLOW_REF:-}")}"
-          PROMPT_REF="${PROMPT_REF_IN:-${JOB_WORKFLOW_SHA:-}}"
-
-          # Fall back to the CALLING repo at the commit under test. This is not
-          # the silent-fallback-to-a-local-copy that would recreate the drift:
-          # it resolves to a repo, and the fetch below still has to find the file
-          # there. For the repo that HOSTS this workflow (a `uses: ./` call, where
-          # caller and host are the same repo) it is exactly right. For a remote
-          # caller it can only reach a repo with no `review-prompt.md`, so it
-          # 404s and names the repo it tried — which is a better error than an
-          # empty-variable one.
-          PROMPT_REPO="${PROMPT_REPO:-${GITHUB_REPOSITORY:-}}"
-          PROMPT_REF="${PROMPT_REF:-${GITHUB_SHA:-}}"
+          # The inputs ARE the mechanism. `github.job_workflow_ref` /
+          # `job_workflow_sha` would have been the better source — they name this
+          # workflow's own repo and commit, pinning the procedure to the workflow
+          # using it — but they are empty on this Actions version, which is what
+          # 404'd argosy#211 and signet#37.
+          #
+          # They are not consulted at all any more, and that is deliberate. The
+          # previous revision kept them as a first choice "in case GitHub ever
+          # populates them", which was doubly untrue: `${IN:-context}` consults
+          # the INPUT first, and the inputs now carry non-empty defaults, so the
+          # context branch was unreachable for every caller. Dead code that
+          # advertises a self-healing property it does not have is worse than the
+          # comment it replaced.
+          #
+          # There is also deliberately NO fallback to the calling repo. That was
+          # the first shape of this and it was wrong in the one way that matters:
+          # on the host repo it silently resolved to the right file and looked
+          # like it worked, while every remote caller 404'd. A fallback correct
+          # only where you test it is worse than none.
+          PROMPT_REPO="$PROMPT_REPO_IN"
+          PROMPT_REF="$PROMPT_REF_IN"
 
           # Fail loudly rather than fall back to a copy in the calling repo. A
           # fallback is how you get four copies again: it would work silently in
           # whichever repo still had a stale local file, which is precisely the
           # state this change exists to end.
+          # Both carry non-empty defaults, so this only fires when a caller
+          # passes one as an empty string — the "empty is not a value" case that
+          # would otherwise resolve to `repos//contents/...`.
           if [ -z "$PROMPT_REPO" ] || [ -z "$PROMPT_REF" ]; then
-            echo "::error::Could not resolve the prompt source (job_workflow_ref='${JOB_WORKFLOW_REF:-}', job_workflow_sha='${JOB_WORKFLOW_SHA:-}'). Pass prompt_repo/prompt_ref explicitly."
+            echo "::error::prompt_repo and prompt_ref must both be non-empty (got repo='${PROMPT_REPO}', ref='${PROMPT_REF}'). Omit them to take the defaults."
             exit 1
           fi
 

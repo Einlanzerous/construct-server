@@ -56,9 +56,14 @@ Then add two files to the repo itself:
 Do **not** add a `concurrency:` key. The shared workflow owns it, and that key
 is the accumulated result of three separate silent-pass incidents.
 
-Do **not** copy `review-prompt.md`. The workflow fetches it from this repo at
-the exact commit it is itself running, so the procedure and the workflow can
-never be a version apart.
+Do **not** copy `review-prompt.md`. The workflow fetches it from this repo —
+`prompt_repo` / `prompt_ref`, defaulting to `Einlanzerous/construct-server@main`.
+
+This was meant to derive from `github.job_workflow_sha` so the procedure would
+pin to the workflow commit automatically. That context and `job_workflow_ref` are
+both **empty** on this Actions version (verified on argosy#211 and signet#37), so
+they are explicit inputs instead: **if you pin `uses: ...@<tag>`, pin
+`prompt_ref` to the same tag**, because nothing links them for you.
 
 ## Inputs
 
@@ -74,7 +79,7 @@ never be a version apart.
 | `runs_on` | `self-hosted` | must reach Switchyard |
 | `timeout_minutes` | `30` | what actually bounds a runaway |
 | `release_branch_prefix` / `release_files` | `release-please--` / changelog + manifest | the release-PR skip |
-| `prompt_repo` / `prompt_ref` | derived | override, for testing a prompt change |
+| `prompt_repo` / `prompt_ref` | `Einlanzerous/construct-server` / `main` | where the procedure is fetched from |
 
 ### `sensitive_paths` is the one that needs thought
 
@@ -84,6 +89,24 @@ everything is the same as one matching nothing**. SGNT-36 is signet doing
 exactly that with `^(internal/|cmd/|...)`, which is its entire source tree: every
 PR got the expensive tier, and the tier stopped carrying information. The
 workflow refuses an empty value outright rather than guessing a default.
+
+### Testing a change to `review-prompt.md`
+
+`prompt_ref` defaults to `main`, so **a prompt edit is not exercised by its own
+PR** — it goes live in all four repos when it merges. That is a deliberate
+trade-off, not an oversight: fetching the procedure from the PR head would let a
+pull request rewrite the reviewer's own instructions, and `review-prompt.md` is
+not on `claude-code-action`'s restore list, so nothing else would stop it.
+
+To exercise one before merging, point a caller at the PR head for a single run
+and revert it in the same PR:
+
+```yaml
+    with:
+      prompt_ref: ${{ github.event.pull_request.head.sha }}
+```
+
+Read what it produces knowing the reviewer was running the prompt under review.
 
 ### `max_turns` is a tripwire, not a budget
 
