@@ -22,6 +22,8 @@ anything deploys or gets versioned.
 - `caddy/`, edge routing — public 443 paths and Cloudflare Access.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
+  Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
+  of Switchyard's delivery matrix (SERV-111 — see Invariants).
 - `scripts/check-compose-drift.sh` — the SERV-8 guardrail (see Invariants).
 - `wiki/` — the generated estate wiki (SERV-101). A TypeScript generator plus a
   VitePress renderer; `wiki/docs/` is **generated and wiped on every run**. Design
@@ -326,6 +328,36 @@ anything deploys or gets versioned.
   **comments**, which are the best documentation in that file and which
   `docker compose config` discards. Build it in a container (`make wiki-build`), not
   against host node.
+- **The delivery ledger gets ONE host-side cron, whatever the producer count**
+  (SERV-111). `delivery-prober.timer` runs `scripts/probe-delivery.sh` every 5
+  minutes, which probes the **dev** tier over loopback and posts what it saw to
+  Switchyard. It exists on the host because Switchyard's in-process reconciler
+  sits on `construct_net` and dev sits on `construct_dev_net` — it covers prod
+  and structurally cannot cover dev, and bridging the two to fix that would undo
+  SERV-106/107 for a status page. The host can reach both, so the probe runs here
+  and posts inward. **A second producer attaches as another `ExecStart` on that
+  same unit** — SWY-194's container-inspect collector is the next one — sharing
+  the timer, the `EnvironmentFile` and the one token. Two host jobs with two
+  configs writing one ledger is how they disagree at 3am with nothing to say
+  which was stale; `probe-delivery.sh` takes the in-image script path as `$1` so
+  the second producer reuses it.
+  **Its token carries `deployments:observe` and never `deployments:write`.** A
+  report is a claim, an observation corroborates it, and
+  `claimed_not_confirmed` only means something if corroborating is the harder of
+  the two — a prober that could report would confirm its own claims. Mint it with
+  `scripts/mint-prober-token.sh`, which **asserts** the granted scopes: the server
+  defaults to `admin` when `scopes` is omitted, so a typo in the field *name*
+  mints a working admin token and nothing ever surfaces it.
+  The prober script itself is **not vendored here** — it lives in switchyard's
+  `server/scripts/` and is run out of the image the live switchyard container is
+  already using, so prober and ingest are always the same build. That is also why
+  `scripts/**` is a `deploy.yml` path trigger: the unit executes
+  `$DEPLOY_ROOT/scripts/probe-delivery.sh`, so a wrapper fix that never deploys
+  leaves the box running the old copy.
+  **Adding a target requires the service to exist in Switchyard's inventory
+  first.** A probe that got no usable answer deliberately does not auto-register
+  one (SWY-284) — "down" and "misspelled" are indistinguishable from outside — so
+  an unknown name 404s every run, which the wrapper treats as a hard failure.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.
@@ -347,6 +379,11 @@ There is no test suite — this repo is configuration, so validation is mostly
   on anything unhealthy and lists every container with no healthcheck at all.
   `deploy.yml` runs it as a post-deploy gate (SERV-102). `make dev-health-check`
   is the dev project's copy, run by `deploy-dev.yml`.
+- `make probe-status` after touching the prober or its role — it shows the timer
+  *and* the last oneshot run, which is the pair that matters: the failure mode is
+  the service landing in `failed` while the timer keeps cheerfully firing it.
+  `make probe-delivery` runs one probe now, using the deployed credential rather
+  than one you exported by hand.
 - `make versions` / `make dev-versions` to answer *what is actually running* — the
   image ref, the resolved digest, and the commit each image was built from. **Read
   the revision column, not the digest**: the publish workflow builds the same source

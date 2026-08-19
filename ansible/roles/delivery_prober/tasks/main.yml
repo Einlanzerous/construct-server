@@ -1,0 +1,100 @@
+---
+# Delivery prober — host-side producer for the dev column of Switchyard's
+# delivery matrix (SERV-111). See defaults/main.yml for why it lives on the host
+# rather than inside Switchyard.
+
+- name: Check whether the prober wrapper has been deployed
+  stat:
+    path: "{{ delivery_prober_script }}"
+  register: delivery_prober_script_stat
+
+# The wrapper arrives via deploy.yml's rsync, not this role. On a cold host
+# ansible runs before any deploy has happened, so install the wiring and leave
+# the timer stopped rather than scheduling a job with nothing to execute.
+- name: Warn if the prober wrapper is missing
+  debug:
+    msg: >-
+      {{ delivery_prober_script }} not found — installing the unit and timer but
+      leaving them stopped. It is deployed by .github/workflows/deploy.yml
+      (rsync of scripts/); re-run this role after the first deploy.
+  when: not delivery_prober_script_stat.stat.exists
+
+- name: Create the delivery prober secrets directory
+  file:
+    path: "{{ delivery_prober_env_dir }}"
+    state: directory
+    owner: root
+    group: "{{ delivery_prober_user }}"
+    mode: "0750"
+
+# Guarded the same way the signet role guards SIGNET_API_TOKEN, and for the same
+# reason: an absent token means "leave whatever is there", never "clear it". The
+# default is empty, so without this guard any run reaching here without secrets
+# loaded would overwrite a working token with a blank one — and a blank token is
+# not a value, it is a prober that 401s every five minutes while looking
+# configured.
+- name: Deploy the delivery prober environment file
+  template:
+    src: prober.env.j2
+    dest: "{{ delivery_prober_env_file }}"
+    owner: "{{ delivery_prober_user }}"
+    group: "{{ delivery_prober_user }}"
+    mode: "0600"
+  no_log: true
+  notify: Restart delivery prober timer
+  when: delivery_prober_token | default("", true) | length > 0
+
+- name: Note that the prober token was left untouched
+  debug:
+    msg: >-
+      delivery_prober_token is empty (no sops key on this host?) — leaving
+      {{ delivery_prober_env_file }} as-is rather than blanking it. Mint one with
+      scripts/mint-prober-token.sh and set it in ansible/secrets.sops.yml.
+  when: delivery_prober_token | default("", true) | length == 0
+
+- name: Deploy the delivery prober systemd unit
+  template:
+    src: delivery-prober.service.j2
+    dest: /etc/systemd/system/delivery-prober.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd daemon
+    - Restart delivery prober timer
+
+- name: Deploy the delivery prober systemd timer
+  template:
+    src: delivery-prober.timer.j2
+    dest: /etc/systemd/system/delivery-prober.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd daemon
+    - Restart delivery prober timer
+
+- name: Flush handlers so the units are reloaded before enable/start
+  meta: flush_handlers
+
+# Both conditions, because either one alone yields a timer that fires into a
+# guaranteed failure every five minutes — which is worse than not running, since
+# it buries a real failure in noise.
+- name: Enable and start the delivery prober timer
+  systemd:
+    name: delivery-prober.timer
+    enabled: true
+    state: started
+  when:
+    - delivery_prober_script_stat.stat.exists
+    - delivery_prober_token | default("", true) | length > 0
+
+- name: Note that the delivery prober was left stopped
+  debug:
+    msg: >-
+      delivery-prober.timer installed but not started — {{ 'the wrapper is not
+      deployed yet' if not delivery_prober_script_stat.stat.exists else
+      'delivery_prober_token is empty (set it in secrets.sops.yml)' }}.
+  when: >-
+    not (delivery_prober_script_stat.stat.exists
+    and (delivery_prober_token | default("", true) | length > 0))

@@ -1,0 +1,52 @@
+# {{ ansible_managed }}
+# Delivery prober — observes the dev tier and posts what it saw to Switchyard
+# (SERV-111). Triggered by delivery-prober.timer; carries no [Install] section
+# because the timer is what gets enabled, not this.
+[Unit]
+Description=Probe the dev tier and report observed versions to Switchyard
+Documentation=https://github.com/Einlanzerous/construct-server/blob/main/docs/delivery-pipeline.md
+# The wrapper reads the switchyard image off the running container and then runs
+# a container of its own, so dockerd has to exist. Without this a reboot that
+# wins the race against Docker fails the first probe for no interesting reason.
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User={{ delivery_prober_user }}
+Group={{ delivery_prober_user }}
+# Missing file => the unit starts and the wrapper fails with "SWITCHYARD_URL is
+# unset or empty", which names the actual problem. Without the leading `-`
+# systemd refuses to start and reports a generic status=203 instead.
+EnvironmentFile=-{{ delivery_prober_env_file }}
+
+# ── the one-cron seam (SERV-111) ────────────────────────────────────────────
+#
+# SWY-194's container-inspect collector is a SECOND producer for this same
+# ledger and will need to run on this host on a schedule. It belongs HERE, as
+# another ExecStart on this unit, sharing this timer, this EnvironmentFile and
+# this one observe-scoped token:
+#
+#   ExecStart={{ delivery_prober_script }} server/scripts/<collector>.ts
+#
+# NOT as its own timer + env file + token. Two host jobs posting to one ledger
+# with two configs is how the two silently disagree about what dev is running,
+# with nothing to say which of them was stale.
+#
+# Note that a second ExecStart only runs if the first SUCCEEDS. That ordering is
+# correct for these two — tier A establishes what a service reports about itself
+# and tier B fills the silence — but it does mean a failing prober hides the
+# collector. Prefix with `-` if they should be independent.
+ExecStart={{ delivery_prober_script }}
+
+# A probe is about NOW. Letting one run pile into the next would queue stale
+# observations behind a hung one, and the ingest would record them in order.
+TimeoutStartSec=120
+
+# Hardening. `full` rather than `strict`: this talks to the Docker socket under
+# /run, which strict would remount read-only and break. Reaching the socket is
+# root-equivalent anyway, so this is tidiness, not a boundary.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true

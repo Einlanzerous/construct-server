@@ -335,6 +335,85 @@ restarts **exited** containers and not unhealthy ones.*
 
 **10. Close.** Ticket resolution → `released`.
 
+## Who produces the delivery matrix
+
+The matrix at `/delivery` has **three** producers, and they are not
+interchangeable. Knowing which one owns a cell is how you tell "the service is
+down" from "nothing has looked at it".
+
+| Producer | Covers | Runs | Scope |
+|---|---|---|---|
+| Reports | claimed versions | Switchyard, on deploy | `deployments:write` |
+| In-process reconciler | **prod** observations | inside the switchyard container | n/a (internal) |
+| Host prober (SERV-111) | **dev** observations | `delivery-prober.timer` on this box | `deployments:observe` |
+
+### Why dev needs a producer on the host
+
+The reconciler runs on `construct_net`; dev runs on `construct_dev_net`. The two
+share nothing, which is what makes "dev cannot reach prod" true rather than
+merely intended (SERV-106/107). So the reconciler covers prod and **structurally
+cannot** cover dev — and bridging the networks to let it would undo a deliberate
+security boundary in order to populate a status page.
+
+The host can reach both: dev publishes on `127.0.0.1`. So the probe runs here and
+posts inward. Switchyard never crosses the boundary; it receives.
+
+`dev` is seeded `probe_mode: external`, which is what makes an outside writer
+legal at all — the ingest refuses probe results aimed at an `internal`
+environment, so a misconfigured prober cannot fight the reconciler for prod.
+
+### The scope split is the point
+
+The prober's token carries `deployments:observe` and **not**
+`deployments:write`. A report is a claim; an observation corroborates it. The
+matrix's `claimed_not_confirmed` state only means something if corroborating is
+the harder of the two — a prober that could also report would be able to confirm
+its own claims. `scripts/mint-prober-token.sh` asserts the granted scopes rather
+than trusting them, because the server defaults to `admin` when `scopes` is
+omitted, so a typo in the field *name* mints a working admin token silently.
+
+### One cron, however many producers
+
+SWY-194's container-inspect collector is a second host-side producer for the same
+ledger. It attaches as another `ExecStart` on `delivery-prober.service`, sharing
+the timer, the `EnvironmentFile` and the one observe-scoped token. It does **not**
+get its own timer: two host jobs with two configs posting to one ledger is how
+the two disagree about what dev is running with nothing to say which was stale.
+`scripts/probe-delivery.sh` takes the in-image script path as `$1` for exactly
+this reason.
+
+### What the prober can see today
+
+Only `switchyard`. That is a limitation of the *inventory*, not the schedule:
+
+- **argosy** answers `/healthz` with plain-text `ok`. Both probers classify a
+  non-JSON 200 as `unreachable`, so a healthy argosy renders as down. Its real
+  version lives at `/api/v1/ping`, which is what `health_path` exists to point
+  at — but it cannot self-register, because registering needs a clean probe and a
+  clean probe needs the `health_path` that registration would set.
+- **lyceum** and **purser** answer with `{status, service}` and no version.
+  Honest `no_version`; neither has adopted the SWY-192 health contract.
+- Registering any of them also needs `service_environments.host_override` to have
+  a writer. **No route sets that column.** The reconciler probes the full
+  environment × service cross-product using prod's `host_template`
+  (`http://{service}:4002`) — correct for switchyard, wrong for argosy (8096),
+  lyceum (4005) and purser (4006). Registering them today would paint three
+  *prod* cells `unreachable` for services that are running fine.
+
+So the targets list ships with switchyard alone and the rest commented in
+`ansible/roles/delivery_prober/defaults/main.yml`, one line each, to be enabled
+as SWY-194 lands them.
+
+### A dead prober is not yet visible
+
+The unit lands in `failed` if a probe result cannot be recorded — `make
+probe-status` shows both the timer and the last run. But a timer that was never
+installed, or a token that expired, leaves the page confident and stale: the
+cells keep their last observed version and nothing reads a frozen `last_probe_at`
+as a signal. That is the SWY-128 shape, and the real fix is environment-level
+observer freshness in the matrix itself (**SWY-285**), which this ticket unblocks
+by making a prober exist to die.
+
 ## Feature toggles (stretch)
 
 Lives in Switchyard: a `feature_flags` table (key, description, per-environment state,

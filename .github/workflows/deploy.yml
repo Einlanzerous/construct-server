@@ -17,6 +17,15 @@ on:
       # (SERV-78, SERV-79) will commit it — so a push that repoints a tag has to be
       # able to reach the box on its own.
       - 'versions.env'
+      # scripts/ is rsynced to the deploy root and executed FROM there — by the
+      # Makefile targets, and since SERV-111 by delivery-prober.service, which
+      # runs $DEPLOY_ROOT/scripts/probe-delivery.sh every five minutes. Without
+      # this path a script fix merges to main and the box keeps running the old
+      # copy until some unrelated change happens to trigger a deploy: the same
+      # "editing a checkout changes nothing" hazard SERV-76 fixed for compose,
+      # one directory over. Note deploy.yml itself runs these from the CHECKOUT,
+      # deliberately, so this trigger is about the copy other things execute.
+      - 'scripts/**'
       # cf-access-guard is the one first-party service BUILT on the box rather than
       # pulled (SERV-106), which makes its source a stack file. Without this a guard
       # change merges and then waits for an unrelated deploy to carry it — and since

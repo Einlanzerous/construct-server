@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions deploy-scope db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
@@ -107,6 +107,29 @@ edge-auth-check:
 #        make versions svc=purser (one service)
 versions:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/report-versions.sh $(svc)
+
+# Run the delivery prober once, right now, exactly as the timer does (SERV-111). Reads
+# the same /etc/delivery-prober/prober.env the unit does, so it proves the deployed
+# credential rather than one you exported by hand. This is the fast way to answer "is the
+# dev column stale because the prober is broken, or because dev has not moved?".
+# Usage: make probe-delivery
+probe-delivery:
+	@test -r /etc/delivery-prober/prober.env || { \
+	  echo "No readable /etc/delivery-prober/prober.env."; \
+	  echo "Provision it:  ansible-playbook ansible/site.yml --tags delivery_prober"; \
+	  echo "Mint its token: ./scripts/mint-prober-token.sh"; \
+	  exit 1; \
+	}
+	@set -a; . /etc/delivery-prober/prober.env; set +a; \
+	  $(DEPLOY_ROOT)/scripts/probe-delivery.sh
+
+# Is the prober alive, and when did it last actually run? (SERV-111) `systemctl status`
+# on the TIMER says only that the schedule exists; the failure that matters is the oneshot
+# landing in `failed` while the timer keeps cheerfully firing it. Both are shown here.
+probe-status:
+	@systemctl list-timers delivery-prober.timer --all --no-pager || true
+	@echo
+	@systemctl status delivery-prober.service --no-pager --lines=20 || true
 
 # What would deploying this commit range actually pull and recreate? (SERV-109) A promote
 # or rollback commit touches versions.env and nothing else, and deploy.yml scopes that case

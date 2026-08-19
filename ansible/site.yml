@@ -77,6 +77,12 @@
     - github_runner
     - role: signet
       tags: signet
+    # Tagged so it can be applied on its own: the token it needs is the only
+    # secret it consumes, so `--tags delivery_prober -e delivery_prober_token=...`
+    # works on a host without the sops key (the pre_task fail above is untagged
+    # and therefore skipped on a tagged run).
+    - role: delivery_prober
+      tags: delivery_prober
     - role: sunshine
       tags: sunshine
 
