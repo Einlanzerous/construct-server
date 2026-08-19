@@ -1,0 +1,16 @@
+---
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: true
+
+# Restart the TIMER, not the service. Restarting the oneshot service would fire
+# an immediate probe as a side effect of a config change; restarting the timer
+# re-reads the schedule and leaves the next run where it belongs. The service
+# picks up a changed EnvironmentFile on its next activation either way.
+- name: Restart delivery prober timer
+  systemd:
+    name: delivery-prober.timer
+    state: restarted
+  when:
+    - delivery_prober_script_stat.stat.exists
+    - delivery_prober_token | default("", true) | length > 0

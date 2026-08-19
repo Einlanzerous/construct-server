@@ -1,0 +1,76 @@
+---
+# Delivery prober — the host-side producer for the dev column of Switchyard's
+# delivery matrix (SERV-111).
+#
+# Runs as a user unit-less system timer under an account in the `docker` group:
+# the job is a short `docker run` against the switchyard image, so it needs the
+# socket and nothing else.
+delivery_prober_user: magos
+
+# The wrapper the unit executes. It lives in the REPO (scripts/), not in this
+# role, and reaches the box via deploy.yml's rsync to the deploy root — the same
+# split every other stack file uses: ansible bootstraps the host-level wiring
+# (unit, timer, credential), the workflow owns steady state. That means a fix to
+# the probing logic is an ordinary PR and deploy rather than an ansible run.
+delivery_prober_script: "{{ deploy_root }}/scripts/probe-delivery.sh"
+
+# Where the prober posts. Loopback: prod switchyard-frontend publishes 4002 on
+# the host and proxies /healthz and /v1/* to the backend.
+delivery_prober_switchyard_url: "http://localhost:4002"
+
+# The environment being observed. `dev` is seeded `probe_mode: external`, which
+# is what makes it legal for an outside prober to write its probe state at all —
+# the ingest refuses probe results for an `internal` environment so a
+# misconfigured prober cannot fight the in-process reconciler for prod.
+delivery_prober_environment: dev
+
+# Match Switchyard's own DELIVERY_PROBE_INTERVAL_MS (5 min default). The ingest
+# deduplicates an unchanged observation, so over-polling costs requests, not rows.
+delivery_prober_interval: 5min
+
+# ── targets ─────────────────────────────────────────────────────────────────
+#
+# name -> base URL, rendered into PROBE_TARGETS as `name=url,name=url`. The name
+# must match a service in Switchyard's inventory EXACTLY: a probe that got no
+# usable answer deliberately does not auto-register one (SWY-284), because "down"
+# and "misspelled" are indistinguishable from outside. An unknown name is a 404
+# on every run, and the wrapper treats that as a hard failure.
+#
+# Only switchyard is listed, and that is a current limitation rather than the
+# intended end state. As of 2026-08-18 the inventory holds exactly one service.
+# The other three dev services CANNOT be added yet:
+#
+#   argosy  http://127.0.0.1:18096   needs health_path=/api/v1/ping — /healthz
+#                                    answers plain-text `ok`, which both probers
+#                                    classify as `unreachable`. It cannot
+#                                    self-register: registering requires a clean
+#                                    probe, and a clean probe requires the
+#                                    health_path that registration would set.
+#   lyceum  http://127.0.0.1:14005   answers {"status":"ok","service":"lyceum"} —
+#   purser  http://127.0.0.1:14006   and {"service":"purser","status":"ok"}.
+#                                    Honest `no_version`; neither has adopted the
+#                                    SWY-192 health contract.
+#
+# Adding any of them ALSO needs `service_environments.host_override` to have a
+# writer. Registering a first_party service creates its prod pair too, and the
+# in-process reconciler probes the full environment x service cross-product using
+# prod's `host_template` (`http://{service}:4002`) — right for switchyard, wrong
+# for argosy (8096), lyceum (4005) and purser (4006). Registering them today
+# paints three PROD cells `unreachable` for services that are running fine.
+# Tracked in SWY-194; uncomment each line as its service lands.
+delivery_prober_targets:
+  switchyard: "http://127.0.0.1:14002"
+  # argosy: "http://127.0.0.1:18096"
+  # lyceum: "http://127.0.0.1:14005"
+  # purser: "http://127.0.0.1:14006"
+
+# ── the credential ──────────────────────────────────────────────────────────
+#
+# `deployments:observe` and nothing else — see scripts/mint-prober-token.sh for
+# why that split is load-bearing. Empty here so a plain checkout ships no
+# placeholder; supply it from ansible/secrets.sops.yml. An empty value means the
+# role installs the unit and timer but does NOT start them, rather than starting
+# a job that would fail every five minutes.
+delivery_prober_env_dir: /etc/delivery-prober
+delivery_prober_env_file: "{{ delivery_prober_env_dir }}/prober.env"
+delivery_prober_token: ""

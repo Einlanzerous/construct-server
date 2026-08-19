@@ -1,0 +1,25 @@
+# {{ ansible_managed }}
+# Schedule for the delivery prober (SERV-111).
+[Unit]
+Description=Probe the dev tier for Switchyard's delivery matrix every {{ delivery_prober_interval }}
+Documentation=https://github.com/Einlanzerous/construct-server/blob/main/docs/delivery-pipeline.md
+
+[Timer]
+# Not at boot: the stack has to be up first, and the wrapper refuses to run
+# without the switchyard container. Two minutes is comfortably past compose.
+OnBootSec=2min
+OnUnitActiveSec={{ delivery_prober_interval }}
+
+# Deliberately NOT Persistent=true. Persistent replays a run missed while the
+# host was down, which is meaningless here — an observation is a claim about the
+# present, and posting a stale one on boot would write a version that may already
+# be wrong. Missing a probe costs one cycle of freshness and nothing else.
+
+# Default accuracy is 1min, which would smear a 5min interval by 20%.
+AccuracySec=15s
+# Keep the host prober off the same instant as switchyard's in-process
+# reconciler, which runs on its own 5min cycle inside the container.
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target
