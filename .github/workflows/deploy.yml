@@ -275,7 +275,36 @@ jobs:
             echo "DEPLOY_SCOPE=FULL" >> "$GITHUB_ENV"
           fi
 
+      - name: Read the promote/rollback provenance off the commit (SERV-117)
+        # promote.yml holds the two facts the delivery ledger most wants and has
+        # nowhere to put them: `kind` (promote | rollback) and a REQUIRED `reason`.
+        # Its own input description says the kind is "recorded in the commit and the
+        # ledger" — until now only the first half was true, because promote.yml does
+        # not deploy. It commits versions.env and lets this workflow's path trigger
+        # fire, so this is the run that has to carry them forward.
+        #
+        # Read as git trailers rather than by parsing the subject line: a reason is
+        # free text written by a human under pressure during a rollback, and a
+        # subject-line regex would mangle the ones containing a colon.
+        #
+        # Empty on an ordinary merge, which is correct — there is no promote reason
+        # for a deploy nobody promoted, and the ledger omits the note rather than
+        # inventing one.
+        run: |
+          set -uo pipefail
+          kind="$(git log -1 --format='%(trailers:key=Delivery-Kind,valueonly)' | head -1 | tr -d '\r')"
+          reason="$(git log -1 --format='%(trailers:key=Delivery-Reason,valueonly)' | head -1 | tr -d '\r')"
+          echo "DELIVERY_KIND=${kind}" >> "$GITHUB_ENV"
+          # The ledger bounds `note` at 500 characters and the API rejects a longer
+          # one outright. Trim here so a verbose reason costs its tail rather than
+          # the whole report.
+          echo "DELIVERY_NOTE=${reason:0:500}" >> "$GITHUB_ENV"
+          if [ -n "$kind" ]; then
+            echo "This deploy is a ${kind}: ${reason:-<no reason given>}"
+          fi
+
       - name: Deploy Stack
+        id: deploy
         # Deliberately NOT --force-recreate in either path: compose recreates only what
         # actually drifted, so the blast radius already matches the intent. Do not add it —
         # it would rebuild every container on the box, including the shared postgres, on
@@ -418,6 +447,7 @@ jobs:
         run: sleep 5 && docker compose exec -T -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres postgres bash < ./db/init-db.sh
 
       - name: Assert nothing is unhealthy
+        id: healthy
         # Until now a deploy reported success as soon as `up -d` returned, which says
         # only that compose started containers — not that any of them work. Docker
         # computes health and then acts on none of it (`restart: unless-stopped` restarts
@@ -448,6 +478,144 @@ jobs:
         # unhealthy container it is, rather than as a mysterious 500 in a probe.
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: ./scripts/check-edge-auth.sh
+
+      # ── Report this deploy to the Switchyard delivery ledger (SERV-117) ─────────
+      #
+      # The push half of SWY-191's two-producer ledger. The reconciler already
+      # observes what is RUNNING; this records how it got there — the gate result,
+      # the commit count, the ticket keys, the actor and a link to this run, none of
+      # which any observer can derive.
+      #
+      # THREE RULES, all of them about not lying:
+      #
+      #   1. Report what was ACTUALLY deployed. An `image-updated` dispatch carrying
+      #      4.14.0 still deploys whatever `versions.env` pins, which may be 4.13 —
+      #      and the container behind that pin is running 4.13.1. The version comes
+      #      off the running image's `org.opencontainers.image.version` label, which
+      #      agrees with /healthz character for character; the pin does not.
+      #
+      #   2. Attach the release enrichment ONLY when the dispatched version is the
+      #      one that went live. A commit count belonging to a release still sitting
+      #      behind the pin is worse than no commit count.
+      #
+      #   3. Never fail the deploy. The ledger observes deploys; it does not gate
+      #      them. Every step here is `continue-on-error` or soft-failing, and the
+      #      action itself warns rather than exits on an unreachable Switchyard.
+      #
+      # `if: always()` because a FAILED deploy is the one most worth recording — the
+      # matrix has no way to show it otherwise, and 2026-08-15's silent breakage
+      # (SERV-102) is exactly what a `failed` row is for.
+      - name: Resolve what was deployed
+        id: reportable
+        if: always()
+        continue-on-error: true
+        env:
+          SWITCHYARD_URL: http://localhost:4002
+          SWITCHYARD_TOKEN: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          DISPATCH_IMAGE: ${{ github.event.client_payload.image }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          set -uo pipefail
+
+          # A NONE scope pulled nothing and recreated nothing pinned. There is no
+          # deploy to report, and reports are deliberately not deduplicated the way
+          # observations are — so a row here would be a row per no-op commit.
+          if [ "${DEPLOY_SCOPE:-FULL}" = "NONE" ]; then
+            echo "scope is NONE — nothing was deployed, nothing to report."
+            exit 0
+          fi
+
+          if [ -z "${SWITCHYARD_TOKEN:-}" ]; then
+            echo "::warning::SWITCHYARD_DEPLOY_TOKEN is not set — this deploy will not reach the ledger."
+            exit 0
+          fi
+
+          # SCOPED names the services that actually moved; FULL means the stack.
+          # `delivery-reportable.sh` then drops anything the ledger does not track,
+          # so a service with no observation behind it never becomes a phantom row.
+          if [ "${DEPLOY_SCOPE:-FULL}" = "SCOPED" ]; then
+            read -r -a scoped <<< "${DEPLOY_SERVICES:-}"
+            lines="$(./scripts/delivery-reportable.sh "${scoped[@]}" 2>&1 >/tmp/reportable.txt || true)"
+          else
+            lines="$(./scripts/delivery-reportable.sh 2>&1 >/tmp/reportable.txt || true)"
+          fi
+          printf '%s\n' "$lines"
+          reportable="$(cat /tmp/reportable.txt 2>/dev/null || true)"
+
+          if [ -z "$reportable" ]; then
+            echo "::warning::nothing reportable — the ledger tracks none of the deployed services, or it is unreachable."
+            exit 0
+          fi
+
+          # Did the release that triggered this actually go live? Only then does its
+          # commit count, ticket list and gate result describe what is running.
+          enriched=""
+          if [ -n "${DISPATCH_IMAGE:-}" ] && [ -n "${DISPATCH_VERSION:-}" ]; then
+            match="$(printf '%s\n' "$reportable" | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
+            if [ -n "$match" ]; then
+              enriched="$match"
+              echo "dispatch matched what went live: $match"
+            else
+              echo "dispatch was ${DISPATCH_IMAGE}=${DISPATCH_VERSION}, which is not what is running — reporting without its enrichment."
+            fi
+          fi
+
+          plain="$reportable"
+          if [ -n "$enriched" ]; then
+            plain="$(printf '%s\n' "$reportable" | grep -vx -- "$enriched" || true)"
+          fi
+
+          # `status` describes the DEPLOY, not the container. assert-healthy is part
+          # of the deploy: a stack that came up broken did not succeed.
+          if [ "${{ steps.deploy.outcome }}" != "success" ] || [ "${{ steps.healthy.outcome }}" != "success" ]; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          elif [ "${DELIVERY_KIND:-}" = "rollback" ]; then
+            # A successful rollback is not a plain success. The matrix renders a
+            # rolled-back production row with its own alert, which is the whole
+            # point: prod is running deliberately-older code and the page should
+            # say so rather than showing a calm green row at an unexpected version.
+            echo "status=rolled_back" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=succeeded" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "enriched=${enriched}"
+            echo "plain<<PLAIN_EOF"
+            printf '%s\n' "$plain"
+            echo "PLAIN_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report the released service, with its provenance
+        if: always() && steps.reportable.outputs.enriched != ''
+        continue-on-error: true
+        uses: Einlanzerous/switchyard/.github/actions/report-deploy@main
+        with:
+          token: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          environment: prod
+          service: ${{ github.event.client_payload.image }}
+          version: ${{ github.event.client_payload.version }}
+          status: ${{ steps.reportable.outputs.status }}
+          sha: ${{ github.event.client_payload.sha }}
+          commit-count: ${{ github.event.client_payload.commit_count }}
+          ticket-keys: ${{ toJson(github.event.client_payload.ticket_keys) }}
+          gate-passed: ${{ github.event.client_payload.gate_passed }}
+          gate-total: ${{ github.event.client_payload.gate_total }}
+          gate-run-url: ${{ github.event.client_payload.gate_run_url }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          note: ${{ env.DELIVERY_NOTE }}
+
+      - name: Report everything else this deploy recreated
+        if: always() && steps.reportable.outputs.plain != ''
+        continue-on-error: true
+        uses: Einlanzerous/switchyard/.github/actions/report-deploy@main
+        with:
+          token: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          environment: prod
+          services: ${{ steps.reportable.outputs.plain }}
+          status: ${{ steps.reportable.outputs.status }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          note: ${{ env.DELIVERY_NOTE }}
 
       - name: Prune Images
         # Clean up old docker images to save disk space

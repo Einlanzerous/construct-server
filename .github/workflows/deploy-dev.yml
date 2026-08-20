@@ -191,6 +191,26 @@ jobs:
         # inside a make recipe.
         run: docker network create construct_dev_net 2>/dev/null || true
 
+      - name: Snapshot what dev is running, before the pull (SERV-117)
+        # Half of the answer to "did this run actually deploy anything?". This
+        # workflow runs HOURLY, and a tick that pulls nothing has deployed nothing —
+        # but the delivery ledger deliberately does NOT deduplicate reports the way
+        # it deduplicates observations, because a deploy that really happened twice
+        # is two events. So a reporter that fired every tick would append a row an
+        # hour, for ever, and bury the handful of rows that are real deploys.
+        #
+        # Compared on the image DIGEST rather than the tag: dev floats on `latest`,
+        # so the tag is the same string on both sides of a pull that moved the whole
+        # tier. That is the same trap the pull step above documents.
+        #
+        # Empty on a cold dev root, which reads correctly as "everything here is new".
+        continue-on-error: true
+        env:
+          DEPLOY_ROOT: ${{ env.DEV_ROOT }}
+          COMPOSE_FILE: docker-compose.dev.yml
+          COMPOSE_PROJECT: construct-server-dev
+        run: ./scripts/delivery-facts.sh > /tmp/dev-facts-before.tsv || true
+
       - name: Pull the images dev tracks
         # This is what actually moves dev forward, and it is not optional. Dev floats on
         # `latest`, so the image STRING in the compose file never changes — compose compares
@@ -214,6 +234,7 @@ jobs:
         run: make dev-up
 
       - name: Assert nothing in dev is unhealthy
+        id: dev-health
         # Docker computes health and acts on none of it, in dev exactly as in prod
         # (SERV-102). Most dev services declare no healthcheck at all, so this mostly
         # catches the case that matters here — a service that crash-looped or exited — and
@@ -257,3 +278,127 @@ jobs:
             ./scripts/report-versions.sh --markdown
             printf '\nTriggered by `%s`.\n' "$GITHUB_EVENT_NAME"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Report the dev deploy to the Switchyard ledger (SERV-117) ───────────────
+      #
+      # This is the case PULL CAN NEVER COVER. Dev floats on `latest`, so a container
+      # inspect yields a digest and no version, and the epic wrote off the entire dev
+      # column as version-unknown for that reason. It is not: the image carries
+      # `org.opencontainers.image.version` from the release that built it, so a
+      # REPORT can name the version even though the tag cannot. Verified on the live
+      # tier — dev switchyard is 4.14.0 while prod is 4.13.1, which is precisely the
+      # drift this epic exists to make visible.
+      #
+      # Only what actually moved. See the before-snapshot above for why an hourly
+      # cron must not report on every tick.
+      - name: Resolve what this run actually deployed
+        id: reportable
+        if: always()
+        continue-on-error: true
+        env:
+          SWITCHYARD_URL: http://localhost:4002
+          SWITCHYARD_TOKEN: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          DEPLOY_ROOT: ${{ env.DEV_ROOT }}
+          COMPOSE_FILE: docker-compose.dev.yml
+          COMPOSE_PROJECT: construct-server-dev
+          # The ledger holds ONE row per service with the environment as the other
+          # axis, so dev's `switchyard-dev` container is prod's `switchyard` service
+          # seen in a second environment. The suffix is a compose-project artefact.
+          LEDGER_NAME_STRIP_SUFFIX: -dev
+          DISPATCH_IMAGE: ${{ github.event.client_payload.image }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "${SWITCHYARD_TOKEN:-}" ]; then
+            echo "::warning::SWITCHYARD_DEPLOY_TOKEN is not set — this deploy will not reach the ledger."
+            exit 0
+          fi
+
+          ./scripts/delivery-facts.sh > /tmp/dev-facts-after.tsv || true
+          # The snapshot step is continue-on-error, so its file may not exist at all.
+          touch /tmp/dev-facts-before.tsv
+
+          # A container is "deployed" by this run when its image digest differs from
+          # the snapshot taken before the pull — including the case where it had no
+          # row before, which is a container that did not exist.
+          #
+          # Keyed on FILENAME, not the usual `NR == FNR`. With an EMPTY before-file
+          # that idiom silently inverts: FNR resets per file, so with no records from
+          # the first, NR == FNR stays true for every line of the second and the whole
+          # after-list is absorbed as "before" — reporting nothing on exactly the cold
+          # start where everything is new.
+          changed="$(awk -F'\t' -v BEFORE=/tmp/dev-facts-before.tsv '
+            FILENAME == BEFORE { before[$1] = $3; next }
+            { if (!($1 in before) || before[$1] != $3) print }
+          ' /tmp/dev-facts-before.tsv /tmp/dev-facts-after.tsv)"
+
+          if [ -z "$changed" ]; then
+            echo "No image moved — this run deployed nothing, so there is nothing to report."
+            exit 0
+          fi
+          echo "Changed since the pull:"
+          printf '%s\n' "$changed" | cut -f1,2 | sed 's/^/  /'
+
+          reportable="$(printf '%s\n' "$changed" | ./scripts/delivery-reportable.sh --stdin 2>&1 >/tmp/dev-reportable.txt || true)"
+          printf '%s\n' "$reportable"
+          lines="$(cat /tmp/dev-reportable.txt 2>/dev/null || true)"
+
+          if [ -z "$lines" ]; then
+            echo "::warning::something moved, but the ledger tracks none of it (or is unreachable)."
+            exit 0
+          fi
+
+          # The dispatch enrichment describes ONE release. Dev pins `latest`, so on the
+          # dispatch path the version that went live IS the dispatched one — unlike
+          # prod, where the pin can hold it back.
+          enriched=""
+          if [ -n "${DISPATCH_IMAGE:-}" ] && [ -n "${DISPATCH_VERSION:-}" ]; then
+            match="$(printf '%s\n' "$lines" | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
+            [ -n "$match" ] && enriched="$match"
+          fi
+          plain="$lines"
+          if [ -n "$enriched" ]; then
+            plain="$(printf '%s\n' "$lines" | grep -vx -- "$enriched" || true)"
+          fi
+
+          if [ "${{ steps.dev-health.outcome }}" != "success" ]; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=succeeded" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "enriched=${enriched}"
+            echo "plain<<PLAIN_EOF"
+            printf '%s\n' "$plain"
+            echo "PLAIN_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report the released service to dev, with its provenance
+        if: always() && steps.reportable.outputs.enriched != ''
+        continue-on-error: true
+        uses: Einlanzerous/switchyard/.github/actions/report-deploy@main
+        with:
+          token: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          environment: dev
+          service: ${{ github.event.client_payload.image }}
+          version: ${{ github.event.client_payload.version }}
+          status: ${{ steps.reportable.outputs.status }}
+          sha: ${{ github.event.client_payload.sha }}
+          commit-count: ${{ github.event.client_payload.commit_count }}
+          ticket-keys: ${{ toJson(github.event.client_payload.ticket_keys) }}
+          gate-passed: ${{ github.event.client_payload.gate_passed }}
+          gate-total: ${{ github.event.client_payload.gate_total }}
+          gate-run-url: ${{ github.event.client_payload.gate_run_url }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Report everything else dev moved to
+        if: always() && steps.reportable.outputs.plain != ''
+        continue-on-error: true
+        uses: Einlanzerous/switchyard/.github/actions/report-deploy@main
+        with:
+          token: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          environment: dev
+          services: ${{ steps.reportable.outputs.plain }}
+          status: ${{ steps.reportable.outputs.status }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
