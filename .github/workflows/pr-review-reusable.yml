@@ -152,7 +152,13 @@ on:
         default: 'release-please--'
         type: string
       release_files:
-        description: Newline-separated file list a release PR may contain and still be skipped.
+        description: >-
+          Newline-separated fallback file list a release PR may contain and
+          still be skipped. Only used when the repo has no
+          release-please-config.json on the base ref — where there is one, the
+          set is derived from it (manifest + changelog-path + every extra-files
+          target), so adding an `extra-files` entry cannot silently un-match the
+          skip.
         default: "CHANGELOG.md\n.release-please-manifest.json"
         type: string
       prompt_repo:
@@ -404,11 +410,16 @@ jobs:
           #             change worth a look. `user.type` is `Bot` for the release
           #             app and `User` for a person; verified on #200 and #205.
           #   branch  — scopes it to the release train rather than any bot.
-          #   files   — `extra-files` in release-please-config.json (the usual
-          #             reason being to stamp the version into a source file
-          #             rather than at link time) would put real code in a
-          #             release PR. Skipping that on a branch name would be the
-          #             silent pass this whole ticket exists to close.
+          #   files   — a release PR carrying anything beyond what release-please
+          #             itself stamps is real code riding a release, which is the
+          #             silent pass this ticket exists to close. Note what this
+          #             is NOT saying: release-please's own `extra-files` targets
+          #             are expected material and are derived INTO the skip set
+          #             below, because it writes only a version line into them.
+          #             An earlier revision argued the opposite — that
+          #             `extra-files` was a reason to distrust the file list —
+          #             which was right while the list was a hardcoded pair and
+          #             wrong once it is derived from the config.
           #
           # What the fall-through actually does, because it is NOT a review:
           # nothing configures `allowed_bots`, so a bot-authored PR that reaches
@@ -424,6 +435,85 @@ jobs:
           # author check adds. `@claude review` also still forces a real review
           # on any of these, because the initiating actor is then the commenter.
           if [ "$MANUAL" != "true" ] && [ "$AUTHOR_TYPE" = "Bot" ] && [[ "$HEAD_BRANCH" == "$RELEASE_PREFIX"* ]]; then
+            # DERIVED from release-please-config.json where there is one, and
+            # only falling back to the `release_files` input where there is not.
+            #
+            # This is argosy's rule, and it had to be recovered rather than
+            # written: argosy's local copy read the set out of the config, and
+            # the first port of it to the shared workflow dropped that for the
+            # static default — which does not contain argosy's third path, so
+            # every argosy release would have gone red again. Its own comment
+            # named the failure before the port deleted it: "Restating it is how
+            # this silently rots the next time an extra-file is added — the skip
+            # stops matching, and the only symptom is a red check on a release
+            # nobody looks twice at." Extraction losing the best local version is
+            # the exact failure SERV-92 exists to prevent, so the derivation
+            # belongs here where all four repos get it.
+            #
+            # Read from the BASE ref, so a PR cannot widen its own skip by
+            # editing the config. Anything unexpected — missing config, changed
+            # schema, malformed JSON — leaves the set short, the subset test
+            # fails, and it does NOT skip: every failure of this rule lands on
+            # "review it" rather than "wave it through".
+            # Branch on the EXIT STATUS, never on whether the output is empty:
+            # `gh api` prints the error response body to STDOUT and only its
+            # `gh: Not Found (HTTP 404)` summary to stderr. So `2>/dev/null ||
+            # true` leaves 127 bytes of `{"message":"Not Found",...}` in the
+            # variable, `[ -n "$RP_CONFIG" ]` is true for a repo with no config,
+            # and the fallback below becomes unreachable. Measured on this repo,
+            # which has no config: len=127.
+            #
+            # It was latent here — jq against that error JSON yields
+            # `{manifest, CHANGELOG.md}`, a superset of construct-server's
+            # one-file release PR, so the subset test passed and the skip still
+            # worked for the wrong reason. The `release_files` input was simply
+            # dead. Same shape as the review-ignore fetch above, which already
+            # discriminates this way; this one was written the sloppy way.
+            RP_ERR=$(mktemp)
+            if RP_CONFIG=$(gh api -H 'Accept: application/vnd.github.raw' \
+                             "repos/$GITHUB_REPOSITORY/contents/release-please-config.json?ref=$BASE_REF" \
+                             2>"$RP_ERR"); then
+              RP_FOUND=yes
+            else
+              RP_FOUND=no
+              RP_CONFIG=""
+              if ! grep -qi 'not found' "$RP_ERR"; then
+                echo "::warning::Could not read release-please-config.json from $BASE_REF ($(tr -d '\n' <"$RP_ERR" | head -c 160)) — falling back to the release_files input. A release PR may not be skipped."
+              fi
+            fi
+            rm -f "$RP_ERR"
+
+            if [ "$RP_FOUND" = yes ]; then
+              # Single-package layout (`packages["."]`). A multi-package config
+              # does not yield nothing — the `// "CHANGELOG.md"` default fires
+              # against the empty object and emits the root changelog anyway.
+              # Such a release PR touches packages/*/CHANGELOG.md, which this set
+              # does not contain, so the subset test fails and it gets reviewed.
+              RELEASE_FILES=$(
+                {
+                  echo '.release-please-manifest.json'
+                  # Top-level `extra-files` and `changelog-path` are declared
+                  # in release-please's own config schema and act as defaults
+                  # for every package, so they are merged in rather than
+                  # ignored. Not shape-lawyering: signet's config already puts
+                  # per-package options (`release-type`, `changelog-sections`)
+                  # at the root, so the pattern is live here. Missing a
+                  # root-level `extra-files` yields a short set and reproduces
+                  # the argosy red exactly.
+                  jq -r '
+                    (.packages["."] // {}) as $p |
+                    ($p["changelog-path"] // .["changelog-path"] // "CHANGELOG.md"),
+                    ((($p["extra-files"] // []) + (.["extra-files"] // []))[]?
+                       | if type == "string" then . else .path end)
+                  ' <<<"$RP_CONFIG" 2>/dev/null || true
+                } | sed '/^[[:space:]]*$/d' | sort -u
+              )
+              echo "→ release file set derived from release-please-config.json: $(tr '\n' ' ' <<<"$RELEASE_FILES")"
+            else
+              RELEASE_FILES=$(printf '%s\n' "$RELEASE_FILE_LIST" | sed '/^[[:space:]]*$/d' | sort -u)
+              echo "→ no release-please-config.json on $BASE_REF; using the release_files input: $(tr '\n' ' ' <<<"$RELEASE_FILES")"
+            fi
+
             # SUBSET, not set equality. Equality also requires the release PR
             # to carry every file in the list, and a repo can legitimately carry
             # fewer: construct-server runs release-please in non-manifest mode,
@@ -432,7 +522,6 @@ jobs:
             # is "is there anything here that ISN'T generated release material",
             # which is a subset test; expressing it as equality made it silently
             # inapplicable to the repo hosting it.
-            RELEASE_FILES=$(printf '%s\n' "$RELEASE_FILE_LIST" | sed '/^[[:space:]]*$/d' | sort -u)
             UNEXPECTED=$(comm -23 <(sort -u <<<"$FILES") <(printf '%s\n' "$RELEASE_FILES"))
             if [ -z "$UNEXPECTED" ]; then
               skip "release PR (generated release material only)"

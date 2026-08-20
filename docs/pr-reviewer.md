@@ -78,7 +78,8 @@ they are explicit inputs instead: **if you pin `uses: ...@<tag>`, pin
 | `switchyard_url` | `http://localhost:4002` | |
 | `runs_on` | `self-hosted` | must reach Switchyard |
 | `timeout_minutes` | `30` | what actually bounds a runaway |
-| `release_branch_prefix` / `release_files` | `release-please--` / changelog + manifest | the release-PR skip |
+| `release_branch_prefix` | `release-please--` | the release-PR skip |
+| `release_files` | changelog + manifest | **fallback only** — where `release-please-config.json` exists the set is derived from it |
 | `prompt_repo` / `prompt_ref` | `Einlanzerous/construct-server` / `main` | where the procedure is fetched from |
 
 ### `sensitive_paths` is the one that needs thought
@@ -150,7 +151,12 @@ source — for exactly the case the expression existed to serve.
    case; a green check after pushing fixes usually means this fired.** Comment
    `@claude review` to force a re-review.
 4. Empty diff → skip.
-5. Bot-authored release PR whose changed paths are all in `release_files` → skip.
+5. Bot-authored release PR whose changed paths are all generated release
+   material → skip. The expected set is **derived from
+   `release-please-config.json` on the base ref** — manifest, `changelog-path`,
+   and every `extra-files` target — so adding an `extra-files` entry cannot
+   silently un-match the skip. `release_files` is the fallback for repos with no
+   config (release-please in non-manifest mode).
    The test is a **subset**, not set equality: a repo running release-please in
    non-manifest mode touches only `CHANGELOG.md`, and an equality test would
    never fire there. Anything *outside* the list falls through to the rules
