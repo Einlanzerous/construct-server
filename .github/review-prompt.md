@@ -6,10 +6,17 @@ so judge the change on what it actually says rather than on what it was
 probably meant to say.
 
 This file is the procedure. It is not copied per repository — it lives once, in
-`Einlanzerous/construct-server`, and the reusable workflow fetches it at the exact
-commit it is itself running from (SERV-92). It used to say it was "intentionally
-identical across repositories" while three copies had already drifted; saying it
-is now redundant, because there is one.
+`Einlanzerous/construct-server`, and the reusable workflow fetches it from there
+at run time (SERV-92). It used to say it was "intentionally identical across
+repositories" while three copies had already drifted; saying it is now
+redundant, because there is one.
+
+It is fetched at `prompt_ref`, which defaults to `main` and is **not** derived
+from the commit the workflow is running from — `job_workflow_sha` and
+`job_workflow_ref` are both empty on this Actions version, so the derivation
+that was meant to link them 404'd. A caller pinning `uses: …@<tag>` must pin
+`prompt_ref` to the same tag, or it will read this file's `main` regardless.
+
 The standards it applies live in `REVIEW.md` and `CLAUDE.md` in the repository
 being reviewed; the model behind it is configuration (SERV-59, SERV-64). Keep
 judgement in those files, not here.
