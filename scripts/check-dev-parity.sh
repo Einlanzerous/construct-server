@@ -49,6 +49,8 @@ purser:purser-dev"
 # an intentional gap rather than a failure; anything NOT here is drift.
 EXPECTED_ABSENT="SIGNET_API_TOKEN:no vault handle in dev
 SIGNET_BASE_URL:no vault handle in dev
+AMBER_BASE_URL:no amber in the dev slice
+AMBER_API_TOKEN:no amber in the dev slice
 CF_ACCESS_TEAM_DOMAIN:SSO off in dev
 CF_ACCESS_AUD:SSO off in dev
 GITHUB_TOKEN:dev must not act on real PRs

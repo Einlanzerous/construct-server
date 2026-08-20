@@ -535,6 +535,28 @@ services:
       # connector ever gets to self-disable. Bare syntax omits the key entirely
       # when unset and still reads the value from .env once provisioned.
       - SIGNET_API_TOKEN
+      # Amber capture archive (SWY-209 / AMBR-9). Supplies the docket's CAPTURE
+      # SEAM — the boundary between prompt-only history and full-session capture —
+      # to GET /v1/docket/seam. BOTH vars must reach the container or the seam
+      # reports configured:false and /docket/monthly renders "Amber is not
+      # configured"; there is deliberately no fallback seam date anywhere in
+      # Switchyard, because a hardcoded one would silently lie the moment capture
+      # changed. Amber is in-container on construct_net, so the default is just
+      # the service name and no .env entry is needed for the URL.
+      - AMBER_BASE_URL=${AMBER_BASE_URL:-http://amber:4008}
+      # Bare passthrough for the same reason as SIGNET_API_TOKEN above, and the
+      # value is Amber's OWN token — the one its service block already
+      # interpolates from this same .env. Amber gates all of /v1 behind a single
+      # token rather than one per consumer, so Switchyard presenting it is the
+      # intended design and not a shortcut — but it is a deliberate deviation
+      # from PRINCIPLES.md §4 ("never share a token across components; mint
+      # per-consumer, scope minimally"), and the cost of it belongs here rather
+      # than in a PR nobody rereads: this token also reads GET /v1/prompts, so a
+      # Switchyard compromise reads the whole archived prompt corpus, not just
+      # the capture seam. Narrowing it is Amber's to do — there is no scoped
+      # credential to hand over today. Note Amber fails CLOSED: with no token
+      # set on its side, every /v1 route 503s rather than opening.
+      - AMBER_API_TOKEN
     # Container-to-host bridge so the connector above can reach the Signet
     # daemon bound to 127.0.0.1:4010 on the host.
     extra_hosts:
