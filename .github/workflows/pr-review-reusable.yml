@@ -410,11 +410,16 @@ jobs:
           #             change worth a look. `user.type` is `Bot` for the release
           #             app and `User` for a person; verified on #200 and #205.
           #   branch  — scopes it to the release train rather than any bot.
-          #   files   — `extra-files` in release-please-config.json (the usual
-          #             reason being to stamp the version into a source file
-          #             rather than at link time) would put real code in a
-          #             release PR. Skipping that on a branch name would be the
-          #             silent pass this whole ticket exists to close.
+          #   files   — a release PR carrying anything beyond what release-please
+          #             itself stamps is real code riding a release, which is the
+          #             silent pass this ticket exists to close. Note what this
+          #             is NOT saying: release-please's own `extra-files` targets
+          #             are expected material and are derived INTO the skip set
+          #             below, because it writes only a version line into them.
+          #             An earlier revision argued the opposite — that
+          #             `extra-files` was a reason to distrust the file list —
+          #             which was right while the list was a hardcoded pair and
+          #             wrong once it is derived from the config.
           #
           # What the fall-through actually does, because it is NOT a review:
           # nothing configures `allowed_bots`, so a bot-authored PR that reaches
@@ -450,10 +455,35 @@ jobs:
             # schema, malformed JSON — leaves the set short, the subset test
             # fails, and it does NOT skip: every failure of this rule lands on
             # "review it" rather than "wave it through".
-            RP_CONFIG=$(gh api -H 'Accept: application/vnd.github.raw' \
-                          "repos/$GITHUB_REPOSITORY/contents/release-please-config.json?ref=$BASE_REF" \
-                          2>/dev/null || true)
-            if [ -n "$RP_CONFIG" ]; then
+            # Branch on the EXIT STATUS, never on whether the output is empty:
+            # `gh api` prints the error response body to STDOUT and only its
+            # `gh: Not Found (HTTP 404)` summary to stderr. So `2>/dev/null ||
+            # true` leaves 127 bytes of `{"message":"Not Found",...}` in the
+            # variable, `[ -n "$RP_CONFIG" ]` is true for a repo with no config,
+            # and the fallback below becomes unreachable. Measured on this repo,
+            # which has no config: len=127.
+            #
+            # It was latent here — jq against that error JSON yields
+            # `{manifest, CHANGELOG.md}`, a superset of construct-server's
+            # one-file release PR, so the subset test passed and the skip still
+            # worked for the wrong reason. The `release_files` input was simply
+            # dead. Same shape as the review-ignore fetch above, which already
+            # discriminates this way; this one was written the sloppy way.
+            RP_ERR=$(mktemp)
+            if RP_CONFIG=$(gh api -H 'Accept: application/vnd.github.raw' \
+                             "repos/$GITHUB_REPOSITORY/contents/release-please-config.json?ref=$BASE_REF" \
+                             2>"$RP_ERR"); then
+              RP_FOUND=yes
+            else
+              RP_FOUND=no
+              RP_CONFIG=""
+              if ! grep -qi 'not found' "$RP_ERR"; then
+                echo "::warning::Could not read release-please-config.json from $BASE_REF ($(tr -d '\n' <"$RP_ERR" | head -c 160)) — falling back to the release_files input. A release PR may not be skipped."
+              fi
+            fi
+            rm -f "$RP_ERR"
+
+            if [ "$RP_FOUND" = yes ]; then
               # Single-package layout (`packages["."]`). A multi-package config
               # does not yield nothing — the `// "CHANGELOG.md"` default fires
               # against the empty object and emits the root changelog anyway.
@@ -462,10 +492,19 @@ jobs:
               RELEASE_FILES=$(
                 {
                   echo '.release-please-manifest.json'
+                  # Top-level `extra-files` and `changelog-path` are declared
+                  # in release-please's own config schema and act as defaults
+                  # for every package, so they are merged in rather than
+                  # ignored. Not shape-lawyering: signet's config already puts
+                  # per-package options (`release-type`, `changelog-sections`)
+                  # at the root, so the pattern is live here. Missing a
+                  # root-level `extra-files` yields a short set and reproduces
+                  # the argosy red exactly.
                   jq -r '
                     (.packages["."] // {}) as $p |
-                    ($p["changelog-path"] // "CHANGELOG.md"),
-                    ($p["extra-files"][]? | if type == "string" then . else .path end)
+                    ($p["changelog-path"] // .["changelog-path"] // "CHANGELOG.md"),
+                    ((($p["extra-files"] // []) + (.["extra-files"] // []))[]?
+                       | if type == "string" then . else .path end)
                   ' <<<"$RP_CONFIG" 2>/dev/null || true
                 } | sed '/^[[:space:]]*$/d' | sort -u
               )
