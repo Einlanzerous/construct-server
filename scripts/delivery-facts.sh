@@ -33,8 +33,14 @@
 # Usage:
 #   ./scripts/delivery-facts.sh [service ...]     # compose service names
 #
-# Emits one TAB-separated line per first-party container:
-#   <container_name>\t<version>\t<digest>\t<revision>
+# Emits one PIPE-separated line per first-party container:
+#   <container_name>|<version>|<digest>|<revision>
+#
+# `|` and not a tab, matching report-versions.sh. Tab is IFS *whitespace*, so
+# `IFS=$'\t' read` collapses runs of it and strips leading empties — a row whose
+# version is absent then shifts every later field one place left, and the reader
+# stores the digest AS the version. `|` is not whitespace, so empty fields hold
+# their position.
 #
 # Exit codes:
 #   0  reported (possibly zero lines — no first-party container in scope)
@@ -53,7 +59,7 @@ FIRST_PARTY_PREFIX="${FIRST_PARTY_PREFIX:-ghcr.io/einlanzerous/}"
 err() { printf '%s\n' "$*" >&2; }
 
 case "${1:-}" in
-  -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,47p' "$0"; exit 0 ;;
   -*) err "ERROR: unknown option '$1'"; exit 2 ;;
 esac
 
@@ -109,5 +115,5 @@ for cid in $container_ids; do
     --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null \
     | awk -F@ -v r="$repo" '$1 == r { print $2; exit }')"
 
-  printf '%s\t%s\t%s\t%s\n' "$name" "$version" "$digest" "$revision"
+  printf '%s|%s|%s|%s\n' "$name" "$version" "$digest" "$revision"
 done

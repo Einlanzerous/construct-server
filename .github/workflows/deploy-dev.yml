@@ -204,12 +204,21 @@ jobs:
         # tier. That is the same trap the pull step above documents.
         #
         # Empty on a cold dev root, which reads correctly as "everything here is new".
+        #
+        # NAMED FOR THE RUN. `/tmp` survives between jobs on a self-hosted runner,
+        # and this step sits behind six that can fail (rsync, render-env, the DEV_
+        # tag validation, `config --images`, network create). With a fixed filename
+        # a run that died before reaching it would diff against the PREVIOUS run's
+        # snapshot, see that run's change again, and append a duplicate row for a
+        # tick that pulled nothing — precisely the flooding this guard exists to
+        # prevent. Run-scoped, absence means absence, and the resolve step reports
+        # nothing rather than guessing.
         continue-on-error: true
         env:
           DEPLOY_ROOT: ${{ env.DEV_ROOT }}
           COMPOSE_FILE: docker-compose.dev.yml
           COMPOSE_PROJECT: construct-server-dev
-        run: ./scripts/delivery-facts.sh > /tmp/dev-facts-before.tsv || true
+        run: ./scripts/delivery-facts.sh > "/tmp/dev-delivery-before-${{ github.run_id }}.txt" || true
 
       - name: Pull the images dev tracks
         # This is what actually moves dev forward, and it is not optional. Dev floats on
@@ -315,39 +324,20 @@ jobs:
             exit 0
           fi
 
-          ./scripts/delivery-facts.sh > /tmp/dev-facts-after.tsv || true
-          # The snapshot step is continue-on-error, so its file may not exist at all.
-          touch /tmp/dev-facts-before.tsv
-
-          # A container is "deployed" by this run when its image digest differs from
-          # the snapshot taken before the pull — including the case where it had no
-          # row before, which is a container that did not exist.
-          #
-          # Keyed on FILENAME, not the usual `NR == FNR`. With an EMPTY before-file
-          # that idiom silently inverts: FNR resets per file, so with no records from
-          # the first, NR == FNR stays true for every line of the second and the whole
-          # after-list is absorbed as "before" — reporting nothing on exactly the cold
-          # start where everything is new.
-          changed="$(awk -F'\t' -v BEFORE=/tmp/dev-facts-before.tsv '
-            FILENAME == BEFORE { before[$1] = $3; next }
-            { if (!($1 in before) || before[$1] != $3) print }
-          ' /tmp/dev-facts-before.tsv /tmp/dev-facts-after.tsv)"
-
-          if [ -z "$changed" ]; then
-            echo "No image moved — this run deployed nothing, so there is nothing to report."
-            exit 0
-          fi
-          echo "Changed since the pull:"
-          printf '%s\n' "$changed" | cut -f1,2 | sed 's/^/  /'
-
-          reportable="$(printf '%s\n' "$changed" | ./scripts/delivery-reportable.sh --stdin 2>&1 >/tmp/dev-reportable.txt || true)"
-          printf '%s\n' "$reportable"
+          # `--since` keeps only the containers whose image digest moved against the
+          # pre-pull snapshot, and then only the ones the ledger tracks. An hourly
+          # tick that pulled nothing produces no lines and writes no row.
+          noise="$(./scripts/delivery-reportable.sh --since "/tmp/dev-delivery-before-${{ github.run_id }}.txt" 2>&1 >/tmp/dev-reportable.txt || true)"
+          printf '%s\n' "$noise"
           lines="$(cat /tmp/dev-reportable.txt 2>/dev/null || true)"
 
           if [ -z "$lines" ]; then
-            echo "::warning::something moved, but the ledger tracks none of it (or is unreachable)."
+            echo "Nothing moved that the ledger tracks — no row to write."
             exit 0
           fi
+          echo "Deployed by this run:"
+          printf '%s\n' "$lines" | sed 's/^/  /'
+
 
           # The dispatch enrichment describes ONE release. Dev pins `latest`, so on the
           # dispatch path the version that went live IS the dispatched one — unlike

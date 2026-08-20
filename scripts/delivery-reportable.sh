@@ -6,7 +6,28 @@
 # manufacturing false alarms. Emits `name=version` lines, which is exactly the
 # `services:` input the report-deploy composite action takes.
 #
-# ── Filter 1: the ledger must already know the service ────────────────────
+# ── Filter 1: only what this deploy actually MOVED ────────────────────────
+#
+# `--since <baseline>` diffs the current facts against a snapshot taken before
+# the pull and keeps only the containers whose image DIGEST changed.
+#
+# Without it every run reports every service. That is wrong on both deploy paths
+# for the same reason: prod's FULL path runs on a push to `config/**` or
+# `scripts/**` and recreates nothing, and dev's workflow runs hourly. Reports are
+# deliberately NOT deduplicated the way observations are — a deploy that really
+# happened twice is two events — so a reporter that fired on every run would
+# append a row per no-op and bury the handful that are real.
+#
+# Digest, not tag: dev floats on `latest`, so the tag is the same string on both
+# sides of a pull that moved the whole tier.
+#
+# A MISSING baseline reports nothing, deliberately. The file is named for the run
+# and written by a step early in the job, so its absence means that step never
+# executed — the deploy failed before it started, and "everything is new" would
+# be exactly the wrong reading. An EMPTY baseline is different and does mean
+# everything is new: that is a cold root with no containers yet.
+#
+# ── Filter 2: the ledger must already know the service ────────────────────
 #
 # The matrix flags a report with no corroborating observation as "claimed, not
 # confirmed", and buckets that row as `attention` — red, with a banner. For a
@@ -28,7 +49,7 @@
 # reaches another service and the reconciler starts observing it, that service
 # becomes reportable with no edit here.
 #
-# ── Filter 2: `latest` is not a version ───────────────────────────────────
+# ── Filter 3: `latest` is not a version ───────────────────────────────────
 #
 # argosy's publish workflow stamps `org.opencontainers.image.version=latest`
 # because it cuts no semver. `latest` names a moving target, not a build; the
@@ -43,18 +64,19 @@
 # service seen twice — the `-dev` suffix is a compose-project artefact, not part
 # of the identity. `LEDGER_NAME_STRIP_SUFFIX=-dev` maps them back.
 #
-# Filter 1 is the backstop if that mapping is ever wrong: an unmapped name is
+# Filter 2 is the backstop if that mapping is ever wrong: an unmapped name is
 # simply skipped, so the worst case is a missing row rather than a phantom
 # `switchyard-dev` service wedged into the inventory beside the real one.
 #
 # Usage:
 #   SWITCHYARD_URL=http://localhost:4002 SWITCHYARD_TOKEN=sw_... \
-#     ./scripts/delivery-reportable.sh [compose service ...]
-#     ./scripts/delivery-reportable.sh --stdin < facts.tsv
+#     ./scripts/delivery-reportable.sh --since /tmp/before.txt [compose service ...]
 #
-#   --stdin  read delivery-facts.sh output instead of invoking it, for a caller
-#            that has already narrowed the set (deploy-dev.yml reports only the
-#            containers whose image actually moved).
+#   --since FILE  report only containers whose digest differs from FILE.
+#                 Omit to report everything tracked, which almost no caller wants.
+#
+#   DEPLOY_ROOT / COMPOSE_FILE / COMPOSE_PROJECT select the project and are
+#   passed through to delivery-facts.sh.
 #
 # Exit codes:
 #   0  emitted zero or more `name=version` lines
@@ -70,12 +92,15 @@ set -euo pipefail
 
 err() { printf '%s\n' "$*" >&2; }
 
-FROM_STDIN=0
-case "${1:-}" in
-  --stdin) FROM_STDIN=1; shift ;;
-  -h|--help) sed -n '2,57p' "$0"; exit 0 ;;
-  -*) err "ERROR: unknown option '$1'"; exit 2 ;;
-esac
+SINCE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --since) SINCE="${2:-}"; [ -n "$SINCE" ] || { err "ERROR: --since needs a path"; exit 2; }; shift 2 ;;
+    -h|--help) sed -n '2,95p' "$0"; exit 0 ;;
+    -*) err "ERROR: unknown option '$1'"; exit 2 ;;
+    *) break ;;
+  esac
+done
 
 # Empty by default: prod's container names already ARE the ledger's names.
 STRIP="${LEDGER_NAME_STRIP_SUFFIX:-}"
@@ -87,9 +112,13 @@ command -v jq >/dev/null 2>&1 || { err "ERROR: required dependency 'jq' not foun
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+if [ -n "$SINCE" ] && [ ! -f "$SINCE" ]; then
+  err "NOTE: no baseline at ${SINCE} — the snapshot step never ran, so what moved is unknowable. Reporting nothing."
+  exit 0
+fi
+
 url="${SWITCHYARD_URL%/}"
 known="$(mktemp)"
-trap 'rm -f "$known"' EXIT
 
 # `limit=200` is the API's ceiling. The estate has ~27 services at the outside,
 # so a second page would mean something has gone very wrong; paginating for it
@@ -121,21 +150,37 @@ is_known() {
   return 1
 }
 
-filter() {
-  local name version
-  while IFS=$'\t' read -r name version _ _; do
-    [ -n "$name" ] || continue
-    if [ -n "$STRIP" ]; then
-      name="${name%"$STRIP"}"
-    fi
-    is_known "$name" || { err "skip: ${name} is not a service the ledger tracks"; continue; }
-    [ "$version" = "latest" ] && version=""
-    printf '%s=%s\n' "$name" "$version"
-  done
-}
+now="$(mktemp)"
+trap 'rm -f "$known" "$now"' EXIT
 
-if [ "$FROM_STDIN" -eq 1 ]; then
-  filter
+"$here/delivery-facts.sh" "$@" > "$now"
+
+if [ -n "$SINCE" ]; then
+  # Keyed on FILENAME, not the usual `NR == FNR`. With an EMPTY baseline that
+  # idiom silently inverts: FNR resets per file, so with no records from the
+  # first, `NR == FNR` stays true for every line of the second and the whole
+  # current list is absorbed as "before" — reporting nothing on exactly the cold
+  # start where everything is new.
+  moved="$(awk -F'|' -v BEFORE="$SINCE" '
+    FILENAME == BEFORE { before[$1] = $3; next }
+    { if (!($1 in before) || before[$1] != $3) print }
+  ' "$SINCE" "$now")"
 else
-  filter < <("$here/delivery-facts.sh" "$@")
+  moved="$(cat "$now")"
 fi
+
+[ -n "$moved" ] || exit 0
+
+# `|` and not a tab. Tab is IFS whitespace, so `IFS=$'\t' read` collapses runs of
+# it and a row with no version shifts every later field one place left — storing
+# the DIGEST as the version, for exactly the images that have no version to
+# report. See delivery-facts.sh.
+printf '%s\n' "$moved" | while IFS='|' read -r name version _digest _revision; do
+  [ -n "$name" ] || continue
+  if [ -n "$STRIP" ]; then
+    name="${name%"$STRIP"}"
+  fi
+  is_known "$name" || { err "skip: ${name} is not a service the ledger tracks"; continue; }
+  [ "$version" = "latest" ] && version=""
+  printf '%s=%s\n' "$name" "$version"
+done

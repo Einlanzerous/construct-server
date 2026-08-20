@@ -303,6 +303,23 @@ jobs:
             echo "This deploy is a ${kind}: ${reason:-<no reason given>}"
           fi
 
+      - name: Snapshot what prod is running, before the deploy (SERV-117)
+        # The baseline for "what did this run actually deploy?". Compared on the
+        # image DIGEST after `up -d`, because a FULL deploy fires on a push to
+        # `config/**`, `db/**`, `caddy/**` or `scripts/**` and recreates nothing —
+        # and reports are deliberately NOT deduplicated the way observations are,
+        # so a reporter that fired on every run would append a row per no-op.
+        #
+        # NAMED FOR THE RUN. `/tmp` survives between jobs on a self-hosted runner,
+        # so a fixed filename left by a previous run would be diffed against by the
+        # next one — and a run that failed before this step would then "detect" the
+        # PREVIOUS run's change and report it a second time. The run-scoped name
+        # makes absence mean absence: delivery-reportable.sh reports nothing when
+        # the baseline is missing, which is the honest reading of "this step never
+        # executed".
+        continue-on-error: true
+        run: ./scripts/delivery-facts.sh > "/tmp/delivery-before-${{ github.run_id }}.txt" || true
+
       - name: Deploy Stack
         id: deploy
         # Deliberately NOT --force-recreate in either path: compose recreates only what
@@ -466,6 +483,7 @@ jobs:
         run: ./scripts/assert-healthy.sh --timeout 300
 
       - name: Assert the origin still rejects a spoofed Host
+        id: edge-auth
         # SERV-106. The config half of this runs against files and would pass in a
         # checkout; the point of running it HERE is the live half, which asks the
         # deployed edge the one question that matters — does a request with no valid
@@ -530,20 +548,18 @@ jobs:
             exit 0
           fi
 
-          # SCOPED names the services that actually moved; FULL means the stack.
-          # `delivery-reportable.sh` then drops anything the ledger does not track,
-          # so a service with no observation behind it never becomes a phantom row.
-          if [ "${DEPLOY_SCOPE:-FULL}" = "SCOPED" ]; then
-            read -r -a scoped <<< "${DEPLOY_SERVICES:-}"
-            lines="$(./scripts/delivery-reportable.sh "${scoped[@]}" 2>&1 >/tmp/reportable.txt || true)"
-          else
-            lines="$(./scripts/delivery-reportable.sh 2>&1 >/tmp/reportable.txt || true)"
-          fi
+          # `--since` keeps only the containers whose image digest moved, which is
+          # the answer to "what did this deploy actually deploy?" on BOTH paths —
+          # the scope list would have named the pinned services that changed and
+          # missed everything a FULL pull brought in on a floating patch. It then
+          # drops anything the ledger does not track, so a service with no
+          # observation behind it never becomes a permanent phantom red row.
+          lines="$(./scripts/delivery-reportable.sh --since "/tmp/delivery-before-${{ github.run_id }}.txt" 2>&1 >/tmp/reportable.txt || true)"
           printf '%s\n' "$lines"
           reportable="$(cat /tmp/reportable.txt 2>/dev/null || true)"
 
           if [ -z "$reportable" ]; then
-            echo "::warning::nothing reportable — the ledger tracks none of the deployed services, or it is unreachable."
+            echo "Nothing moved that the ledger tracks — no row to write."
             exit 0
           fi
 
@@ -565,9 +581,13 @@ jobs:
             plain="$(printf '%s\n' "$reportable" | grep -vx -- "$enriched" || true)"
           fi
 
-          # `status` describes the DEPLOY, not the container. assert-healthy is part
-          # of the deploy: a stack that came up broken did not succeed.
-          if [ "${{ steps.deploy.outcome }}" != "success" ] || [ "${{ steps.healthy.outcome }}" != "success" ]; then
+          # `status` describes the DEPLOY, and every assertion in it counts. A stack
+          # that came up broken did not succeed, and neither did one that left the
+          # origin serving unauthenticated requests (SERV-106) — a deploy that goes
+          # red in the Actions tab must not go green in the ledger.
+          if [ "${{ steps.deploy.outcome }}" != "success" ] \
+            || [ "${{ steps.healthy.outcome }}" != "success" ] \
+            || [ "${{ steps.edge-auth.outcome }}" != "success" ]; then
             echo "status=failed" >> "$GITHUB_OUTPUT"
           elif [ "${DELIVERY_KIND:-}" = "rollback" ]; then
             # A successful rollback is not a plain success. The matrix renders a
