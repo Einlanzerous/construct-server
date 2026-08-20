@@ -79,7 +79,7 @@ Previously on the roadmap, now in active use: Copyparty, Switchyard (which repla
     ```
 
 2.  **Configure Environment Variables:**
-    Copy the example file and update it with your secrets. Core vars: Datadog API Key, Postgres/Switchyard/n8n passwords. Imperium-Loop pipeline also needs `ANTHROPIC_API_KEY`, `GITHUB_PAT`, `SWITCHYARD_DB_PASSWORD`, `SWITCHYARD_BOOTSTRAP_TOKEN`, `DISCORD_BOT_TOKEN`/`DISCORD_CHANNEL_ID`/`DISCORD_PLANNING_WEBHOOK_URL`, and `N8N_API_KEY`. The public edge needs `CLOUDFLARE_TUNNEL_TOKEN` (and `CF_DNS_API_TOKEN` once the direct path is unblocked); Purser's connectors need `PURSER_CF_*` and `PURSER_LYCEUM_OWNER_TOKEN`.
+    Copy the example file and update it with your secrets. Core vars: Datadog API Key, Postgres/Switchyard/n8n passwords. Imperium-Loop pipeline also needs `ANTHROPIC_API_KEY`, `GITHUB_PAT`, `SWITCHYARD_DB_PASSWORD`, `SWITCHYARD_BOOTSTRAP_TOKEN`, `DISCORD_BOT_TOKEN`/`DISCORD_CHANNEL_ID`/`DISCORD_PLANNING_WEBHOOK_URL`, and `N8N_API_KEY`. The public edge needs `CLOUDFLARE_TUNNEL_TOKEN` (and `CF_DNS_API_TOKEN` once the direct path is unblocked); Purser's connectors need `PURSER_SWITCHYARD_TOKEN`, `PURSER_CF_*` and `PURSER_LYCEUM_OWNER_TOKEN`.
 
     > **Deploys don't read this file.** CI writes `.env` on the server from the **`PROD_ENV_FILE`** secret on the `home-server` environment. A var added here but not there will vanish on the next deploy — update both (`gh secret set PROD_ENV_FILE --env home-server < .env`).
     ```bash

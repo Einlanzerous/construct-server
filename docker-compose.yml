@@ -700,8 +700,8 @@ services:
   # One command onboards a person into multiple services: creates their Switchyard
   # user + token and grants Cloudflare Access SSO, returning a copy-pasteable
   # credential block (or emailing it). Tunnel-internal / CLI tool, no public
-  # hostname. Reuses the Switchyard bootstrap admin token (SERV-35 tracks a
-  # dedicated one). See github.com/Einlanzerous/purser.
+  # hostname. Presents its own scoped Switchyard token rather than the instance
+  # bootstrap admin one (PRSR-25). See github.com/Einlanzerous/purser.
   purser:
     image: ghcr.io/einlanzerous/purser:${PURSER_TAG:-latest}
     container_name: purser
@@ -712,12 +712,14 @@ services:
       - PURSER_ADDR=:4006
       - PURSER_DATABASE_URL=postgres://purser_user:${PURSER_DB_PASSWORD}@postgres:5432/purser?sslmode=disable
       - PURSER_API_TOKEN=${PURSER_API_TOKEN}
-      # Switchyard connector: create user + mint token.
-      # Purser's OWN token, not the bootstrap admin one (SERV-113). This was
-      # wired to ${SWITCHYARD_BOOTSTRAP_TOKEN}, which is revoked server-side and
-      # 401s every call — latent, since provisioning only runs on demand. The
-      # value below was already provisioned and syncing; nothing ever read it.
-      # It is also correctly narrower: {users:manage, projects:manage}, not admin.
+      # Switchyard connector: create user + mint token. Scopes
+      # {users:manage, projects:manage} — not admin.
+      #
+      # This read ${SWITCHYARD_BOOTSTRAP_TOKEN} until SERV-113. PRSR-25 minted the
+      # dedicated token and set it in PROD_ENV_FILE but never rewired this line, so
+      # the value was synced and never read — and the bootstrap token it kept using
+      # was revoked server-side, 401ing every call. Latent, because provisioning
+      # only runs on demand.
       - PURSER_SWITCHYARD_BASE_URL=http://switchyard:4002
       - PURSER_SWITCHYARD_TOKEN=${PURSER_SWITCHYARD_TOKEN}
       - PURSER_SWITCHYARD_URL=https://switchyard.zerogravity.industries
