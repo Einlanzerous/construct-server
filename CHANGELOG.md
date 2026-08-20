@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.19.1](https://github.com/Einlanzerous/construct-server/compare/v4.19.0...v4.19.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* **ci:** derive the release file set from release-please-config (SERV-92) ([52b862d](https://github.com/Einlanzerous/construct-server/commit/52b862ddb5068010d9f0affa53188cc228d6c959))
+* **purser:** present purser's own Switchyard token, not the revoked bootstrap (SERV-113) ([#127](https://github.com/Einlanzerous/construct-server/issues/127)) ([802141f](https://github.com/Einlanzerous/construct-server/commit/802141fe2bd1a2888b3aab04fabeb94170574e69))
+* **switchyard:** pass Amber's base URL and token through to the container (SERV-116) ([#129](https://github.com/Einlanzerous/construct-server/issues/129)) ([b3a28de](https://github.com/Einlanzerous/construct-server/commit/b3a28de2b5af42f6be2441c6d1dba12642fdd30e))
+
 ## [4.19.0](https://github.com/Einlanzerous/construct-server/compare/v4.18.0...v4.19.0) (2026-08-19)
 
 
