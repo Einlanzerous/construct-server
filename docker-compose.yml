@@ -713,8 +713,13 @@ services:
       - PURSER_DATABASE_URL=postgres://purser_user:${PURSER_DB_PASSWORD}@postgres:5432/purser?sslmode=disable
       - PURSER_API_TOKEN=${PURSER_API_TOKEN}
       # Switchyard connector: create user + mint token.
+      # Purser's OWN token, not the bootstrap admin one (SERV-113). This was
+      # wired to ${SWITCHYARD_BOOTSTRAP_TOKEN}, which is revoked server-side and
+      # 401s every call — latent, since provisioning only runs on demand. The
+      # value below was already provisioned and syncing; nothing ever read it.
+      # It is also correctly narrower: {users:manage, projects:manage}, not admin.
       - PURSER_SWITCHYARD_BASE_URL=http://switchyard:4002
-      - PURSER_SWITCHYARD_TOKEN=${SWITCHYARD_BOOTSTRAP_TOKEN}
+      - PURSER_SWITCHYARD_TOKEN=${PURSER_SWITCHYARD_TOKEN}
       - PURSER_SWITCHYARD_URL=https://switchyard.zerogravity.industries
       # Cloudflare Access connector (SERV-36). Unset => `--to cloudflare` prints
       # the manual dashboard step instead of granting access via the API.
