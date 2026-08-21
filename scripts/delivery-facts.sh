@@ -52,6 +52,8 @@
 # Exit codes:
 #   0  reported (possibly zero lines — no first-party container in scope)
 #   2  usage / missing dependency / no deploy root
+#   3  the containers could not be enumerated — distinct from 0 on purpose, so a
+#      caller can tell "nothing here" from "I could not look"
 
 set -euo pipefail
 
@@ -83,12 +85,18 @@ compose() { docker compose -f "$COMPOSE_FILE" ${COMPOSE_PROJECT:+-p "$COMPOSE_PR
 
 # `-a` for the same reason report-versions.sh uses it: a service that crashed on
 # boot is the one most worth naming, and `ps -q` omits it entirely.
+# A compose or daemon error must NOT look like "no containers here". Callers use
+# this to build a movement baseline, and the two answers lead opposite ways: an
+# empty enumeration means a cold root where everything is new, while a failed
+# enumeration means what moved is unknowable. Swallowing the error into `|| true`
+# and exiting 0 collapsed them, and the safe-looking one is the wrong one.
 if [ $# -gt 0 ]; then
-  container_ids="$(compose ps -aq "$@" 2>/dev/null || true)"
+  container_ids="$(compose ps -aq "$@" 2>/dev/null)" || { err "ERROR: could not enumerate containers"; exit 3; }
 else
-  container_ids="$(compose ps -aq 2>/dev/null || true)"
+  container_ids="$(compose ps -aq 2>/dev/null)" || { err "ERROR: could not enumerate containers"; exit 3; }
 fi
 
+# Exit 0 with no output: the project genuinely holds no first-party container.
 [ -n "$container_ids" ] || exit 0
 
 for cid in $container_ids; do

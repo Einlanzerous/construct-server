@@ -330,7 +330,14 @@ jobs:
         # the baseline is missing, which is the honest reading of "this step never
         # executed".
         continue-on-error: true
-        run: ./scripts/delivery-facts.sh > "/tmp/delivery-before-${{ github.run_id }}.txt" || true
+        # `|| rm -f`, not `|| true`. The redirection creates the file before the
+        # script runs, so a failure would otherwise leave a ZERO-BYTE baseline —
+        # and an empty baseline means something specific and opposite: a cold root
+        # where every container is new. delivery-reportable.sh would then report
+        # every tracked service for a run that recreated nothing. Removing it puts
+        # the run back in the "no baseline, report nothing" branch, which is the
+        # honest reading of "I could not look".
+        run: ./scripts/delivery-facts.sh > "/tmp/delivery-before-${{ github.run_id }}.txt" || rm -f "/tmp/delivery-before-${{ github.run_id }}.txt"
 
       - name: Deploy Stack
         id: deploy
@@ -547,14 +554,6 @@ jobs:
         run: |
           set -uo pipefail
 
-          # A NONE scope pulled nothing and recreated nothing pinned. There is no
-          # deploy to report, and reports are deliberately not deduplicated the way
-          # observations are — so a row here would be a row per no-op commit.
-          if [ "${DEPLOY_SCOPE:-FULL}" = "NONE" ]; then
-            echo "scope is NONE — nothing was deployed, nothing to report."
-            exit 0
-          fi
-
           if [ -z "${SWITCHYARD_TOKEN:-}" ]; then
             echo "::warning::SWITCHYARD_DEPLOY_TOKEN is not set — this deploy will not reach the ledger."
             exit 0
@@ -597,6 +596,20 @@ jobs:
           # SERV-102 is the worked example, and it is why this is not theoretical:
           # postgres' digest moved and switchyard's did not, and switchyard was the
           # thing that broke.
+          # A NONE scope pulled nothing and recreated nothing pinned, so on a SUCCESS
+          # there is no deploy to report and a row would be a row per no-op commit.
+          #
+          # Checked HERE, below the status write, not above it. NONE is not an idle
+          # job: its Deploy Stack branch still recreates cf-access-guard when the
+          # guard is behind, and `assert-healthy` and `check-edge-auth` both run
+          # unconditionally afterwards. A comment-only edit to versions.env while the
+          # stack is unhealthy is a red job, and exiting above the status write would
+          # leave the ledger silent about it.
+          if [ "${DEPLOY_SCOPE:-FULL}" = "NONE" ] && [ "$status" = "succeeded" ]; then
+            echo "scope is NONE and the deploy succeeded — nothing was deployed, nothing to report."
+            exit 0
+          fi
+
           if [ "$status" = "failed" ]; then
             echo "Deploy failed — reporting every tracked service, not just what moved."
             lines="$(./scripts/delivery-reportable.sh 2>&1 >/tmp/reportable.txt || true)"

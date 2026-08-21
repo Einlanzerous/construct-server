@@ -218,7 +218,12 @@ jobs:
           DEPLOY_ROOT: ${{ env.DEV_ROOT }}
           COMPOSE_FILE: docker-compose.dev.yml
           COMPOSE_PROJECT: construct-server-dev
-        run: ./scripts/delivery-facts.sh > "/tmp/dev-delivery-before-${{ github.run_id }}.txt" || true
+        # `|| rm -f`, not `|| true`: the redirection creates the file before the
+        # script runs, so a failure would leave a ZERO-BYTE baseline — which means
+        # the opposite thing, a cold root where everything is new, and would report
+        # every tracked service on a run that recreated nothing. On an HOURLY cron
+        # that is a row an hour. Absence has to mean absence.
+        run: ./scripts/delivery-facts.sh > "/tmp/dev-delivery-before-${{ github.run_id }}.txt" || rm -f "/tmp/dev-delivery-before-${{ github.run_id }}.txt"
 
       - name: Pull the images dev tracks
         # This is what actually moves dev forward, and it is not optional. Dev floats on
@@ -252,6 +257,7 @@ jobs:
         run: make dev-health-check
 
       - name: Assert dev is still isolated from prod
+        id: dev-isolation
         # SERV-97's acceptance criterion, and the one thing this workflow could plausibly
         # break. Checks from the NETWORK's side as well as the project's, because the
         # regression this repo has already made once is a PROD container joining the dev
@@ -326,8 +332,13 @@ jobs:
 
           # STATUS FIRST, before any early exit below — a failed deploy that reports
           # nothing is the failure mode this ordering exists to prevent.
+          # Both gates count, the same way prod consults deploy/healthy/edge-auth.
+          # The isolation assert is dev's ONLY security gate and the one thing this
+          # workflow could plausibly break — its own header says so — so a run that
+          # goes red on it must not write `succeeded` to the ledger.
           status=succeeded
-          if [ "${{ steps.dev-health.outcome }}" != "success" ]; then
+          if [ "${{ steps.dev-health.outcome }}" != "success" ] \
+            || [ "${{ steps.dev-isolation.outcome }}" != "success" ]; then
             status=failed
           fi
           echo "status=${status}" >> "$GITHUB_OUTPUT"
