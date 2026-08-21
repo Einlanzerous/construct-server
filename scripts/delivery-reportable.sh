@@ -9,7 +9,15 @@
 # ── Filter 1: only what this deploy actually MOVED ────────────────────────
 #
 # `--since <baseline>` diffs the current facts against a snapshot taken before
-# the pull and keeps only the containers whose image DIGEST changed.
+# the pull and keeps only the containers that this run actually RECREATED —
+# a change in either the image digest or the container id.
+#
+# Digest alone is not enough, and the gap is the common case rather than a corner:
+# compose recreates a container whenever its config hash moves (env, mounts,
+# healthcheck, ports, labels) with a byte-identical image. A push that re-renders
+# `.env` does that to every service that reads a changed value. The container id
+# changes on every recreate and never on a restart, so it is the signal that
+# matches what "deployed" means here.
 #
 # Without it every run reports every service. That is wrong on both deploy paths
 # for the same reason: prod's FULL path runs on a push to `config/**` or
@@ -162,8 +170,8 @@ if [ -n "$SINCE" ]; then
   # current list is absorbed as "before" — reporting nothing on exactly the cold
   # start where everything is new.
   moved="$(awk -F'|' -v BEFORE="$SINCE" '
-    FILENAME == BEFORE { before[$1] = $3; next }
-    { if (!($1 in before) || before[$1] != $3) print }
+    FILENAME == BEFORE { d[$1] = $3; id[$1] = $5; next }
+    { if (!($1 in d) || d[$1] != $3 || id[$1] != $5) print }
   ' "$SINCE" "$now")"
 else
   moved="$(cat "$now")"
@@ -175,7 +183,7 @@ fi
 # it and a row with no version shifts every later field one place left — storing
 # the DIGEST as the version, for exactly the images that have no version to
 # report. See delivery-facts.sh.
-printf '%s\n' "$moved" | while IFS='|' read -r name version _digest _revision; do
+printf '%s\n' "$moved" | while IFS='|' read -r name version _digest _revision _cid; do
   [ -n "$name" ] || continue
   if [ -n "$STRIP" ]; then
     name="${name%"$STRIP"}"

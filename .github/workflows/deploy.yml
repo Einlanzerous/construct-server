@@ -276,6 +276,18 @@ jobs:
           fi
 
       - name: Read the promote/rollback provenance off the commit (SERV-117)
+        # PUSH ONLY. On workflow_dispatch and repository_dispatch `github.sha` is
+        # whatever main's tip happens to be, which after a promote or rollback is
+        # THAT commit — so an unrelated dispatch deploy two hours later would read
+        # its trailers and report `rolled_back` on a service nobody rolled back,
+        # quoting somebody else's reason, on the page whose whole job is to be
+        # believed. It persists until the next commit lands on main, and
+        # re-running deploy.yml from the Actions tab is the one time the tip is
+        # guaranteed to be a promote commit.
+        #
+        # On a push the trailer commit IS the tip that was just pushed, which is
+        # exactly the run promote.yml intended to trigger.
+        if: github.event_name == 'push'
         # promote.yml holds the two facts the delivery ledger most wants and has
         # nowhere to put them: `kind` (promote | rollback) and a REQUIRED `reason`.
         # Its own input description says the kind is "recorded in the commit and the
@@ -548,18 +560,54 @@ jobs:
             exit 0
           fi
 
-          # `--since` keeps only the containers whose image digest moved, which is
-          # the answer to "what did this deploy actually deploy?" on BOTH paths —
-          # the scope list would have named the pinned services that changed and
-          # missed everything a FULL pull brought in on a floating patch. It then
-          # drops anything the ledger does not track, so a service with no
-          # observation behind it never becomes a permanent phantom red row.
-          lines="$(./scripts/delivery-reportable.sh --since "/tmp/delivery-before-${{ github.run_id }}.txt" 2>&1 >/tmp/reportable.txt || true)"
+          # STATUS IS DECIDED AND WRITTEN FIRST, before any early exit below.
+          #
+          # Every assertion in the deploy counts. A stack that came up broken did not
+          # succeed, and neither did one that left the origin serving unauthenticated
+          # requests (SERV-106) — a deploy that goes red in the Actions tab must not go
+          # green in the ledger.
+          status=succeeded
+          if [ "${{ steps.deploy.outcome }}" != "success" ] \
+            || [ "${{ steps.healthy.outcome }}" != "success" ] \
+            || [ "${{ steps.edge-auth.outcome }}" != "success" ]; then
+            status=failed
+          elif [ "${DELIVERY_KIND:-}" = "rollback" ]; then
+            # A successful rollback is not a plain success. The matrix renders a
+            # rolled-back production row with its own alert, which is the whole
+            # point: prod is running deliberately-older code and the page should
+            # say so rather than showing a calm green row at an unexpected version.
+            status=rolled_back
+          fi
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+
+          # THE MOVEMENT FILTER APPLIES TO SUCCESSES ONLY.
+          #
+          # `--since` keeps only what this run recreated, which is the right flood
+          # guard for a no-op success: the FULL path fires on a push to `config/**`
+          # or `scripts/**`, and reports are deliberately not deduplicated the way
+          # observations are.
+          #
+          # A FAILED deploy is not a no-op anyone wants hidden, and it is the one row
+          # with no substitute — the reconciler cannot observe a deploy that did not
+          # happen. It is also the case where "what moved" is least answerable: the
+          # run may have died before `up -d` ran at all. So on failure the filter is
+          # dropped and every tracked service is reported failed. Filter 2 in
+          # delivery-reportable.sh still bounds that to services the ledger knows.
+          #
+          # SERV-102 is the worked example, and it is why this is not theoretical:
+          # postgres' digest moved and switchyard's did not, and switchyard was the
+          # thing that broke.
+          if [ "$status" = "failed" ]; then
+            echo "Deploy failed — reporting every tracked service, not just what moved."
+            lines="$(./scripts/delivery-reportable.sh 2>&1 >/tmp/reportable.txt || true)"
+          else
+            lines="$(./scripts/delivery-reportable.sh --since "/tmp/delivery-before-${{ github.run_id }}.txt" 2>&1 >/tmp/reportable.txt || true)"
+          fi
           printf '%s\n' "$lines"
           reportable="$(cat /tmp/reportable.txt 2>/dev/null || true)"
 
           if [ -z "$reportable" ]; then
-            echo "Nothing moved that the ledger tracks — no row to write."
+            echo "Nothing to report — no tracked service moved, or the ledger is unreachable."
             exit 0
           fi
 
@@ -581,23 +629,6 @@ jobs:
             plain="$(printf '%s\n' "$reportable" | grep -vx -- "$enriched" || true)"
           fi
 
-          # `status` describes the DEPLOY, and every assertion in it counts. A stack
-          # that came up broken did not succeed, and neither did one that left the
-          # origin serving unauthenticated requests (SERV-106) — a deploy that goes
-          # red in the Actions tab must not go green in the ledger.
-          if [ "${{ steps.deploy.outcome }}" != "success" ] \
-            || [ "${{ steps.healthy.outcome }}" != "success" ] \
-            || [ "${{ steps.edge-auth.outcome }}" != "success" ]; then
-            echo "status=failed" >> "$GITHUB_OUTPUT"
-          elif [ "${DELIVERY_KIND:-}" = "rollback" ]; then
-            # A successful rollback is not a plain success. The matrix renders a
-            # rolled-back production row with its own alert, which is the whole
-            # point: prod is running deliberately-older code and the page should
-            # say so rather than showing a calm green row at an unexpected version.
-            echo "status=rolled_back" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=succeeded" >> "$GITHUB_OUTPUT"
-          fi
 
           {
             echo "enriched=${enriched}"

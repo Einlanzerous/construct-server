@@ -324,10 +324,27 @@ jobs:
             exit 0
           fi
 
-          # `--since` keeps only the containers whose image digest moved against the
-          # pre-pull snapshot, and then only the ones the ledger tracks. An hourly
-          # tick that pulled nothing produces no lines and writes no row.
-          noise="$(./scripts/delivery-reportable.sh --since "/tmp/dev-delivery-before-${{ github.run_id }}.txt" 2>&1 >/tmp/dev-reportable.txt || true)"
+          # STATUS FIRST, before any early exit below — a failed deploy that reports
+          # nothing is the failure mode this ordering exists to prevent.
+          status=succeeded
+          if [ "${{ steps.dev-health.outcome }}" != "success" ]; then
+            status=failed
+          fi
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+
+          # `--since` keeps only what this run recreated — a change in the image
+          # digest or the container id — and then only what the ledger tracks. An
+          # hourly tick that pulled nothing produces no lines and writes no row.
+          #
+          # On FAILURE the filter is dropped: a broken dev tier is not a no-op, and
+          # the run may have died before anything was recreated, so "what moved" is
+          # exactly the question that has no answer then.
+          if [ "$status" = "failed" ]; then
+            echo "Dev deploy failed — reporting every tracked service, not just what moved."
+            noise="$(./scripts/delivery-reportable.sh 2>&1 >/tmp/dev-reportable.txt || true)"
+          else
+            noise="$(./scripts/delivery-reportable.sh --since "/tmp/dev-delivery-before-${{ github.run_id }}.txt" 2>&1 >/tmp/dev-reportable.txt || true)"
+          fi
           printf '%s\n' "$noise"
           lines="$(cat /tmp/dev-reportable.txt 2>/dev/null || true)"
 
@@ -352,11 +369,6 @@ jobs:
             plain="$(printf '%s\n' "$lines" | grep -vx -- "$enriched" || true)"
           fi
 
-          if [ "${{ steps.dev-health.outcome }}" != "success" ]; then
-            echo "status=failed" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=succeeded" >> "$GITHUB_OUTPUT"
-          fi
           {
             echo "enriched=${enriched}"
             echo "plain<<PLAIN_EOF"

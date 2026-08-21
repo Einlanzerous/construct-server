@@ -34,7 +34,14 @@
 #   ./scripts/delivery-facts.sh [service ...]     # compose service names
 #
 # Emits one PIPE-separated line per first-party container:
-#   <container_name>|<version>|<digest>|<revision>
+#   <container_name>|<version>|<digest>|<revision>|<container_id>
+#
+# The container id is there so a caller can tell RECREATED from RE-IMAGED. Compose
+# recreates a container whenever its config hash moves — env, mounts, healthcheck,
+# ports, labels — with a byte-identical image, and `b3a28de` (passing Amber's URL
+# and token through to switchyard) is exactly that shape. A digest-only comparison
+# calls that "nothing moved". A new container always gets a new id, so the id
+# subsumes the digest and catches the env-only recreate as well.
 #
 # `|` and not a tab, matching report-versions.sh. Tab is IFS *whitespace*, so
 # `IFS=$'\t' read` collapses runs of it and strips leading empties — a row whose
@@ -59,7 +66,7 @@ FIRST_PARTY_PREFIX="${FIRST_PARTY_PREFIX:-ghcr.io/einlanzerous/}"
 err() { printf '%s\n' "$*" >&2; }
 
 case "${1:-}" in
-  -h|--help) sed -n '2,47p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,55p' "$0"; exit 0 ;;
   -*) err "ERROR: unknown option '$1'"; exit 2 ;;
 esac
 
@@ -115,5 +122,5 @@ for cid in $container_ids; do
     --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null \
     | awk -F@ -v r="$repo" '$1 == r { print $2; exit }')"
 
-  printf '%s|%s|%s|%s\n' "$name" "$version" "$digest" "$revision"
+  printf '%s|%s|%s|%s|%s\n' "$name" "$version" "$digest" "$revision" "$cid"
 done
