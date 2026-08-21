@@ -191,6 +191,40 @@ jobs:
         # inside a make recipe.
         run: docker network create construct_dev_net 2>/dev/null || true
 
+      - name: Snapshot what dev is running, before the pull (SERV-117)
+        # Half of the answer to "did this run actually deploy anything?". This
+        # workflow runs HOURLY, and a tick that pulls nothing has deployed nothing —
+        # but the delivery ledger deliberately does NOT deduplicate reports the way
+        # it deduplicates observations, because a deploy that really happened twice
+        # is two events. So a reporter that fired every tick would append a row an
+        # hour, for ever, and bury the handful of rows that are real deploys.
+        #
+        # Compared on the image DIGEST rather than the tag: dev floats on `latest`,
+        # so the tag is the same string on both sides of a pull that moved the whole
+        # tier. That is the same trap the pull step above documents.
+        #
+        # Empty on a cold dev root, which reads correctly as "everything here is new".
+        #
+        # NAMED FOR THE RUN. `/tmp` survives between jobs on a self-hosted runner,
+        # and this step sits behind six that can fail (rsync, render-env, the DEV_
+        # tag validation, `config --images`, network create). With a fixed filename
+        # a run that died before reaching it would diff against the PREVIOUS run's
+        # snapshot, see that run's change again, and append a duplicate row for a
+        # tick that pulled nothing — precisely the flooding this guard exists to
+        # prevent. Run-scoped, absence means absence, and the resolve step reports
+        # nothing rather than guessing.
+        continue-on-error: true
+        env:
+          DEPLOY_ROOT: ${{ env.DEV_ROOT }}
+          COMPOSE_FILE: docker-compose.dev.yml
+          COMPOSE_PROJECT: construct-server-dev
+        # `|| rm -f`, not `|| true`: the redirection creates the file before the
+        # script runs, so a failure would leave a ZERO-BYTE baseline — which means
+        # the opposite thing, a cold root where everything is new, and would report
+        # every tracked service on a run that recreated nothing. On an HOURLY cron
+        # that is a row an hour. Absence has to mean absence.
+        run: ./scripts/delivery-facts.sh > "/tmp/dev-delivery-before-${{ github.run_id }}.txt" || rm -f "/tmp/dev-delivery-before-${{ github.run_id }}.txt"
+
       - name: Pull the images dev tracks
         # This is what actually moves dev forward, and it is not optional. Dev floats on
         # `latest`, so the image STRING in the compose file never changes — compose compares
@@ -214,6 +248,7 @@ jobs:
         run: make dev-up
 
       - name: Assert nothing in dev is unhealthy
+        id: dev-health
         # Docker computes health and acts on none of it, in dev exactly as in prod
         # (SERV-102). Most dev services declare no healthcheck at all, so this mostly
         # catches the case that matters here — a service that crash-looped or exited — and
@@ -222,6 +257,7 @@ jobs:
         run: make dev-health-check
 
       - name: Assert dev is still isolated from prod
+        id: dev-isolation
         # SERV-97's acceptance criterion, and the one thing this workflow could plausibly
         # break. Checks from the NETWORK's side as well as the project's, because the
         # regression this repo has already made once is a PROD container joining the dev
@@ -257,3 +293,125 @@ jobs:
             ./scripts/report-versions.sh --markdown
             printf '\nTriggered by `%s`.\n' "$GITHUB_EVENT_NAME"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Report the dev deploy to the Switchyard ledger (SERV-117) ───────────────
+      #
+      # This is the case PULL CAN NEVER COVER. Dev floats on `latest`, so a container
+      # inspect yields a digest and no version, and the epic wrote off the entire dev
+      # column as version-unknown for that reason. It is not: the image carries
+      # `org.opencontainers.image.version` from the release that built it, so a
+      # REPORT can name the version even though the tag cannot. Verified on the live
+      # tier — dev switchyard is 4.14.0 while prod is 4.13.1, which is precisely the
+      # drift this epic exists to make visible.
+      #
+      # Only what actually moved. See the before-snapshot above for why an hourly
+      # cron must not report on every tick.
+      - name: Resolve what this run actually deployed
+        id: reportable
+        if: always()
+        continue-on-error: true
+        env:
+          SWITCHYARD_URL: http://localhost:4002
+          SWITCHYARD_TOKEN: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          DEPLOY_ROOT: ${{ env.DEV_ROOT }}
+          COMPOSE_FILE: docker-compose.dev.yml
+          COMPOSE_PROJECT: construct-server-dev
+          # The ledger holds ONE row per service with the environment as the other
+          # axis, so dev's `switchyard-dev` container is prod's `switchyard` service
+          # seen in a second environment. The suffix is a compose-project artefact.
+          LEDGER_NAME_STRIP_SUFFIX: -dev
+          DISPATCH_IMAGE: ${{ github.event.client_payload.image }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "${SWITCHYARD_TOKEN:-}" ]; then
+            echo "::warning::SWITCHYARD_DEPLOY_TOKEN is not set — this deploy will not reach the ledger."
+            exit 0
+          fi
+
+          # STATUS FIRST, before any early exit below — a failed deploy that reports
+          # nothing is the failure mode this ordering exists to prevent.
+          # Both gates count, the same way prod consults deploy/healthy/edge-auth.
+          # The isolation assert is dev's ONLY security gate and the one thing this
+          # workflow could plausibly break — its own header says so — so a run that
+          # goes red on it must not write `succeeded` to the ledger.
+          status=succeeded
+          if [ "${{ steps.dev-health.outcome }}" != "success" ] \
+            || [ "${{ steps.dev-isolation.outcome }}" != "success" ]; then
+            status=failed
+          fi
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+
+          # `--since` keeps only what this run recreated — a change in the image
+          # digest or the container id — and then only what the ledger tracks. An
+          # hourly tick that pulled nothing produces no lines and writes no row.
+          #
+          # On FAILURE the filter is dropped: a broken dev tier is not a no-op, and
+          # the run may have died before anything was recreated, so "what moved" is
+          # exactly the question that has no answer then.
+          if [ "$status" = "failed" ]; then
+            echo "Dev deploy failed — reporting every tracked service, not just what moved."
+            noise="$(./scripts/delivery-reportable.sh 2>&1 >/tmp/dev-reportable.txt || true)"
+          else
+            noise="$(./scripts/delivery-reportable.sh --since "/tmp/dev-delivery-before-${{ github.run_id }}.txt" 2>&1 >/tmp/dev-reportable.txt || true)"
+          fi
+          printf '%s\n' "$noise"
+          lines="$(cat /tmp/dev-reportable.txt 2>/dev/null || true)"
+
+          if [ -z "$lines" ]; then
+            echo "Nothing moved that the ledger tracks — no row to write."
+            exit 0
+          fi
+          echo "Deployed by this run:"
+          printf '%s\n' "$lines" | sed 's/^/  /'
+
+
+          # The dispatch enrichment describes ONE release. Dev pins `latest`, so on the
+          # dispatch path the version that went live IS the dispatched one — unlike
+          # prod, where the pin can hold it back.
+          enriched=""
+          if [ -n "${DISPATCH_IMAGE:-}" ] && [ -n "${DISPATCH_VERSION:-}" ]; then
+            match="$(printf '%s\n' "$lines" | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
+            [ -n "$match" ] && enriched="$match"
+          fi
+          plain="$lines"
+          if [ -n "$enriched" ]; then
+            plain="$(printf '%s\n' "$lines" | grep -vx -- "$enriched" || true)"
+          fi
+
+          {
+            echo "enriched=${enriched}"
+            echo "plain<<PLAIN_EOF"
+            printf '%s\n' "$plain"
+            echo "PLAIN_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report the released service to dev, with its provenance
+        if: always() && steps.reportable.outputs.enriched != ''
+        continue-on-error: true
+        uses: Einlanzerous/switchyard/.github/actions/report-deploy@main
+        with:
+          token: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          environment: dev
+          service: ${{ github.event.client_payload.image }}
+          version: ${{ github.event.client_payload.version }}
+          status: ${{ steps.reportable.outputs.status }}
+          sha: ${{ github.event.client_payload.sha }}
+          commit-count: ${{ github.event.client_payload.commit_count }}
+          ticket-keys: ${{ toJson(github.event.client_payload.ticket_keys) }}
+          gate-passed: ${{ github.event.client_payload.gate_passed }}
+          gate-total: ${{ github.event.client_payload.gate_total }}
+          gate-run-url: ${{ github.event.client_payload.gate_run_url }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Report everything else dev moved to
+        if: always() && steps.reportable.outputs.plain != ''
+        continue-on-error: true
+        uses: Einlanzerous/switchyard/.github/actions/report-deploy@main
+        with:
+          token: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          environment: dev
+          services: ${{ steps.reportable.outputs.plain }}
+          status: ${{ steps.reportable.outputs.status }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

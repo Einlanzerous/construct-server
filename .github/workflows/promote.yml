@@ -334,7 +334,27 @@ jobs:
           fi
 
           git add versions.env
-          git commit -m "$subject" -m "Requested by ${ACTOR} via the ${KIND} workflow." -m "Reason: ${REASON}"
+
+          # The final -m block holds git TRAILERS, and that is the point (SERV-117).
+          # This workflow does not deploy — it commits versions.env and lets deploy.yml's
+          # path trigger fire — so the run that reports to the delivery ledger is that
+          # one, and these two lines are the only channel by which the kind and the
+          # reason reach it. `kind` promises to be "recorded in the commit and the
+          # ledger"; before this it reached the commit and stopped there.
+          #
+          # Trailers rather than a parseable subject line: a reason is free text a human
+          # wrote during a rollback, and reasons contain colons.
+          #
+          # Both in ONE -m, because git parses only the LAST paragraph as the trailer
+          # block. Two -m blocks are two paragraphs, and `Delivery-Kind` in the
+          # second-to-last one is invisible to `%(trailers:key=...)` — it reads as an
+          # ordinary line of prose and deploy.yml finds nothing.
+          git commit \
+            -m "$subject" \
+            -m "Requested by ${ACTOR} via the ${KIND} workflow." \
+            -m "Reason: ${REASON}" \
+            -m "Delivery-Kind: ${KIND}
+          Delivery-Reason: ${REASON}"
 
           # main IS protected — by the `Proect Main` ruleset, not classic branch
           # protection, which is why `branches/main/protection` returns 404 and makes it
