@@ -390,28 +390,27 @@ jobs:
       - name: Report the released service to dev, with its provenance
         if: always() && steps.reportable.outputs.enriched != ''
         continue-on-error: true
-        uses: Einlanzerous/switchyard/.github/actions/report-deploy@main
-        with:
-          token: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
-          environment: dev
-          service: ${{ github.event.client_payload.image }}
-          version: ${{ github.event.client_payload.version }}
-          status: ${{ steps.reportable.outputs.status }}
-          sha: ${{ github.event.client_payload.sha }}
-          commit-count: ${{ github.event.client_payload.commit_count }}
-          ticket-keys: ${{ toJson(github.event.client_payload.ticket_keys) }}
-          gate-passed: ${{ github.event.client_payload.gate_passed }}
-          gate-total: ${{ github.event.client_payload.gate_total }}
-          gate-run-url: ${{ github.event.client_payload.gate_run_url }}
-          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
+        env:
+          RD_TOKEN: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          RD_ENVIRONMENT: dev
+          RD_SERVICE: ${{ github.event.client_payload.image }}
+          RD_VERSION: ${{ github.event.client_payload.version }}
+          RD_STATUS: ${{ steps.reportable.outputs.status }}
+          RD_SHA: ${{ github.event.client_payload.sha }}
+          RD_COMMIT_COUNT: ${{ github.event.client_payload.commit_count }}
+          RD_TICKET_KEYS: ${{ toJson(github.event.client_payload.ticket_keys) }}
+          RD_GATE_PASSED: ${{ github.event.client_payload.gate_passed }}
+          RD_GATE_TOTAL: ${{ github.event.client_payload.gate_total }}
+          RD_GATE_RUN_URL: ${{ github.event.client_payload.gate_run_url }}
+          RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: ./scripts/report-deploy.sh
       - name: Report everything else dev moved to
         if: always() && steps.reportable.outputs.plain != ''
         continue-on-error: true
-        uses: Einlanzerous/switchyard/.github/actions/report-deploy@main
-        with:
-          token: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
-          environment: dev
-          services: ${{ steps.reportable.outputs.plain }}
-          status: ${{ steps.reportable.outputs.status }}
-          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          RD_TOKEN: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          RD_ENVIRONMENT: dev
+          RD_SERVICES: ${{ steps.reportable.outputs.plain }}
+          RD_STATUS: ${{ steps.reportable.outputs.status }}
+          RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: ./scripts/report-deploy.sh
