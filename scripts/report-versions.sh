@@ -116,6 +116,9 @@ for cid in $container_ids; do
   # Three distinct answers below, and collapsing any two of them misleads. Truncation
   # applies only when it IS a digest — the column width exists to cut 71 hex characters
   # down to something readable, and applying it to a sentence printed `(not from a registr`.
+  # The text column is 21 rather than 19 (a truncated digest) because the longest of
+  # these sentences is 21: at 20 it overflowed and pushed that one row's revision a
+  # place left of every other, which is the one thing an aligned report must not do.
   if [ -n "$digest" ]; then
     digest="${digest:0:19}"
   elif [ "$image_readable" -eq 1 ]; then
@@ -159,6 +162,6 @@ if [ "$MARKDOWN" -eq 1 ]; then
 else
   printf '%s\n' "$rows" | while IFS='|' read -r n r d v; do
     [ -z "$n" ] && continue
-    printf '%-26s %-58s %-20s %s\n' "$n" "$r" "$d" "$v"
+    printf '%-26s %-58s %-21s %s\n' "$n" "$r" "$d" "$v"
   done
 fi
