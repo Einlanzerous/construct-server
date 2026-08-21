@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.21.0](https://github.com/Einlanzerous/construct-server/compare/v4.20.0...v4.21.0) (2026-08-21)
+
+
+### Features
+
+* **dev:** fail the deploy when dev renders a token switchyard will refuse (SERV-118) ([#135](https://github.com/Einlanzerous/construct-server/issues/135)) ([4f2f7c4](https://github.com/Einlanzerous/construct-server/commit/4f2f7c493ea379db742b2189ae109ccd0cdf48cc))
+
+
+### Bug Fixes
+
+* **delivery:** guard the image lookups so one pruned image cannot kill the report (SERV-123) ([#134](https://github.com/Einlanzerous/construct-server/issues/134)) ([1c38515](https://github.com/Einlanzerous/construct-server/commit/1c38515309628b558f11d346ef976f1d805b17f8))
+
 ## [4.20.0](https://github.com/Einlanzerous/construct-server/compare/v4.19.1...v4.20.0) (2026-08-21)
 
 
