@@ -109,9 +109,18 @@ for cid in $container_ids; do
   name="$(docker inspect -f '{{.Name}}' "$cid")"; name="${name#/}"
   imgid="$(docker inspect -f '{{.Image}}' "$cid")"
 
+  # An image id can vanish from under a still-running container — the long note in
+  # report-versions.sh has the mechanism. `docker image inspect` exits non-zero on it,
+  # and every lookup below has to survive that: this script feeds the delivery ledger,
+  # so a crash here is a deploy that silently reports nothing (SERV-123).
   label() {
     local v
     v="$(docker image inspect "$imgid" --format "{{index .Config.Labels \"$1\"}}" 2>/dev/null || true)"
+    # Empty here means the image could not be read at all. The CONTAINER holds a copy
+    # of its labels taken at creation time, and that copy outlives the image — so fall
+    # back to it rather than reporting a first-party service with neither a version nor
+    # a revision, which are the two fields the ledger reads as identity.
+    [ -n "$v" ] || v="$(docker inspect -f "{{index .Config.Labels \"$1\"}}" "$cid" 2>/dev/null || true)"
     # `<no value>` is what Go's template prints for a missing key. Passing that
     # string through as a version would put the literal text "<no value>" on the
     # matrix where a version belongs.
@@ -125,10 +134,20 @@ for cid in $container_ids; do
   # Same RepoDigests care as report-versions.sh: one image id can be tagged from
   # several repositories, so match this container's repo rather than taking the
   # first, or a service gets reported under an unrelated repo's digest.
+  #
+  # Guarded for the same reason as the labels above: this is a pipeline under `set -o
+  # pipefail`, so an unreadable image fails the assignment and kills the script
+  # mid-enumeration. An empty digest is the honest answer here — and unlike the failed
+  # container enumeration above, one unreadable image does NOT make the baseline
+  # unknowable, so it degrades a field rather than exiting 3.
   repo="${ref%%@*}"; repo="${repo%:*}"
-  digest="$(docker image inspect "$imgid" \
-    --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null \
-    | awk -F@ -v r="$repo" '$1 == r { print $2; exit }')"
+  if repo_digests="$(docker image inspect "$imgid" \
+       --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null)"; then
+    digest="$(printf '%s\n' "$repo_digests" \
+      | awk -F@ -v r="$repo" '$1 == r { print $2; exit }')"
+  else
+    digest=""
+  fi
 
   printf '%s|%s|%s|%s|%s\n' "$name" "$version" "$digest" "$revision" "$cid"
 done
