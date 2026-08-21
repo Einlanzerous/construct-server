@@ -654,6 +654,10 @@ jobs:
         if: always() && steps.reportable.outputs.enriched != ''
         continue-on-error: true
         env:
+          # Explicit, not the script default: the `reportable` step above spells the
+          # same endpoint out, and a port move that edits one and misses these is a
+          # ledger gap on a GREEN run, not a red job.
+          RD_URL: http://localhost:4002
           RD_TOKEN: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
           RD_ENVIRONMENT: prod
           RD_SERVICE: ${{ github.event.client_payload.image }}
@@ -661,7 +665,12 @@ jobs:
           RD_STATUS: ${{ steps.reportable.outputs.status }}
           RD_SHA: ${{ github.event.client_payload.sha }}
           RD_COMMIT_COUNT: ${{ github.event.client_payload.commit_count }}
-          RD_TICKET_KEYS: ${{ toJson(github.event.client_payload.ticket_keys) }}
+          # Guarded: `toJson()` of a MISSING property is the four-character string
+          # `null`, not empty — and the filter would take that for a
+          # comma-separated list and post `ticket_keys: ["null"]`, a link on the
+          # matrix to a ticket that does not exist. Any dispatch carrying
+          # image+version without ticket_keys hits it.
+          RD_TICKET_KEYS: ${{ github.event.client_payload.ticket_keys && toJson(github.event.client_payload.ticket_keys) || '' }}
           RD_GATE_PASSED: ${{ github.event.client_payload.gate_passed }}
           RD_GATE_TOTAL: ${{ github.event.client_payload.gate_total }}
           RD_GATE_RUN_URL: ${{ github.event.client_payload.gate_run_url }}
@@ -672,6 +681,10 @@ jobs:
         if: always() && steps.reportable.outputs.plain != ''
         continue-on-error: true
         env:
+          # Explicit, not the script default: the `reportable` step above spells the
+          # same endpoint out, and a port move that edits one and misses these is a
+          # ledger gap on a GREEN run, not a red job.
+          RD_URL: http://localhost:4002
           RD_TOKEN: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
           RD_ENVIRONMENT: prod
           RD_SERVICES: ${{ steps.reportable.outputs.plain }}

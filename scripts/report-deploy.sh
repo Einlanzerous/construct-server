@@ -25,8 +25,8 @@
 #
 # The push half of the delivery ledger. Everything it sends is a CLAIM about a
 # deploy that this workflow performed; the reconciler's observations are what
-# corroborate it. See docs/delivery.md for the contract and .../payload.jq for
-# the body.
+# corroborate it. See switchyard's `docs/delivery.md` for the contract and
+# `scripts/report-deploy.jq`, beside this file, for the body.
 #
 # Inputs arrive as RD_* environment variables rather than `${{ inputs.* }}`
 # interpolated into the run block. That is not style: a `note` or `source_ref`
@@ -52,7 +52,15 @@ echo "::add-mask::${RD_TOKEN}"
 
 url="${RD_URL:-http://localhost:4002}"
 url="${url%/}"
-status="${RD_STATUS:-succeeded}"
+# NOT `${RD_STATUS:-succeeded}`. CLAUDE.md's first invariant is that a blank var
+# is unset rather than configured, and the value a default would substitute here
+# is precisely the one that reports a broken deploy as fine. Unreachable from the
+# callers in this repo — both resolve steps write `status=` before anything that
+# could exit — but the substituted value would be a lie, so it fails like the
+# other required inputs instead. "Never fail a deploy" is about the ledger being
+# unreachable, not about a caller passing nothing.
+[ -n "${RD_STATUS:-}" ] || fail "status is required — refusing to default to 'succeeded'"
+status="${RD_STATUS}"
 retries="${RD_RETRIES:-5}"
 
 # ── targets ────────────────────────────────────────────────────────────────
