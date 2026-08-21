@@ -174,6 +174,7 @@ make dev-bootstrap          # create the network, sync stack files to the dev ro
 make dev-up                 # postgres first, then init the databases, then the rest
 make dev-ps
 make dev-versions           # what dev is running, by the commit each image was built from
+make dev-assert-tokens      # will switchyard accept the tokens this .env renders? (SERV-118)
 make dev-health-check       # fail if anything crashed
 make dev-logs svc=purser-dev
 make dev-recreate svc=switchyard-dev

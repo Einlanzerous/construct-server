@@ -1,6 +1,6 @@
-.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions assert-tokens deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
-        dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions \
+        dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
@@ -107,6 +107,14 @@ edge-auth-check:
 #        make versions svc=purser (one service)
 versions:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/report-versions.sh $(svc)
+
+# The same shape check against PROD's rendered environment (SERV-118). Deliberately a
+# diagnostic here and NOT a gate in deploy.yml: prod's copy is Signet-managed and syncs
+# to both its targets, so the hand-written-secret failure mode that hit dev is not
+# reachable the same way. Run it when touching PROD_ENV_FILE.
+# Usage: make assert-tokens
+assert-tokens:
+	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-token-shapes.sh
 
 # Run the delivery prober once, right now, exactly as the timer does (SERV-111). Reads
 # the same /etc/delivery-prober/prober.env the unit does, so it proves the deployed
@@ -353,6 +361,16 @@ dev-health-check:
 dev-versions:
 	DEPLOY_ROOT=$(DEV_ROOT) COMPOSE_FILE=docker-compose.dev.yml COMPOSE_PROJECT=$(DEV_PROJECT) \
 	  ./scripts/report-versions.sh $(svc)
+
+# Does dev's RENDERED environment hold tokens switchyard will actually accept (SERV-118)?
+# The dev tier sat dark for two days on a bootstrap token of the wrong shape, and the
+# deploy that rendered it went green. deploy-dev.yml runs this as a render-time gate;
+# this is the local copy. Prints no credential — only which variable, its length, and
+# whether it carries the `sw_` prefix.
+# Usage: make dev-assert-tokens
+dev-assert-tokens:
+	DEPLOY_ROOT=$(DEV_ROOT) COMPOSE_FILE=docker-compose.dev.yml COMPOSE_PROJECT=$(DEV_PROJECT) \
+	  ./scripts/assert-token-shapes.sh
 
 # Report env keys prod declares that dev does not (see the script header for why
 # dev is written out explicitly instead of using compose `extends`).
