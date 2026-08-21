@@ -80,13 +80,28 @@ cd "$DEPLOY_ROOT"
 # while prod feeds purser from its own minted PURSER_SWITCHYARD_TOKEN (SERV-113), and
 # the container-side names are identical either way.
 #
-# AUTHENTIK_BOOTSTRAP_TOKEN is a different product's credential with a different shape
-# and must not be dragged in — hence an exact match on BOOTSTRAP_TOKEN rather than a
-# suffix match, which would catch it.
+# Three forms, because the estate uses three and a suffix match alone misses one:
+#
+#   BOOTSTRAP_TOKEN                   switchyard's own boot credential
+#   *SWITCHYARD_TOKEN                 SWITCHYARD_TOKEN, PURSER_SWITCHYARD_TOKEN
+#   *SWITCHYARD_TOKEN_*               SWITCHYARD_TOKEN_N8N_VOX_DICTATE — one per
+#                                     consumer, minted separately (.env.example:84)
+#
+# That third line is a review catch, not foresight: the trailing `_N8N_VOX_DICTATE`
+# defeats a suffix match, so n8n's per-workflow token went unchecked while the summary
+# line reported full coverage. Anything of that form is a switchyard API token by
+# construction, so match the infix rather than enumerating consumers.
+#
+# What must NOT be dragged in, and why the matching is this fussy rather than a grep for
+# SWITCHYARD: AUTHENTIK_BOOTSTRAP_TOKEN is a different product's credential with a
+# different shape (hence an EXACT match on BOOTSTRAP_TOKEN, not a suffix one), and
+# SWITCHYARD_DB_PASSWORD and SWITCHYARD_WEBHOOK_SECRET are a password and an HMAC secret
+# — switchyard's, but not API tokens, and neither is shaped like one.
 is_switchyard_token_var() {
   case "$1" in
     BOOTSTRAP_TOKEN) return 0 ;;
     *SWITCHYARD_TOKEN) return 0 ;;
+    *SWITCHYARD_TOKEN_*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -94,11 +109,22 @@ is_switchyard_token_var() {
 # `sw_` + 32 of the base32 alphabet. See the note above about this being a copy.
 TOKEN_RE='^sw_[A-Z2-7]{32}$'
 
-config_json="$(docker compose -f "$COMPOSE_FILE" ${COMPOSE_PROJECT:+-p "$COMPOSE_PROJECT"} config --format json 2>/dev/null)" || {
+# stderr is captured rather than discarded. Silencing it is right on the success path,
+# where compose is merely chatty about unset variables — but on the FAILURE path it left
+# exit 2 saying only "cannot resolve", on a runner where reproducing means shelling into
+# the box. Compose names the offending variable or interpolation template there, never a
+# value, so there is no credential argument for hiding it. (Discarding an error you then
+# report on is also the exact shape of the bug in SERV-123, one directory over.)
+compose_err="$(mktemp)"
+trap 'rm -f "$compose_err"' EXIT
+if ! config_json="$(docker compose -f "$COMPOSE_FILE" ${COMPOSE_PROJECT:+-p "$COMPOSE_PROJECT"} config --format json 2>"$compose_err")"; then
   err "ERROR: 'docker compose config' failed in $DEPLOY_ROOT — cannot resolve the environment"
   err "A config that will not resolve is its own problem; fix that before reading this check."
+  err ""
+  err "compose said:"
+  sed 's/^/  /' "$compose_err" >&2
   exit 2
-}
+fi
 
 # service<TAB>varname<TAB>value. Tab because a token cannot contain one, and because
 # `read -r` splitting on it leaves the value untouched.
@@ -117,13 +143,31 @@ while IFS=$'\t' read -r svc var value; do
   is_switchyard_token_var "$var" || continue
 
   if [ -z "${value:-}" ]; then
-    printf 'skip  %-22s %-24s blank — switchyard treats blank as unset, so this is legal\n' "$svc" "$var"
+    # Two different situations, and the same sentence is wrong for one of them.
+    #
+    # BOOTSTRAP_TOKEN is switchyard's own boot credential, wrapped in `blankAsUnset`:
+    # blank is a state it self-heals from, generating a token and surfacing it. Legal,
+    # and saying so is accurate.
+    #
+    # Every other match is a CLIENT credential held by a consumer — n8n, purser,
+    # autosavant-bot. Blank there means that consumer has no switchyard credential, which
+    # is not switchyard self-healing and is not obviously fine. It is still not a SHAPE
+    # failure, which is all this script judges, so it is skipped rather than failed — but
+    # it is reported as what it is rather than waved through with a fact about a
+    # different service. Whether a blank consumer token should fail is a real question
+    # for whoever owns that consumer; it is deliberately not answered here.
+    case "$var" in
+      BOOTSTRAP_TOKEN)
+        printf 'skip  %-22s %-32s blank — switchyard treats blank as unset and generates one\n' "$svc" "$var" ;;
+      *)
+        printf 'skip  %-22s %-32s blank — no shape to check; this consumer has no switchyard credential\n' "$svc" "$var" ;;
+    esac
     skipped=$((skipped + 1))
     continue
   fi
 
   if printf '%s' "$value" | grep -qE "$TOKEN_RE"; then
-    printf 'ok    %-22s %-24s well shaped\n' "$svc" "$var"
+    printf 'ok    %-22s %-32s well shaped\n' "$svc" "$var"
     checked=$((checked + 1))
   else
     # Length and prefix only. Never the value.
@@ -131,7 +175,7 @@ while IFS=$'\t' read -r svc var value; do
       sw_*) prefix="carries the sw_ prefix" ;;
       *)    prefix="does NOT start with sw_" ;;
     esac
-    printf 'FAIL  %-22s %-24s %s, %s chars (want sw_ + 32 of A-Z2-7, 35 total)\n' \
+    printf 'FAIL  %-22s %-32s %s, %s chars (want sw_ + 32 of A-Z2-7, 35 total)\n' \
       "$svc" "$var" "$prefix" "${#value}"
     failed=$((failed + 1))
   fi
@@ -149,4 +193,22 @@ if [ "$failed" -gt 0 ]; then
   exit 1
 fi
 
-echo "$checked switchyard token variable(s) well shaped, $skipped legally blank."
+# Matching NOTHING is a failure, not a pass. This is a gate in deploy-dev.yml, and what
+# decides whether it inspects anything is a container-side variable name in
+# docker-compose.dev.yml — not a place anyone editing that file would think to look. If a
+# name moves, every check here silently covers zero variables while still printing a line
+# that reads green. That is the failure this repo keeps naming: the step directly below
+# this one in deploy-dev.yml asserts its own coverage in both directions for the same
+# reason ("a pin nothing reads looks like a control and is not one"), and
+# mint-prober-token.sh asserts its granted scopes rather than trusting the request.
+if [ "$((checked + skipped))" -eq 0 ]; then
+  err "ERROR: no switchyard token variables matched — this check inspected nothing."
+  err ""
+  err "That is a failure rather than a pass. Either the container-side variable names in"
+  err "$COMPOSE_FILE have changed and is_switchyard_token_var() has not followed, or this"
+  err "is being run against a project that holds no switchyard consumer. Both need a human;"
+  err "neither should go green."
+  exit 1
+fi
+
+echo "$checked switchyard token variable(s) well shaped, $skipped blank."
