@@ -343,6 +343,28 @@ jobs:
           fi
           echo "status=${status}" >> "$GITHUB_OUTPUT"
 
+          # A SCHEDULED tick does not report a successful move (SERV-121).
+          #
+          # This workflow runs hourly, and its report would contribute a run URL
+          # pointing at a cron job — near-zero provenance. What it actually did was
+          # STEAL the enrichment: on the 4.15.0 release the 05:25 tick pulled the
+          # backend four minutes before the dispatch carrying commit_count,
+          # ticket_keys and the gate result arrived, so the row was written bare and
+          # the dispatch found nothing left to move.
+          #
+          # The prober still observes the move within five minutes, so the matrix
+          # shows the right version either way. It simply carries no CLAIM, which is
+          # honest: nobody decided that deploy.
+          #
+          # `schedule` only, and after the status write. A workflow_dispatch is not
+          # racing anything and a human triggering it IS provenance; and a tick whose
+          # deploy FAILED is the one row with no substitute, so failures still report
+          # on every path.
+          if [ "$status" = "succeeded" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "Scheduled tick, deploy succeeded — the prober covers what moved; no claim to add."
+            exit 0
+          fi
+
           # `--since` keeps only what this run recreated — a change in the image
           # digest or the container id — and then only what the ledger tracks. An
           # hourly tick that pulled nothing produces no lines and writes no row.
@@ -359,22 +381,35 @@ jobs:
           printf '%s\n' "$noise"
           lines="$(cat /tmp/dev-reportable.txt 2>/dev/null || true)"
 
-          if [ -z "$lines" ]; then
-            echo "Nothing moved that the ledger tracks — no row to write."
-            exit 0
-          fi
-          echo "Deployed by this run:"
-          printf '%s\n' "$lines" | sed 's/^/  /'
-
-
-          # The dispatch enrichment describes ONE release. Dev pins `latest`, so on the
-          # dispatch path the version that went live IS the dispatched one — unlike
-          # prod, where the pin can hold it back.
+          # THE DISPATCH MATCH IS RESOLVED BEFORE THE EMPTY-LIST EXIT.
+          #
+          # Ordering, not style. The whole point of the fallback is the case where
+          # THIS run moved nothing tracked — the cron got the image first — and an
+          # early exit above it would skip the one branch it exists for, leaving the
+          # release with no row at all now that the cron no longer writes one. That
+          # is the "strictly worse" outcome SERV-121 warned about in advance.
+          #
+          # The enrichment describes a VERSION, not a run, so when the filtered
+          # match is empty it asks what is running now, unfiltered.
           enriched=""
           if [ -n "${DISPATCH_IMAGE:-}" ] && [ -n "${DISPATCH_VERSION:-}" ]; then
             match="$(printf '%s\n' "$lines" | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
+            if [ -z "$match" ]; then
+              match="$(./scripts/delivery-reportable.sh 2>/dev/null \
+                | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
+              [ -n "$match" ] && echo "Dispatched version is already live — reporting it with its provenance anyway."
+            fi
             [ -n "$match" ] && enriched="$match"
           fi
+
+          if [ -z "$lines" ] && [ -z "$enriched" ]; then
+            echo "Nothing moved that the ledger tracks, and no dispatched version is live — no row to write."
+            exit 0
+          fi
+          [ -n "$lines" ] && { echo "Deployed by this run:"; printf '%s\n' "$lines" | sed 's/^/  /'; }
+
+          # With `lines` empty and `enriched` set this yields the empty string, so the
+          # "everything else" step stays skipped on its `!= ''` guard.
           plain="$lines"
           if [ -n "$enriched" ]; then
             plain="$(printf '%s\n' "$lines" | grep -vx -- "$enriched" || true)"
