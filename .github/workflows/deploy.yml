@@ -629,6 +629,16 @@ jobs:
           enriched=""
           if [ -n "${DISPATCH_IMAGE:-}" ] && [ -n "${DISPATCH_VERSION:-}" ]; then
             match="$(printf '%s\n' "$reportable" | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
+            if [ -z "$match" ]; then
+              # Not moved by THIS run — but `concurrency: deploy-construct` queues
+              # rather than cancels, so a versions.env push landing ahead of this
+              # dispatch can pull the same patch and take the movement with it.
+              # Rarer than dev's hourly cron, same shape (SERV-121). The enrichment
+              # describes a version, so ask what is running now, unfiltered.
+              match="$(./scripts/delivery-reportable.sh 2>/dev/null \
+                | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
+              [ -n "$match" ] && echo "Dispatched version is already live — reporting it with its provenance anyway."
+            fi
             if [ -n "$match" ]; then
               enriched="$match"
               echo "dispatch matched what went live: $match"
