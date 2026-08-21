@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.20.0](https://github.com/Einlanzerous/construct-server/compare/v4.19.1...v4.20.0) (2026-08-21)
+
+
+### Features
+
+* **delivery:** report every deploy to the Switchyard ledger (SERV-117) ([#130](https://github.com/Einlanzerous/construct-server/issues/130)) ([c388491](https://github.com/Einlanzerous/construct-server/commit/c388491b49e28c9f2182606d409b6146dcfc3474))
+
+
+### Bug Fixes
+
+* **delivery:** the hourly cron no longer steals a release's enrichment (SERV-121) ([#133](https://github.com/Einlanzerous/construct-server/issues/133)) ([d450848](https://github.com/Einlanzerous/construct-server/commit/d450848e386cb0923b7dcc0056722c5d8d92f764))
+* **delivery:** vendor the reporter — a public repo cannot resolve a private action (SERV-119) ([#132](https://github.com/Einlanzerous/construct-server/issues/132)) ([a5891f9](https://github.com/Einlanzerous/construct-server/commit/a5891f99e6e44fef1d95de818b32b6dd06bcbe27))
+
 ## [4.19.1](https://github.com/Einlanzerous/construct-server/compare/v4.19.0...v4.19.1) (2026-08-20)
 
 
