@@ -84,10 +84,11 @@ jobs:
         # anything under $HOME is invisible to it. Check explicitly rather than letting a
         # missing binary surface as `command not found` from three layers down inside a
         # make recipe (SERV-62 hit this twice). python3 is here because
-        # check-dev-isolation.sh parses the Traefik router config with it.
+        # check-dev-isolation.sh parses the Traefik router config with it, and jq because
+        # assert-token-shapes.sh reads compose's resolved config as JSON (SERV-118).
         run: |
           missing=""
-          for b in docker make rsync python3; do
+          for b in docker make rsync python3 jq; do
             command -v "$b" >/dev/null 2>&1 || missing="$missing $b"
           done
           if [ -n "$missing" ]; then
@@ -139,6 +140,31 @@ jobs:
           fi
           printf '%s\n' "$DEV_ENV_FILE" | ./scripts/render-env.sh - dev-versions.env "$DEV_ROOT/.env"
           chmod 600 "$DEV_ROOT/.env"
+
+      - name: Verify the rendered environment holds tokens switchyard will accept (SERV-118)
+        # switchyard-dev crash-looped 166 times across two days because
+        # SWITCHYARD_BOOTSTRAP_TOKEN in DEV_ENV_FILE was 48 characters of hex rather than
+        # a switchyard API token — and the deploy that rendered it went green. SWY-295 had
+        # just turned a malformed token from a silently dead credential into a loud boot
+        # failure, and dev tracks `latest`, so dev was the first tier to run that build.
+        # The value had been wrong long before anything said so.
+        #
+        # This is the render-time half of that fix, and it belongs beside the tag check
+        # below for the same reason: both ask whether what we just rendered is coherent,
+        # before anything pulls or starts. The DURABLE half is bringing DEV_ENV_FILE under
+        # Signet the way PROD_ENV_FILE already is (SERV-94) — a hand-written environment
+        # secret is why a wrong value was reachable in the first place, and Signet says so
+        # itself: "nothing in construct-server manages DEV_SWITCHYARD_BOOTSTRAP_TOKEN".
+        # Until that lands, a deploy that renders an environment the application will
+        # refuse fails here rather than 166 restarts and two days later.
+        #
+        # The script asks compose rather than grepping .env, and prints no credential —
+        # its header has the reasoning for both.
+        env:
+          DEPLOY_ROOT: ${{ env.DEV_ROOT }}
+          COMPOSE_FILE: docker-compose.dev.yml
+          COMPOSE_PROJECT: construct-server-dev
+        run: ./scripts/assert-token-shapes.sh
 
       - name: Verify every dev tag variable is accounted for
         # Prod's guard asserts no first-party image resolved to `:latest`. Dev cannot borrow
