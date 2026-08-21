@@ -381,32 +381,35 @@ jobs:
           printf '%s\n' "$noise"
           lines="$(cat /tmp/dev-reportable.txt 2>/dev/null || true)"
 
-          if [ -z "$lines" ]; then
-            echo "Nothing moved that the ledger tracks — no row to write."
-            exit 0
-          fi
-          echo "Deployed by this run:"
-          printf '%s\n' "$lines" | sed 's/^/  /'
-
-
-          # The dispatch enrichment describes ONE release. Dev pins `latest`, so on the
-          # dispatch path the version that went live IS the dispatched one — unlike
-          # prod, where the pin can hold it back.
+          # THE DISPATCH MATCH IS RESOLVED BEFORE THE EMPTY-LIST EXIT.
+          #
+          # Ordering, not style. The whole point of the fallback is the case where
+          # THIS run moved nothing tracked — the cron got the image first — and an
+          # early exit above it would skip the one branch it exists for, leaving the
+          # release with no row at all now that the cron no longer writes one. That
+          # is the "strictly worse" outcome SERV-121 warned about in advance.
+          #
+          # The enrichment describes a VERSION, not a run, so when the filtered
+          # match is empty it asks what is running now, unfiltered.
           enriched=""
           if [ -n "${DISPATCH_IMAGE:-}" ] && [ -n "${DISPATCH_VERSION:-}" ]; then
             match="$(printf '%s\n' "$lines" | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
             if [ -z "$match" ]; then
-              # This run did not move it — but something else might have, between
-              # the image being pushed and this dispatch arriving. The enrichment
-              # describes a VERSION, not a run, and it is the half of the report no
-              # observer can ever reconstruct, so it must not be lost to whichever
-              # run happened to win the pull. Ask what is running now, unfiltered.
               match="$(./scripts/delivery-reportable.sh 2>/dev/null \
                 | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
               [ -n "$match" ] && echo "Dispatched version is already live — reporting it with its provenance anyway."
             fi
             [ -n "$match" ] && enriched="$match"
           fi
+
+          if [ -z "$lines" ] && [ -z "$enriched" ]; then
+            echo "Nothing moved that the ledger tracks, and no dispatched version is live — no row to write."
+            exit 0
+          fi
+          [ -n "$lines" ] && { echo "Deployed by this run:"; printf '%s\n' "$lines" | sed 's/^/  /'; }
+
+          # With `lines` empty and `enriched` set this yields the empty string, so the
+          # "everything else" step stays skipped on its `!= ''` guard.
           plain="$lines"
           if [ -n "$enriched" ]; then
             plain="$(printf '%s\n' "$lines" | grep -vx -- "$enriched" || true)"

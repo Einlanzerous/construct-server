@@ -628,17 +628,17 @@ jobs:
           # commit count, ticket list and gate result describe what is running.
           enriched=""
           if [ -n "${DISPATCH_IMAGE:-}" ] && [ -n "${DISPATCH_VERSION:-}" ]; then
+            # NO unfiltered fallback here, and the asymmetry with deploy-dev.yml is
+            # deliberate (SERV-121). Dev needs one because its cron is SILENCED on a
+            # successful move, so a race leaves the movement unreported and the
+            # enrichment is the only thing that can still write the row.
+            #
+            # Prod has no silenced path: every deploy.yml run reports what it moved.
+            # So a fallback here could only ever fire when another run has ALREADY
+            # written a bare row for that version, and it would append a second,
+            # enriched one — the duplicate this ticket explicitly rejected, since
+            # `deployments` is append-only and SWY-187 renders history from it.
             match="$(printf '%s\n' "$reportable" | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
-            if [ -z "$match" ]; then
-              # Not moved by THIS run — but `concurrency: deploy-construct` queues
-              # rather than cancels, so a versions.env push landing ahead of this
-              # dispatch can pull the same patch and take the movement with it.
-              # Rarer than dev's hourly cron, same shape (SERV-121). The enrichment
-              # describes a version, so ask what is running now, unfiltered.
-              match="$(./scripts/delivery-reportable.sh 2>/dev/null \
-                | grep -x -- "${DISPATCH_IMAGE}=${DISPATCH_VERSION}" || true)"
-              [ -n "$match" ] && echo "Dispatched version is already live — reporting it with its provenance anyway."
-            fi
             if [ -n "$match" ]; then
               enriched="$match"
               echo "dispatch matched what went live: $match"
