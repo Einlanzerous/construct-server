@@ -98,14 +98,30 @@ rather than not at all. `check-edge-auth.sh` holds the allowlist, prints it on e
 run, refuses a `PathPrefix()` as too broad to verify, and fails on any internal
 router that is neither gated nor listed.
 
+## The dev edge is a second, separate one (SERV-93)
+
+Dev has its own Traefik, its own `cf-access-guard`, its own tunnel and its own Access
+applications, in the `construct-server-dev` compose project — **not** a leg of this
+Traefik. The alternative (attaching this Traefik to `construct_dev_net` so it could
+route `<svc>-dev.` hostnames) was cheap and, after SERV-106/107, no longer dangerous;
+it was rejected because it needs a carve-out in the "nothing crosses between dev and
+prod" assertion, and that exception is what preceded the original SERV-77 regression.
+
+Everything in this document is about the **prod** edge. The dev one mirrors it one
+tier down — one address bound on `construct_dev_edge_net`, per-host AUDs, no
+exemptions at all — and is documented in `docs/dev-environment.md`. The two share
+`services/cf-access-guard/` (built twice, once per project) and
+`scripts/check-edge-auth.sh` (`--dev` points it at the dev edge), and nothing else.
+
 ## Files
 
 | Path | Purpose |
 |------|---------|
 | `config/traefik/traefik.yml` | Static config: entrypoints, providers, ACME resolver |
 | `config/traefik/dynamic/routers.yml` | Routers, services, header-strip + deny-all + `cf-access-jwt` middlewares |
-| `services/cf-access-guard/` | Origin-side Access JWT validation (SERV-106); the only stack image built on the box |
-| `scripts/check-edge-auth.sh` | Asserts the origin rejects a spoofed Host — config *and* a live probe |
+| `config/traefik-dev/` | The **dev** edge's static + dynamic config (SERV-93) |
+| `services/cf-access-guard/` | Origin-side Access JWT validation (SERV-106); the only stack image built on the box, and built for both projects |
+| `scripts/check-edge-auth.sh` | Asserts the origin rejects a spoofed Host — config *and* a live probe. `--dev` for the dev edge |
 | `docker-compose.yml` | `traefik`, `cf-access-guard`, `authentik-server`, `authentik-worker`, `authentik-redis` |
 | `db/init-db.sh` | Provisions the `authentik` DB/user on the shared postgres |
 | `.env.example` | New vars (`CF_DNS_API_TOKEN`, `AUTHENTIK_*`) |

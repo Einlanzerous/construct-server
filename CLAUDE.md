@@ -19,6 +19,8 @@ anything deploys or gets versioned.
   Deployed by `deploy-dev.yml` (SERV-97), which pins nothing — `dev-versions.env`
   holds `latest` for every service on purpose.
 - `config/` — Traefik, CrowdSec, and Copyparty config mounted into containers.
+  `config/traefik-dev/` is the **dev** edge's own Traefik config (SERV-93) — a
+  second edge in the dev compose project, not a leg of prod's.
 - `caddy/`, edge routing — public 443 paths and Cloudflare Access.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
@@ -269,15 +271,41 @@ anything deploys or gets versioned.
   provisions real accounts across four services, so a dev purser with prod
   credentials does not fail safely — it succeeds, against production. **Nothing
   is on both networks**, which is what makes "dev cannot reach prod" true rather
-  than merely intended. Still do not attach Traefik to `construct_dev_net` casually,
-  but the reason has changed and shrunk. Two things now stand between a neighbour
-  and prod Switchyard: `internal` binds a single address on `construct_edge_net`,
-  which only cloudflared shares (SERV-107), and every router on it validates the
-  Access JWT at the origin (SERV-106). A dev hostname routed through the same
-  Traefik would be **refused** rather than served, because a host absent from
-  `CF_ACCESS_AUD_MAP` fails closed — so SERV-93's remaining work is giving dev
-  its own Access applications and AUDs, not re-litigating the hole. Isolation is
-  asserted by `make dev-verify-isolation`; dev-vs-prod config drift by
+  than merely intended.
+  **Dev has its own edge, and that is why the sentence above still has no
+  exceptions** (SERV-93). `traefik-dev`, `cf-access-guard-dev` and `cloudflared-dev`
+  live in the dev project on `construct_dev_edge_net` (172.31.241.0/24), with a
+  second Cloudflare tunnel and dev's own Access applications. The cheaper option —
+  attaching prod's Traefik to `construct_dev_net` — was by then no longer dangerous:
+  `internal` binds a single address on `construct_edge_net` that only cloudflared
+  shares (SERV-107), every router on it validates the Access JWT at the origin
+  (SERV-106), and a dev hostname absent from `CF_ACCESS_AUD_MAP` fails closed. It was
+  rejected anyway, because it needs a **carve-out** in "nothing outside the dev
+  project is attached to `construct_dev_net`" — and that check exists precisely
+  because the exception was made once before. Trading a property that holds
+  structurally for one that holds while a middleware stays correctly attached is the
+  wrong direction. **If a change starts needing a container on both networks, that is
+  the rejected design arriving by the back door.**
+  The dev edge mirrors prod one tier down and drops what dev must not hold: no
+  `public` entrypoint, no ACME (so no `CF_DNS_API_TOKEN` in dev), no CrowdSec, no
+  dashboard, and **no exemptions from origin auth at all** — prod's one exemption is
+  the GitHub webhook, and dev holds no webhook secret. Only switchyard and lyceum get
+  hostnames; **argosy deliberately does not**, because video does not traverse the
+  tunnel (the same reason prod Argosy gets a direct WAN path) and dev shares prod's
+  media read-only. Dev services still carry no `CF_ACCESS_*` of their own, so in-app
+  SSO stays off — dev is reached *through* Access at the edge, not by trusting an
+  Access JWT internally.
+  **The edge is gated on its own credential, not on a flag.** The three services carry
+  `profiles: [edge]` and the Makefile enables that profile exactly when
+  `DEV_CLOUDFLARE_TUNNEL_TOKEN` is non-empty in the deployed dev `.env`. Half of
+  SERV-93 is a Zero Trust dashboard change no file here can make (a second tunnel, one
+  Access application per hostname, its AUD into `CF_ACCESS_AUD_MAP` on
+  `cf-access-guard-dev`), and an empty `TUNNEL_TOKEN` does not disable cloudflared —
+  it crash-loops it. The runbook is in `docs/dev-environment.md`; do not re-derive it.
+  Isolation is asserted by `make dev-verify-isolation` — which now probes
+  **reachability** from the dev network with a positive control, not just attachment,
+  because attachment is a proxy and proxies are what let SERV-25's deferral hide for
+  six weeks. Dev origin auth is `make dev-edge-auth-check`; dev-vs-prod config drift is
   `make dev-parity`.
 - **The origin validates the Access JWT — reaching the entrypoint is not enough**
   (SERV-106). Cloudflare Access is enforced at Cloudflare's **edge**. The origin
@@ -305,7 +333,9 @@ anything deploys or gets versioned.
   a `PathPrefix()` as too broad to verify — and an internal router that is neither
   gated nor on the allowlist fails the check. It also runs the exploit itself against the live edge, from
   the **host** — an unpublished container port is still routable from there, which no
-  container-side probe sees. `deploy.yml` runs it as a post-deploy gate; locally it is
+  container-side probe sees. `--dev` points the same script at the dev edge (SERV-93)
+  rather than there being a second copy of it — one question, one implementation, and
+  the only difference in substance is that dev's exemption allowlist is empty. `deploy.yml` runs it as a post-deploy gate; locally it is
   `make edge-auth-check`. The guard is the one first-party image **built on the box**
   rather than pinned (stdlib-only Go, no deps), so `deploy.yml` builds it explicitly —
   `up -d` alone would keep running a stale image without complaint. Its image carries
@@ -389,5 +419,10 @@ There is no test suite — this repo is configuration, so validation is mostly
   the revision column, not the digest**: the publish workflow builds the same source
   twice seconds apart, so two digests from one commit is normal and comparing them
   invents drift that is not there (SERV-88).
+- `make dev-edge-auth-check` after touching the dev edge (`config/traefik-dev/`,
+  the dev guard's AUD map, the dev routers). It skips itself when the dev edge is not
+  deployed, which is the honest answer — there is no origin to interrogate then;
+  `config_only=1` checks the committed config from a checkout and names which dev
+  Access applications still have no AUD recorded.
 - For edge or auth changes, the only real check is a request through the public
   path — internal container-to-container success proves nothing about Access.

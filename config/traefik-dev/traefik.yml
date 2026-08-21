@@ -1,0 +1,76 @@
+# Traefik static configuration — the DEV edge (SERV-93)
+#
+# The dev project's own Traefik. Not prod's, and deliberately not a leg of prod's:
+# SERV-93 chose "a second edge" over "prod's Traefik with an interface on
+# construct_dev_net" because the second option trades a structural guarantee —
+# nothing is on both networks, so `dev cannot reach prod` is true rather than
+# intended — for a documented exception, and this repo has already been bitten
+# once by exactly that exception (see the header of docker-compose.dev.yml).
+#
+# It mirrors the prod edge ONE TIER DOWN and drops everything prod has that dev
+# has no business holding:
+#
+#   * ONE entrypoint, `internal`, bound to a SINGLE address on
+#     construct_dev_edge_net, which only cloudflared-dev shares. `:9080` means
+#     "every interface", and on a shared Docker network that means every
+#     neighbour — the bug SERV-107 fixed in prod, not re-introduced here.
+#   * NO `public` entrypoint. Dev has no WAN path at all: the line is behind CGNAT
+#     (SERV-15) and host 443 belongs to the prod Traefik. There is no direct path
+#     to dev, so there is nothing to deny-all and no catch-all to get wrong.
+#   * NO ACME / certificatesResolvers. Nothing here terminates TLS — Cloudflare
+#     does, at its edge — so dev needs no cert and, more to the point, no
+#     CF_DNS_API_TOKEN. A dev container holding a token that can edit the estate's
+#     real DNS zone is exactly the shape SERV-77 exists to prevent.
+#   * NO CrowdSec bouncer plugin. It guards the open WAN path, which dev does not
+#     have, and it would need a LAPI key for the prod crowdsec on construct_net.
+#   * NO api/dashboard and no `traefik` entrypoint. Prod's routes nothing and is
+#     never published; here it would be one more listener for no gain.
+#
+# What it keeps is the part that matters: every router validates the Cloudflare
+# Access JWT at the origin, against the AUD registered for that exact host
+# (SERV-106), via cf-access-guard-dev. Reaching this entrypoint is not sufficient
+# to be served.
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+
+# stdout, not a file. Prod writes to a shared volume because crowdsec tails it;
+# there is no crowdsec in dev, so `docker logs traefik-dev` is the whole story and
+# a volume nobody reads is just a disk that fills.
+accessLog:
+  format: json
+
+entryPoints:
+  # The ONLY entrypoint. cloudflared-dev dials this at http://traefik-dev:9080.
+  #
+  # Plain HTTP on purpose, same as prod: the leg from cloudflared to Traefik runs
+  # inside a Docker network behind an already-encrypted tunnel, and Cloudflare
+  # presents its own cert to browsers.
+  #
+  # Bound to ONE address. 172.31.241.10 is traefik-dev's fixed address on
+  # construct_dev_edge_net, which only cloudflared-dev shares. THIS VALUE MUST
+  # MATCH the ipv4_address in docker-compose.dev.yml — if they disagree Traefik
+  # binds an address it does not hold, cloudflared-dev cannot connect, and every
+  # dev hostname goes dark. scripts/check-edge-auth.sh --dev asserts they agree.
+  #
+  # As in prod, this is NOT unreachable from the host: on Linux the host routes to
+  # container addresses whether or not a port is published. That is why the bind is
+  # only half the answer and the cf-access-jwt middleware below is the other half —
+  # the bind decides who can connect, the middleware decides who is served.
+  internal:
+    address: "172.31.241.10:9080"
+    http:
+      middlewares:
+        - strip-identity-headers@file
+
+providers:
+  file:
+    # Explicit allowlist of routers/services/middlewares, and no Docker provider —
+    # same reasoning as prod. Dev runs `latest` by design, so a Docker provider
+    # here would let a label in an untested image publish itself at the edge.
+    directory: /etc/traefik/dynamic
+    watch: true

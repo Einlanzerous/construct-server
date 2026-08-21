@@ -257,6 +257,195 @@ services:
     networks:
       - construct_dev_net
 
+  # ======================= THE DEV EDGE (SERV-93) =======================
+  #
+  # Dev's own edge, one tier down from prod's and sharing nothing with it. Three
+  # containers on a network of their own: traefik-dev routes, cf-access-guard-dev
+  # decides whether a request is authenticated, cloudflared-dev is the only way in.
+  #
+  # WHY A SECOND EDGE RATHER THAN A LEG OF PROD'S TRAEFIK
+  # The cheap option was to attach the prod Traefik to construct_dev_net so it could
+  # route <svc>-dev. hostnames, and by 2026-08 it was no longer the dangerous option
+  # it had been in SERV-77: the prod `internal` entrypoint now binds one address
+  # (SERV-107) and every router on it validates the Access JWT at the origin
+  # (SERV-106), so a dev container on a shared Traefik would be refused rather than
+  # served. It was rejected anyway. It requires a carve-out in
+  # check-dev-isolation.sh's check 4 — "nothing outside the dev project is attached
+  # to construct_dev_net" — and that check exists BECAUSE this repo made exactly that
+  # exception once before. Trading a property that holds structurally for one that
+  # holds because a middleware is attached everywhere is the wrong direction, and
+  # nothing here needs to be on both networks to avoid it.
+  #
+  # WHAT IS DELIBERATELY NOT MIRRORED FROM PROD
+  #   - No `public` entrypoint, no ACME, no CF_DNS_API_TOKEN, no CrowdSec, no
+  #     dashboard. See config/traefik-dev/traefik.yml for each reason.
+  #   - No exemptions from origin auth. Prod has one (the GitHub webhook); dev holds
+  #     no webhook secret and must never receive real webhooks, so it has none.
+  #   - No argosy-dev or purser-dev hostname. See config/traefik-dev/dynamic/routers.yml.
+  #
+  # GATED BEHIND THE `edge` PROFILE, and the gate is the tunnel credential itself.
+  # Half of this ticket lives in the Cloudflare Zero Trust dashboard — a second
+  # tunnel, its token, and one Access application per dev hostname — which no file
+  # here can create. Until DEV_CLOUDFLARE_TUNNEL_TOKEN is present in DEV_ENV_FILE
+  # these three services are not started at all, which is the honest state: a
+  # cloudflared with no token crash-loops, and an empty variable is not a value
+  # (CLAUDE.md). The Makefile reads that variable's PRESENCE and sets
+  # COMPOSE_PROFILES for every dev target, so filling it in is the only step needed
+  # to turn the edge on — there is no second code change waiting behind it.
+  # docs/dev-environment.md has the dashboard runbook.
+
+  # --- DEV EDGE PROXY (traefik-dev) ---
+  traefik-dev:
+    # Same image and same digest as the prod Traefik, on purpose. Dev is a rehearsal;
+    # an edge one minor version off prod's rehearses something that is not going to
+    # ship. Bump both together. Digest-pinned because `v3.3` is a moving tag that
+    # upstream repoints on every patch release (SERV-105).
+    image: traefik:v3.3@sha256:2cd5cc75530c8d07ae0587c743d23eb30cae2436d07017a5ff78498b1a43d09f   # v3.3.7
+    container_name: traefik-dev
+    restart: unless-stopped
+    profiles: [edge]
+    # NO `ports:`. Nothing about the dev edge is published to the host — dev is
+    # reached through the tunnel, or on the loopback ports the services publish
+    # themselves. Publishing 9080 here would put an unauthenticated-at-the-network
+    # -layer entrypoint on the LAN, which check-dev-isolation.sh check 3 forbids
+    # anyway.
+    volumes:
+      - ./config/traefik-dev/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./config/traefik-dev/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      # Both, and for different jobs — the same split as prod. construct_dev_net is
+      # how traefik-dev reaches the dev backends it proxies to; construct_dev_edge_net
+      # is the only place the `internal` entrypoint listens. The static address is not
+      # cosmetic: config/traefik-dev/traefik.yml binds `internal` to exactly
+      # 172.31.241.10:9080, so this value and that one have to agree or cloudflared-dev
+      # cannot connect and every dev hostname goes dark. Asserted by
+      # `make dev-edge-auth-check`.
+      #
+      # Note what this does NOT do: both of these networks belong to THIS project, so
+      # check-dev-isolation.sh's "nothing foreign is attached to construct_dev_net"
+      # still holds unamended. That is the whole reason this is a second Traefik.
+      construct_dev_net: {}
+      construct_dev_edge_net:
+        ipv4_address: 172.31.241.10
+    depends_on:
+      # Ordering only, not a health gate — same trade as prod. Traefik retries
+      # forwardAuth per request, so a guard that is still starting costs a few
+      # seconds of 500s rather than holding the whole edge down.
+      - cf-access-guard-dev
+
+  # --- DEV ORIGIN AUTH (cf-access-guard-dev) ---
+  # The SAME source as prod's guard, built again for this project. Not the same
+  # image: dev must not depend on an artefact the prod project happens to have built,
+  # and `construct-server-dev-cf-access-guard` vs `construct-server-cf-access-guard`
+  # is what keeps the two independent. The build is a layer-cache hit after the first
+  # run — stdlib-only Go with nothing to download.
+  #
+  # Its AUDs are what make a dev token useless against prod and vice versa. Every
+  # application on the team domain is signed by the SAME key, so per-host audiences
+  # are the only thing separating them: without them a token minted for
+  # switchyard-dev would open prod switchyard, which is the exact outcome this
+  # ticket exists to avoid.
+  cf-access-guard-dev:
+    build:
+      context: ./services/cf-access-guard
+      args:
+        # deploy-dev.yml sets this from `git log -1 -- services/cf-access-guard`, the
+        # same way deploy.yml does for prod (SERV-109). `:-unknown` and not `:-`: an
+        # empty build arg stamps an empty label, which compares equal to a container
+        # that has no label at all, so "no evidence" would silently read as "current".
+        GUARD_REVISION: ${GUARD_REVISION:-unknown}
+    container_name: cf-access-guard-dev
+    restart: unless-stopped
+    profiles: [edge]
+    environment:
+      # Public identifiers, not secrets — an AUD is an application identifier and
+      # possession of one grants nothing; every check the guard makes is
+      # cryptographic. Tracked here rather than in DEV_ENV_FILE for the same reason
+      # prod tracks its own: an Access application change should be a reviewable diff.
+      #
+      # The SAME team domain as prod. There is no second Zero Trust tenant — dev gets
+      # its own applications and its own AUDs on the one tenant, which is what
+      # SERV-93 asks for. (This is not the CF_ACCESS_* pair the dev SERVICES
+      # deliberately do without: those would turn on in-app SSO, and dev keeps
+      # token-paste login. Dev is reached THROUGH Access at the edge, not by trusting
+      # an Access JWT internally.)
+      - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      # host=aud, one entry per router in config/traefik-dev/dynamic/routers.yml.
+      #
+      # EMPTY UNTIL THE ZERO TRUST DASHBOARD HALF IS DONE, and empty is a hard error
+      # rather than a default: the guard refuses to start with "CF_ACCESS_AUD_MAP is
+      # unset or empty, so no host could ever be authorised". That is the correct
+      # direction. Substituting a permissive default would serve dev unauthenticated
+      # to anything that reached the entrypoint; failing to start means the edge does
+      # not come up at all.
+      #
+      # Fill it in with the AUD tag of each dev Access application:
+      #   CF_ACCESS_AUD_MAP=switchyard-dev.zerogravity.industries=<aud>,lyceum-dev.zerogravity.industries=<aud>
+      # See docs/dev-environment.md. `make dev-edge-auth-check config_only=1` lists
+      # exactly which hosts are still unmapped.
+      - CF_ACCESS_AUD_MAP=
+      # enforce | audit. `audit` logs the decision it WOULD have made and allows the
+      # request anyway. It exists for a cutover against real traffic and is not a
+      # steady state; check-edge-auth.sh fails while it is set, which is what stops it
+      # surviving here.
+      - CF_ACCESS_GUARD_MODE=${DEV_CF_ACCESS_GUARD_MODE:-enforce}
+    networks:
+      # construct_dev_edge_net ONLY. traefik-dev is the sole caller, and the guard has
+      # no business being reachable from the dev services it protects — a dev app that
+      # could talk to its own auth gate is a strange shape, and dev runs untested code
+      # by design. It does need egress, to fetch the team's signing keys from
+      # <team>.cloudflareaccess.com.
+      - construct_dev_edge_net
+    healthcheck:
+      # The image is FROM scratch — no shell, no curl — so the binary probes itself.
+      # /healthz goes 503 when no signing key set has ever loaded, and when refreshes
+      # have been failing long enough that the cached keys may no longer be the ones
+      # Cloudflare signs with. Both are states where every request is about to start
+      # failing (SERV-102).
+      test: ["CMD", "/cf-access-guard", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # --- DEV CLOUDFLARE TUNNEL (cloudflared-dev) ---
+  # A SECOND tunnel, not a second connector on prod's. Two connectors sharing one
+  # token would let Cloudflare route a prod hostname to this one, which cannot serve
+  # it — the same failure the prod docs warn about for the retired host connector,
+  # except silent and intermittent. Its own tunnel means its own credential, its own
+  # ingress rules, and a dev tunnel that can be deleted without touching prod.
+  #
+  # Dashboard-managed (token) tunnel like prod's, so hostname -> origin ingress lives
+  # in the Zero Trust dashboard rather than in this repo. Every rule on it points at
+  # http://traefik-dev:9080. No open ports: cloudflared dials out.
+  cloudflared-dev:
+    image: cloudflare/cloudflared:latest@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+    container_name: cloudflared-dev
+    restart: unless-stopped
+    profiles: [edge]
+    command: tunnel --no-autoupdate run
+    environment:
+      # NO `:-` fallback, deliberately. An empty token is not a token: cloudflared
+      # would exit and restart forever, and the `edge` profile exists precisely so
+      # this service is not started until the variable holds something. If you are
+      # reading this because the container is crash-looping, the token is present but
+      # wrong — mint a new one for the DEV tunnel, not the prod one.
+      - TUNNEL_TOKEN=${DEV_CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      # construct_dev_edge_net ONLY, deliberately — the mirror of prod's SERV-107
+      # shape. Every ingress rule on this tunnel points at http://traefik-dev:9080, so
+      # it needs nothing from construct_dev_net, and keeping it off that network is
+      # half of what makes traefik-dev's bind address mean anything: traefik-dev
+      # listens on one address and this is the only other CONTAINER that can reach it.
+      #
+      # If a future ingress rule points at a dev service directly instead of at
+      # traefik-dev, it will fail to resolve here. That is the intended failure —
+      # route it through traefik-dev rather than re-adding construct_dev_net, which
+      # would hand the tunnel a path to every dev service that bypasses the guard.
+      - construct_dev_edge_net
+    depends_on:
+      - traefik-dev
+
 volumes:
   postgres_dev_data:
   switchyard_dev_uploads:
@@ -291,3 +480,36 @@ networks:
   # applications, is SERV-93.
   construct_dev_net:
     external: true
+
+  # The cloudflared-dev -> traefik-dev leg, and nothing else (SERV-93). The dev
+  # mirror of prod's construct_edge_net, and for the same reason.
+  #
+  # An entrypoint bound to `:9080` listens on every interface the container has,
+  # which on a shared network means every neighbour. Prod learned that the hard way
+  # (SERV-107) — from a throwaway container on the shared network, a spoofed Host
+  # returned prod Switchyard, unauthenticated. Dev is the tier where that would
+  # matter most: every service here runs `latest`, i.e. the untested code the project
+  # exists to exercise. So traefik-dev's `internal` entrypoint binds ONE address, on
+  # this network, and the only other container on it is cloudflared-dev.
+  #
+  # COMPOSE-MANAGED WITH AN EXPLICIT SUBNET, unlike construct_dev_net, which is
+  # `external:` and created by `make dev-network`. Binding to a fixed address needs a
+  # fixed address, and default IPAM cannot promise one. `name:` pins the network's
+  # real name so it is not prefixed with the project name — the compose file, the
+  # traefik-dev bind and check-dev-isolation.sh all have to be talking about the same
+  # network for any of the three to mean anything.
+  #
+  # 172.31.241.0/24 — adjacent to prod's 172.31.240.0/24 and, like it, deliberately
+  # clear of the 172.17-172.26 /16s Docker has already handed out on this host, so it
+  # cannot collide as networks come and go. Adjacency is for legibility only: Docker's
+  # inter-bridge isolation rules are what stop traffic crossing between them, not the
+  # numbering, and `make dev-verify-isolation` probes that rather than assuming it.
+  #
+  # This authenticates nothing on its own — that is cf-access-guard-dev's job. The
+  # bind decides who can connect, the middleware decides who is served, and neither
+  # makes the other redundant.
+  construct_dev_edge_net:
+    name: construct_dev_edge_net
+    ipam:
+      config:
+        - subnet: 172.31.241.0/24

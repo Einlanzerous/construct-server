@@ -34,10 +34,26 @@
 #      or not they are published, and is the probe angle SERV-107's review asked
 #      for.
 #   7. LIVE: a host with no router at all does not get a 200 either.
+#   8. LIVE: the entrypoint answers on its bound address and on NO OTHER address the
+#      Traefik container holds. `address: "1.2.3.4:9080"` is the whole of what makes
+#      the entrypoint unreachable from the app network (SERV-107) — and until this
+#      check existed, nothing asserted it: every probe above aims at the bound
+#      address, so a regression to `:9080` would pass all of them.
+#
+# TWO EDGES, ONE SCRIPT (SERV-93). `--dev` points every one of the checks above at
+# the dev project's edge instead: config/traefik-dev/, docker-compose.dev.yml,
+# cf-access-guard-dev, traefik-dev's address on construct_dev_edge_net. The dev edge
+# is a second Traefik and a second tunnel rather than a leg of prod's, so there is
+# nothing shared to get confused about — but the QUESTION is identical, and asking it
+# with a second copy of this script is how the two would drift apart. The only
+# difference in substance is the exemption allowlist: prod has one entry (the GitHub
+# webhook), dev has none and must keep having none.
 #
 # Usage:
 #   ./scripts/check-edge-auth.sh                 # config + live (what deploy.yml runs)
 #   ./scripts/check-edge-auth.sh --config-only   # config only, for a checkout with no stack
+#   ./scripts/check-edge-auth.sh --dev           # the dev edge (make dev-edge-auth-check)
+#   ./scripts/check-edge-auth.sh --dev --config-only
 #
 # Exit codes:
 #   0  the origin authenticates
@@ -48,18 +64,51 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
-ROUTERS="$REPO_ROOT/config/traefik/dynamic/routers.yml"
-STATIC="$REPO_ROOT/config/traefik/traefik.yml"
-COMPOSE="$REPO_ROOT/docker-compose.yml"
-GUARD_CONTAINER="${GUARD_CONTAINER:-cf-access-guard}"
 MIDDLEWARE="cf-access-jwt"
 
 CONFIG_ONLY=0
-case "${1:-}" in
-  --config-only) CONFIG_ONLY=1 ;;
-  "") ;;
-  *) printf 'usage: check-edge-auth.sh [--config-only]\n' >&2; exit 2 ;;
-esac
+DEV=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config-only) CONFIG_ONLY=1 ;;
+    --dev)         DEV=1 ;;
+    *) printf 'usage: check-edge-auth.sh [--dev] [--config-only]\n' >&2; exit 2 ;;
+  esac
+  shift
+done
+
+# Everything that differs between the two edges, gathered in one place so a reader can
+# see the whole of the difference rather than hunting for it. The CHECKS below are
+# identical for both.
+if [ "$DEV" -eq 1 ]; then
+  EDGE_LABEL="Dev edge auth (SERV-93)"
+  ROUTERS="$REPO_ROOT/config/traefik-dev/dynamic/routers.yml"
+  STATIC="$REPO_ROOT/config/traefik-dev/traefik.yml"
+  COMPOSE="$REPO_ROOT/docker-compose.dev.yml"
+  GUARD_CONTAINER="${GUARD_CONTAINER:-cf-access-guard-dev}"
+  TRAEFIK_SERVICE="traefik-dev"
+  EDGE_NET="construct_dev_edge_net"
+  # No exemptions, and that is a property to keep. Prod exempts the GitHub webhook
+  # because Access cannot authenticate GitHub and the endpoint is HMAC-gated instead;
+  # dev holds no GITHUB_WEBHOOK_SECRET and must never receive a real webhook, so an
+  # unauthenticated path into a tier running untested `latest` builds would buy
+  # nothing. An empty allowlist here is what makes adding one a visible diff.
+  EXEMPT_JSON='{}'
+else
+  EDGE_LABEL="Edge auth (SERV-106)"
+  ROUTERS="$REPO_ROOT/config/traefik/dynamic/routers.yml"
+  STATIC="$REPO_ROOT/config/traefik/traefik.yml"
+  COMPOSE="$REPO_ROOT/docker-compose.yml"
+  GUARD_CONTAINER="${GUARD_CONTAINER:-cf-access-guard}"
+  TRAEFIK_SERVICE="traefik"
+  EDGE_NET="construct_edge_net"
+  # Routers deliberately NOT behind the middleware. Every entry is a hole in origin
+  # auth, so this is an ALLOWLIST and not a pattern: an internal router that is
+  # neither gated nor named here fails the check. Adding to it is a reviewable diff in
+  # a security script, which is the point — the failure mode this exists to prevent is
+  # an exemption nobody had to argue for.
+  EXEMPT_JSON='{"switchyard-github-webhook": "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET"}'
+fi
 
 err() { printf '%s\n' "$*" >&2; }
 for dep in python3; do
@@ -76,7 +125,7 @@ FAIL=0
 PROBES="$(mktemp)"
 trap 'rm -f "$PROBES"' EXIT
 
-echo "=== Edge auth (SERV-106) ==="
+echo "=== $EDGE_LABEL ==="
 echo
 
 # --- 1-4. Configuration ------------------------------------------------------
@@ -87,8 +136,9 @@ echo
 # resolved view interpolates every variable, and this script has no business
 # holding the deployed environment.
 ROUTERS="$ROUTERS" STATIC="$STATIC" COMPOSE="$COMPOSE" MIDDLEWARE="$MIDDLEWARE" PROBE_OUT="$PROBES" \
+TRAEFIK_SERVICE="$TRAEFIK_SERVICE" EDGE_NET="$EDGE_NET" EXEMPT_JSON="$EXEMPT_JSON" \
 python3 <<'PY' || FAIL=1
-import os, re, sys, yaml
+import json, os, re, sys, yaml
 
 routers_file, static_file, compose_file = os.environ["ROUTERS"], os.environ["STATIC"], os.environ["COMPOSE"]
 middleware = os.environ["MIDDLEWARE"]
@@ -99,15 +149,10 @@ def bad(msg):
     print(f"  FAIL  {msg}")
     fail = True
 
-# Routers deliberately NOT behind the middleware. Every entry is a hole in origin
-# auth, so this is an ALLOWLIST and not a pattern: an internal router that is
-# neither gated nor named here fails the check. Adding to it is a reviewable diff
-# in a security script, which is the point — the failure mode this whole ticket
-# exists to prevent is an exemption nobody had to argue for.
-EXEMPT = {
-    "switchyard-github-webhook":
-        "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET",
-}
+# The exemption allowlist for whichever edge is being checked — set by the shell
+# above, where both edges' values sit side by side. See there for why prod has one
+# entry and dev has none.
+EXEMPT = json.loads(os.environ["EXEMPT_JSON"])
 
 routers = (yaml.safe_load(open(routers_file)) or {}).get("http", {}).get("routers", {}) or {}
 internal = {n: r for n, r in routers.items() if "internal" in (r.get("entryPoints") or [])}
@@ -127,7 +172,10 @@ else:
         print(f"  ok    all {gated} gated internal router(s) carry {middleware}")
 
 # Named, never silent. An exemption that stops being printed is an exemption that
-# stops being noticed.
+# stops being noticed — and an edge with NO exemptions has to say so too, or "we
+# checked and there are none" is indistinguishable from "we forgot to look".
+if not EXEMPT:
+    print("  ok    no router is exempt from origin auth on this edge")
 for name, why in sorted(EXEMPT.items()):
     if name in internal:
         print(f"  ok    {name} is exempt by design — {why}")
@@ -188,15 +236,20 @@ static = yaml.safe_load(open(static_file)) or {}
 addr = ((static.get("entryPoints") or {}).get("internal") or {}).get("address", "")
 ip = addr.rsplit(":", 1)[0] if ":" in addr else ""
 compose_doc = yaml.safe_load(raw) or {}
-traefik_nets = ((compose_doc.get("services") or {}).get("traefik") or {}).get("networks") or {}
+traefik_service, edge_net = os.environ["TRAEFIK_SERVICE"], os.environ["EDGE_NET"]
+traefik_nets = ((compose_doc.get("services") or {}).get(traefik_service) or {}).get("networks") or {}
 declared = ""
 if isinstance(traefik_nets, dict):
-    declared = ((traefik_nets.get("construct_edge_net") or {}) or {}).get("ipv4_address", "")
-if ip and declared and ip != declared:
-    bad(f"traefik.yml binds internal to {ip} but compose gives Traefik {declared} on construct_edge_net")
+    declared = ((traefik_nets.get(edge_net) or {}) or {}).get("ipv4_address", "")
+if not declared:
+    bad(f"compose gives {traefik_service} no ipv4_address on {edge_net}")
+    print("        The entrypoint binds one fixed address; with no fixed address to bind,")
+    print("        Traefik either fails to start or listens somewhere nobody meant it to.")
+elif ip and ip != declared:
+    bad(f"the static config binds internal to {ip} but compose gives {traefik_service} {declared} on {edge_net}")
     print("        Traefik would bind an address it does not hold and every tunneled app goes dark.")
-elif ip and declared:
-    print(f"  ok    internal entrypoint {addr} matches Traefik's address on construct_edge_net")
+elif ip:
+    print(f"  ok    internal entrypoint {addr} matches {traefik_service}'s address on {edge_net}")
 
 # Emit the probe targets for the live half. Written before the exit below, so a
 # failing config check still produces the list the live probes need — a config
@@ -338,6 +391,50 @@ if [ "$code" = "200" ]; then
   FAIL=1
 else
   echo "  ok    unrouted Host -> $code"
+fi
+
+# 8. The bind is a bind. Every check above aims at the address the entrypoint is
+# CONFIGURED to hold, so all of them keep passing if someone reverts the address to
+# `:9080` — which listens on every interface the container has, including the app
+# network shared with ~30 other containers. That was the SERV-107 finding, and this
+# is the only thing here that would notice it coming back.
+#
+# The port must come from the configured address, not be assumed: an entrypoint moved
+# to another port would otherwise be probed on a port nothing listens on, and pass.
+#
+# "Could not connect" is the PASS here, which everywhere else in this script it is
+# not — so the control matters. It is inherent rather than added: the probes a few
+# lines above just reached $ADDR with the same curl, in the same run, and got a 403.
+# A curl that could not connect to anything would have failed those first.
+#
+# Reads the container by $TRAEFIK_SERVICE, which is the compose service key used for
+# the config checks above. That works because both edges pin `container_name` to the
+# same string; if one ever stops doing so, this needs the container name separately.
+echo
+ADDR_IP="${ADDR%:*}"
+ADDR_PORT="${ADDR##*:}"
+OTHER_IPS="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}={{$v.IPAddress}}{{"\n"}}{{end}}' \
+  "$TRAEFIK_SERVICE" 2>/dev/null | awk -F= -v skip="$ADDR_IP" '$2 != "" && $2 != skip {print $1"="$2}')"
+if [ -z "$OTHER_IPS" ]; then
+  # Not a failure: a Traefik on exactly one network has no other address to leak on.
+  echo "  ok    $TRAEFIK_SERVICE holds no address other than $ADDR_IP"
+else
+  while IFS='=' read -r net ip; do
+    [ -z "$ip" ] && continue
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 \
+      -H "Host: ${HOSTS[0]}" "http://$ip:$ADDR_PORT/" 2>/dev/null || true)"
+    if [ "${code:-000}" = "000" ]; then
+      echo "  ok    nothing listens on $ip:$ADDR_PORT ($net) — the single-address bind holds"
+    else
+      echo "  FAIL  $ip:$ADDR_PORT ($net) ANSWERED ($code) — the entrypoint is not bound to one address"
+      echo "        Every other probe in this script aims at $ADDR and would still pass."
+      echo "        Check the entrypoint address in the static config: ':PORT' means every"
+      echo "        interface, which on a shared network means every neighbour (SERV-107)."
+      FAIL=1
+    fi
+  done <<EOF
+$OTHER_IPS
+EOF
 fi
 
 echo
