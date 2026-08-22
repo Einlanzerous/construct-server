@@ -76,26 +76,74 @@ original regression. Dev gets its own edge instead, so every assertion above sur
 unweakened. If a future change adds an exception to property 4, that is the rejected
 design arriving by the back door.
 
-## Secrets
+## Secrets — Signet owns `DEV_ENV_FILE`
 
-Dev reads `/opt/construct-server-dev/.env`, materialised from **`DEV_ENV_FILE`** on
-the `home-server-dev` GitHub Environment — the same arrangement as `PROD_ENV_FILE`
-on `home-server`.
+Dev reads `/opt/construct-server-dev/.env`, rendered by `deploy-dev.yml` from
+**`DEV_ENV_FILE`** on the `home-server-dev` GitHub Environment. That secret is not
+hand-written: **Signet renders it**, from the `construct-server-dev` vault project,
+the same way it already renders `PROD_ENV_FILE` for `home-server`.
 
 ```
-gh secret set DEV_ENV_FILE --env home-server-dev < your-dev.env
+                    signet sync
+creds/dev.env  ◄──────────┴──────────►  home-server-dev · DEV_ENV_FILE
+  (file target)                              (gh-render target)
+                                                    │  deploy-dev.yml
+                                                    ▼  + dev-versions.env
+                                          /opt/construct-server-dev/.env
 ```
+
+To change a dev credential: change it in the vault, then `signet sync`.
+
+```sh
+signet set --project construct-server-dev --name SOME_TOKEN
+signet sync
+```
+
+**Do not `gh secret set DEV_ENV_FILE` by hand.** It appears to work and is reverted by
+the next `signet sync`, which is the worst kind of wrong — a value that is live until
+something unrelated runs. The same now applies to `PROD_ENV_FILE`.
 
 Start from `.env.dev.example`, which has the same key names as `.env.example` and
 different values. **Never copy the prod `.env`.** Purser provisions real accounts
 across four services; a dev Purser holding prod credentials does not fail safely,
 it succeeds against production.
 
-This is an interim arrangement. **SGNT-24** gives Signet an environment dimension
-so dev and prod values live in one vault project, and **SGNT-20** teaches it to
-push a rendered file to a GitHub Environment secret. Between them the vault takes
-ownership of `DEV_ENV_FILE` without the stack changing how it reads anything —
-which is why the interim deliberately has the same shape as the end state.
+### Establishing it, and the two traps
+
+```sh
+# 1. Import the dev credentials. Creates the project's secrets AND registers the file
+#    target — which is the thing --seed-from reads in step 2.
+signet import --project construct-server-dev creds/dev.env
+
+# 2. The render target, key set seeded from that file target.
+signet target add --project construct-server-dev --render-as-secret \
+  --gh-repo Einlanzerous/construct-server --gh-secret DEV_ENV_FILE \
+  --gh-environment home-server-dev --seed-from creds/dev.env
+
+# 3. Push.
+signet sync
+```
+
+**Seed from `creds/dev.env`, never from `/opt/construct-server-dev/.env`.** Two
+reasons, and both have already bitten the prod project:
+
+1. **The deploy root has a writer.** `deploy-dev.yml` regenerates that file on every
+   run. A Signet file target there means two writers on one file, and drift becomes a
+   race rather than a state — which is why `file:/opt/construct-server/.env` reads
+   `changed` on the prod project (SERV-94).
+2. **It carries the tag pins.** The deployed `.env` is `creds/dev.env` *plus* the four
+   `DEV_*_TAG` values `render-env.sh` appends from tracked `dev-versions.env`. Those
+   belong to git (SERV-96), and importing them makes the vault a second apparent source
+   for a value it does not own. The prod project holds all ten `*_TAG` values today and
+   that is a bug, not a pattern to copy.
+
+`signet set` alone does **not** add a key to a target — it mints the value and leaves it
+reaching nothing, which is how `construct-server/DEV_SWITCHYARD_BOOTSTRAP_TOKEN` came to
+sit in the vault with no destination. Either add the key to `creds/dev.env` before
+importing, or attach it afterwards with `signet target add-key`.
+
+This is the dev half of **SERV-94**; the prod half (retiring the stale file targets and
+getting the tag pins out of the vault) is still open.
 
 ## How code gets into dev — `deploy-dev.yml` (SERV-97)
 
@@ -307,14 +355,9 @@ them down and says why (`make dev-edge-down` does it immediately). And
 serving gets probed regardless of what the environment claims. `make dev-edge-status`
 names all four states, including `HALF-ON`.
 
-**Where the token should live.** `DEV_ENV_FILE` is how it *reaches* the stack — that is
-the only path `deploy-dev.yml` reads. Where it is *kept* should be Signet, the way prod's
-`CLOUDFLARE_TUNNEL_TOKEN` already is: the `construct-server` project renders straight into
-the `PROD_ENV_FILE` environment secret. There is no dev counterpart yet, which is why
-`DEV_ENV_FILE` is still hand-written and why a malformed value once sat in it for two days
-(SERV-118). Standing one up is **SERV-94** / **SGNT-24**; until then, keep the token in the
-vault and copy it into `DEV_ENV_FILE`, rather than letting the only copy be the GitHub
-secret.
+**Where the token lives.** In Signet, as `construct-server-dev/DEV_CLOUDFLARE_TUNNEL_TOKEN`
+— the same place prod keeps its own `CLOUDFLARE_TUNNEL_TOKEN`. `DEV_ENV_FILE` is how it
+*reaches* the stack, and the vault is what fills `DEV_ENV_FILE`. See *Secrets* above.
 
 **The dashboard half — written down here rather than remembered.** `cloudflared` runs
 a dashboard-managed *token* tunnel (`tunnel --no-autoupdate run`, no config file), so
@@ -358,8 +401,12 @@ repo.
    DEV_LYCEUM_PUBLIC_URL=https://lyceum-dev.zerogravity.industries
    ```
 
-   ```
-   gh secret set DEV_ENV_FILE --env home-server-dev < your-dev.env
+   Through the vault, not `gh secret set` — see *Secrets* above:
+
+   ```sh
+   $EDITOR creds/dev.env          # add all three
+   signet import --project construct-server-dev creds/dev.env
+   signet sync
    ```
 6. **Deploy and verify.** `deploy-dev.yml` picks the profile up on its next run, or
    run it by hand:

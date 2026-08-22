@@ -74,13 +74,22 @@ anything deploys or gets versioned.
   dispatch `deploy.yml`, or every promote runs two concurrent deploys of the same
   commit.
 - Secrets the **stack** consumes reach it as `PROD_ENV_FILE`, a GitHub
-  Environment secret on `home-server` — not a repo-level secret. Update it with
-  `gh secret set PROD_ENV_FILE --env home-server`.
+  Environment secret on `home-server` — not a repo-level secret. Dev's equivalent is
+  `DEV_ENV_FILE` on `home-server-dev`. **Both are rendered by Signet and neither is set
+  by hand**: `construct-server` renders `PROD_ENV_FILE`, `construct-server-dev` renders
+  `DEV_ENV_FILE`, and a `gh secret set` on either appears to work and is reverted by the
+  next `signet sync` — live now, gone when something unrelated runs. Change the value in
+  the vault and sync. Seed a project's render target from the **credential source**
+  (`creds/dev.env`), never from the deployed `.env`: the deploy root already has a writer
+  in `render-env.sh`, and it carries the `versions.env` tag pins, which belong to git
+  (SERV-96) and must not acquire a second source in the vault. See
+  `docs/dev-environment.md`; the remaining prod cleanup is SERV-94.
 - Credentials only a **workflow** uses (the reviewer's tokens) are repo-level
   and managed by Signet: `signet set --project construct-server --name X`, then
   `signet target add --secret construct-server/X --gh-repo owner/name`, then
   `signet sync`. Rotation happens in the vault, not per repo. Moving these onto
-  a GitHub Environment is intended but not done.
+  a GitHub Environment is partly done — `PROMOTE_PUSH_TOKEN` already targets the
+  `production-promote` environment; the rest are still repo-level.
 - Text files are LF via `.gitattributes` (SERV-52). A diff that looks like a
   whole-file rewrite is usually a line-ending regression.
 

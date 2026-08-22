@@ -139,6 +139,13 @@ jobs:
         # purser holding prod credentials does not fail safely — it succeeds, against
         # production (SERV-77). Start from .env.dev.example and generate every value fresh.
         #
+        # RENDERED BY SIGNET from the `construct-server-dev` vault project, not set by
+        # hand — so a wrong value is fixed in the vault and `signet sync`d, never with
+        # `gh secret set`, which the next sync reverts. That indirection is the durable
+        # half of SERV-118: a hand-written environment secret is how 48 characters of hex
+        # came to sit where a switchyard API token belonged, for two days, through a
+        # deploy that went green.
+        #
         # Rendered by the SAME script prod uses, merging the secret with dev-versions.env
         # into one complete .env, so `make dev-*`, check-dev-parity.sh and a bare compose
         # invocation in the dev root all resolve identical values without knowing the pin
@@ -150,7 +157,9 @@ jobs:
             echo "Error: DEV_ENV_FILE secret is missing or empty."
             echo "An empty environment is not an environment — compose would interpolate every"
             echo "credential to the empty string and start a half-configured dev stack."
-            echo "Set it with:  gh secret set DEV_ENV_FILE --env home-server-dev < your-dev.env"
+            echo "DEV_ENV_FILE is rendered by Signet — do not set it by hand."
+            echo "Fix it in the vault:  signet target list --project construct-server-dev"
+            echo "then:                 signet sync"
             exit 1
           fi
           printf '%s\n' "$DEV_ENV_FILE" | ./scripts/render-env.sh - dev-versions.env "$DEV_ROOT/.env"
