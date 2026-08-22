@@ -84,13 +84,23 @@ hand-written: **Signet renders it**, from the `construct-server-dev` vault proje
 the same way it already renders `PROD_ENV_FILE` for `home-server`.
 
 ```
-                    signet sync
-creds/dev.env  ◄──────────┴──────────►  home-server-dev · DEV_ENV_FILE
-  (file target)                              (gh-render target)
-                                                    │  deploy-dev.yml
-                                                    ▼  + dev-versions.env
-                                          /opt/construct-server-dev/.env
+             Signet vault — project construct-server-dev
+                      (the source of record)
+                              │
+                 signet sync  │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+        creds/dev.env            home-server-dev · DEV_ENV_FILE
+       (file target, the             (gh-render target)
+        local readable copy)                  │
+                                              │  deploy-dev.yml, via render-env.sh
+                                              ▼  merged with tracked dev-versions.env
+                                  /opt/construct-server-dev/.env
+                                     (what compose actually reads)
 ```
+
+Both boxes below the vault are **outputs**. Editing either one directly is editing a
+render, and the next `signet sync` overwrites it.
 
 To change a dev credential: change it in the vault, then `signet sync`.
 
@@ -109,6 +119,11 @@ across four services; a dev Purser holding prod credentials does not fail safely
 it succeeds against production.
 
 ### Establishing it, and the two traps
+
+`import` is the **one-time bootstrap**, and it runs against the arrow above: it reads
+`creds/dev.env` into the vault. Afterwards the direction reverses and that file is a
+render target — so this is the only moment at which editing it is how you change a
+value, rather than a thing the next sync undoes.
 
 ```sh
 # 1. Import the dev credentials. Creates the project's secrets AND registers the file
