@@ -43,7 +43,10 @@ PAIRS="switchyard:switchyard-dev
 switchyard-frontend:switchyard-frontend-dev
 argosy:argosy-dev
 lyceum:lyceum-dev
-purser:purser-dev"
+purser:purser-dev
+traefik:traefik-dev
+cf-access-guard:cf-access-guard-dev
+cloudflared:cloudflared-dev"
 
 # Keys dev deliberately does without, with the reason. Anything here is reported as
 # an intentional gap rather than a failure; anything NOT here is drift.
@@ -51,8 +54,10 @@ EXPECTED_ABSENT="SIGNET_API_TOKEN:no vault handle in dev
 SIGNET_BASE_URL:no vault handle in dev
 AMBER_BASE_URL:no amber in the dev slice
 AMBER_API_TOKEN:no amber in the dev slice
-CF_ACCESS_TEAM_DOMAIN:SSO off in dev
-CF_ACCESS_AUD:SSO off in dev
+CF_ACCESS_TEAM_DOMAIN:in-app SSO off in dev (cf-access-guard-dev does carry it)
+CF_ACCESS_AUD:in-app SSO off in dev (the guard holds the dev AUDs instead)
+CF_DNS_API_TOKEN:traefik-dev terminates no TLS, so dev holds no key to the real DNS zone
+CROWDSEC_BOUNCER_KEY:no public entrypoint and no crowdsec in the dev project
 GITHUB_TOKEN:dev must not act on real PRs
 GITHUB_WEBHOOK_SECRET:dev must not receive real webhooks
 PURSER_CF_API_TOKEN:no dev Zero Trust tenant

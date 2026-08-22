@@ -1,0 +1,131 @@
+# Traefik dynamic configuration — the DEV edge (SERV-93)
+#
+# Explicit allowlist. Only the routers below are served, and all of them sit on
+# the `internal` entrypoint, which only cloudflared-dev can reach. There is no
+# public entrypoint in this project at all, so there is no WAN path to bypass to.
+#
+# WHICH DEV SERVICES GET A HOSTNAME, AND WHY THE LIST IS SHORT
+#
+#   switchyard-dev  yes — the service dev exists to exercise most
+#   lyceum-dev      yes — mirrors prod's tunneled pair
+#   argosy-dev      NO  — video does not go through the tunnel. That is prod's
+#                   constraint too (docs/zerogravity-edge.md: Argosy gets a direct
+#                   path precisely because video traversing the tunnel is a ToS and
+#                   performance problem), and dev shares prod's media libraries
+#                   read-only, so a dev hostname would stream the same files
+#                   through the same tunnel. Dev has no direct path to give it
+#                   instead — CGNAT, and host 443 is prod's — so argosy-dev stays
+#                   on its loopback port. DEV_ARGOSY_PUBLIC_URL stays loopback with
+#                   it.
+#   purser-dev      NO  — prod purser is not tunneled either. It is called by
+#                   peers over the network, not reached by a person.
+#
+# Adding one is four steps, not one: a router here, an Access application in the
+# Zero Trust dashboard, its AUD in CF_ACCESS_AUD_MAP on cf-access-guard-dev, and
+# the ingress rule on the dev tunnel. `make dev-edge-auth-check` names whichever
+# half is missing. Forgetting the AUD does not open the app — the guard refuses a
+# host it has no audience for — so the failure is a 403 on a route that should
+# work, which is loud, rather than an unauthenticated app, which is not.
+
+http:
+  middlewares:
+    # Strip spoofable identity headers on ingress, applied to the entrypoint via
+    # entryPoints.internal.http.middlewares in traefik.yml. Identical to prod's
+    # list on purpose: dev is meant to be a rehearsal of prod, and a header that
+    # is stripped in one and trusted in the other makes dev testing lie.
+    #
+    # An empty value DELETES the header, so a client cannot inject a forged
+    # identity that an app might trust.
+    #
+    # Cf-Access-* is deliberately NOT in this list, exactly as in prod: those
+    # arrive from cloudflared-dev and are cryptographically validated by
+    # cf-access-jwt below. Stripping them would break the thing that authenticates
+    # the request. (Prod strips them on its PUBLIC entrypoint, which this project
+    # does not have.)
+    strip-identity-headers:
+      headers:
+        customRequestHeaders:
+          X-Authentik-Username: ""
+          X-Authentik-Groups: ""
+          X-Authentik-Email: ""
+          X-Authentik-Name: ""
+          X-Authentik-Uid: ""
+          X-Authentik-Jwt: ""
+          X-Authentik-Meta-Jwks: ""
+          X-Authentik-Meta-Outpost: ""
+          X-Authentik-Meta-Provider: ""
+          X-Authentik-Meta-App: ""
+          X-Authentik-Meta-Version: ""
+          Remote-User: ""
+          Remote-Groups: ""
+          Remote-Email: ""
+          Remote-Name: ""
+          X-Forwarded-User: ""
+          X-Forwarded-Groups: ""
+          X-Forwarded-Email: ""
+          X-Forwarded-Preferred-Username: ""
+
+    # Origin-side validation of Cf-Access-Jwt-Assertion (SERV-106), pointed at the
+    # DEV guard. Every router below carries it, and check-edge-auth.sh --dev fails
+    # if one does not.
+    #
+    # THERE ARE NO EXEMPTIONS IN DEV, and that is a property worth keeping rather
+    # than an omission. Prod has exactly one — the GitHub webhook, which Access
+    # cannot authenticate and which is HMAC-gated instead — and dev has no
+    # equivalent because dev deliberately holds no GITHUB_WEBHOOK_SECRET and must
+    # never receive real webhooks (see the header of docker-compose.dev.yml). An
+    # unauthenticated POST path into a tier that runs untested `latest` builds is
+    # not something to add for convenience.
+    cf-access-jwt:
+      forwardAuth:
+        address: "http://cf-access-guard-dev:4020/verify"
+        # FALSE is the default; spelled out because it is load-bearing. The guard
+        # picks which AUD to require from X-Forwarded-Host. With this true, Traefik
+        # would pass the CLIENT's X-Forwarded-Host through, letting a caller name
+        # one host for the audience check while the router serves a different
+        # backend — which in this project would mean a token for one dev app
+        # opening another. False makes Traefik set that header itself, from the
+        # same Host the router matched.
+        trustForwardHeader: false
+        # Forward only the assertion. Traefik still adds the X-Forwarded-* set it
+        # computes itself, so the guard keeps the host it needs, but the real
+        # request's cookies and Authorization headers never reach it.
+        authRequestHeaders:
+          - "Cf-Access-Jwt-Assertion"
+
+  routers:
+    # ------------- INTERNAL entrypoint: the tunneled dev apps -------------
+    # Reachable only via cloudflared-dev, the only other member of
+    # construct_dev_edge_net. EVERY router here carries cf-access-jwt.
+    switchyard-dev:
+      entryPoints:
+        - internal
+      rule: "Host(`switchyard-dev.zerogravity.industries`)"
+      service: switchyard-dev
+      middlewares:
+        - cf-access-jwt
+      # No TLS: internal is plain HTTP (Cloudflare terminates TLS at its edge and
+      # the tunnel encrypts the wire).
+
+    lyceum-dev:
+      entryPoints:
+        - internal
+      rule: "Host(`lyceum-dev.zerogravity.industries`)"
+      service: lyceum-dev
+      middlewares:
+        - cf-access-jwt
+
+  services:
+    switchyard-dev:
+      loadBalancer:
+        # switchyard-frontend-dev serves the SPA and passes /v1 + /healthz to the
+        # backend, same split as prod. Route the tunneled host at the frontend.
+        servers:
+          - url: "http://switchyard-frontend-dev:4002"
+
+    lyceum-dev:
+      loadBalancer:
+        # One Go binary serves the JSON API and the embedded reader SPA same-origin
+        # on :4005 — no separate frontend.
+        servers:
+          - url: "http://lyceum-dev:4005"

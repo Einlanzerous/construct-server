@@ -44,6 +44,12 @@ on:
       - 'dev-versions.env'
       - 'db/**'
       - 'scripts/**'
+      # The dev edge (SERV-93). Both are mounted or built into the dev project, so a
+      # change here that never deploys leaves the box running the old copy — the same
+      # reason `scripts/**` is on this list. cf-access-guard is shared with prod, whose
+      # deploy.yml triggers on it too; a change to it is a change to both edges.
+      - 'config/traefik-dev/**'
+      - 'services/cf-access-guard/**'
       - '.github/workflows/deploy-dev.yml'
 
 # Same reasoning as deploy.yml: two runs would race on one deploy root, one rendered .env
@@ -116,6 +122,15 @@ jobs:
         run: |
           rsync -a --delete ./db/      "$DEV_ROOT/db/"
           rsync -a --delete ./scripts/ "$DEV_ROOT/scripts/"
+          # The dev edge (SERV-93): traefik-dev mounts config/traefik-dev/, and
+          # cf-access-guard-dev is BUILT from services/cf-access-guard/ rather than
+          # pulled — the same source as prod's guard, built again for this project so
+          # dev depends on no artefact the prod project happens to have around.
+          # Synced unconditionally, even when the edge profile is off: a deploy root
+          # missing the build context fails at `build` time with a path error rather
+          # than at review time, and syncing two small directories costs nothing.
+          rsync -a --delete ./config/traefik-dev/        "$DEV_ROOT/config/traefik-dev/"
+          rsync -a --delete ./services/cf-access-guard/  "$DEV_ROOT/services/cf-access-guard/"
           rsync -a docker-compose.dev.yml dev-versions.env Makefile "$DEV_ROOT/"
 
       - name: Restore dev secrets
@@ -123,6 +138,13 @@ jobs:
         # a copy of it: purser provisions real accounts across four services, so a dev
         # purser holding prod credentials does not fail safely — it succeeds, against
         # production (SERV-77). Start from .env.dev.example and generate every value fresh.
+        #
+        # RENDERED BY SIGNET from the `construct-server-dev` vault project, not set by
+        # hand — so a wrong value is fixed in the vault and `signet sync`d, never with
+        # `gh secret set`, which the next sync reverts. That indirection is the durable
+        # half of SERV-118: a hand-written environment secret is how 48 characters of hex
+        # came to sit where a switchyard API token belonged, for two days, through a
+        # deploy that went green.
         #
         # Rendered by the SAME script prod uses, merging the secret with dev-versions.env
         # into one complete .env, so `make dev-*`, check-dev-parity.sh and a bare compose
@@ -135,11 +157,36 @@ jobs:
             echo "Error: DEV_ENV_FILE secret is missing or empty."
             echo "An empty environment is not an environment — compose would interpolate every"
             echo "credential to the empty string and start a half-configured dev stack."
-            echo "Set it with:  gh secret set DEV_ENV_FILE --env home-server-dev < your-dev.env"
+            echo "DEV_ENV_FILE is rendered by Signet — do not set it by hand."
+            echo "Fix it in the vault:  signet target list --project construct-server-dev"
+            echo "then:                 signet sync"
             exit 1
           fi
           printf '%s\n' "$DEV_ENV_FILE" | ./scripts/render-env.sh - dev-versions.env "$DEV_ROOT/.env"
           chmod 600 "$DEV_ROOT/.env"
+
+      - name: Is the dev edge deployed? (SERV-93)
+        id: edge
+        # Dev's edge — traefik-dev, cf-access-guard-dev, cloudflared-dev — carries
+        # `profiles: [edge]`, and the switch is the tunnel credential itself: half of
+        # SERV-93 lives in the Cloudflare Zero Trust dashboard (a second tunnel, one
+        # Access application per dev hostname) and nothing in this repo can create it.
+        # So this asks the Makefile, which owns that test, rather than restating it —
+        # two places deciding what "the dev edge is deployed" means is how they come
+        # to disagree.
+        #
+        # Runs AFTER the .env is rendered, because that is the file the test reads.
+        # A notice rather than a warning when it is off: dev with no edge is the
+        # documented interim state, not a fault. What would be a fault is the edge
+        # being half-on, and the steps below assert against that rather than this.
+        run: |
+          on="$(make -s dev-edge-on)"
+          echo "on=$on" >> "$GITHUB_OUTPUT"
+          if [ -n "$on" ]; then
+            echo "Dev edge is ON — the edge profile is active for every step below."
+          else
+            echo "::notice::Dev edge is not deployed: DEV_ENV_FILE carries no DEV_CLOUDFLARE_TUNNEL_TOKEN. Dev runs on its loopback ports only. See docs/dev-environment.md for the Zero Trust steps (SERV-93)."
+          fi
 
       - name: Verify the rendered environment holds tokens switchyard will accept (SERV-118)
         # switchyard-dev crash-looped 166 times across two days because
@@ -208,6 +255,11 @@ jobs:
         # keys, and a grep-vs-compose disagreement of exactly that kind has shipped a bug
         # here once already (see deploy.yml, SERV-88).
         working-directory: ${{ env.DEV_ROOT }}
+        env:
+          # Without this the three edge services are filtered out of the resolved
+          # config and this step would quietly under-report what the deploy is about
+          # to start.
+          COMPOSE_PROFILES: ${{ steps.edge.outputs.on == '1' && 'edge' || '' }}
         run: docker compose -f docker-compose.dev.yml config --images | sed 's/^/  /'
 
       - name: Ensure the dev network exists
@@ -295,6 +347,35 @@ jobs:
         if: always()
         run: make dev-verify-isolation
 
+      - name: Assert the dev origin rejects a spoofed Host (SERV-93)
+        id: dev-edge-auth
+        # Dev's copy of prod's post-deploy edge gate. The config half would pass in a
+        # checkout; the point of running it HERE is the live half, which asks the
+        # deployed dev edge whether a request with no valid Cloudflare Access
+        # assertion gets served. A middleware present in routers.yml but not in
+        # effect — guard down, guard in audit mode, guard holding no signing keys,
+        # an address traefik-dev cannot reach — reads as correct everywhere except
+        # here.
+        #
+        # RUNS UNCONDITIONALLY, and the target decides — keying off whether an edge
+        # container is actually RUNNING, not off whether the token says one should be.
+        # Those come apart: `compose up -d` with a profile off does not stop the
+        # containers that profile created, so removing DEV_CLOUDFLARE_TUNNEL_TOKEN
+        # leaves a live edge serving while intent says "not deployed". Gating this step
+        # on intent would have taken the auth assertion silent over exactly that edge,
+        # which is worse than not having it. `make dev-up` above now reconciles the
+        # half-on state; this is the belt to that braces.
+        #
+        # When nothing is running it prints why and exits 0 — a check that "passes" by
+        # having nothing to check would be dishonest, but so would a red job over an
+        # edge that was never set up. The property that matters while dev has no edge is
+        # the isolation assert above, which always runs.
+        #
+        # always(), for the same reason the isolation check is always() — a failed
+        # health check is not a reason to stop asking the security question.
+        if: always()
+        run: make dev-edge-auth-check
+
       - name: Report what dev is running
         # The third acceptance criterion: answerable from the run, not by shelling in.
         # Prints the commit each image was built from, not just the digest — a digest
@@ -364,7 +445,8 @@ jobs:
           # goes red on it must not write `succeeded` to the ledger.
           status=succeeded
           if [ "${{ steps.dev-health.outcome }}" != "success" ] \
-            || [ "${{ steps.dev-isolation.outcome }}" != "success" ]; then
+            || [ "${{ steps.dev-isolation.outcome }}" != "success" ] \
+            || [ "${{ steps.dev-edge-auth.outcome }}" = "failure" ]; then
             status=failed
           fi
           echo "status=${status}" >> "$GITHUB_OUTPUT"
