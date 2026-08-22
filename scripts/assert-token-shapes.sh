@@ -13,6 +13,12 @@
 # two days. A deploy that renders an environment the application will REFUSE should
 # fail at render. That is all this script is.
 #
+# It gated dev from the start and prod from SERV-124, which also recorded why the
+# asymmetry was wrong: prod carries more of these variables and the worse blast radius,
+# and "prod is safer because it is Signet-managed" turned out to be false — `signet
+# render --check` compares key SETS, not values, so a vault seeded from a stale file
+# renders the stale value and reports success. That is how the dev value above got in.
+#
 # ── WHY COMPOSE, AND NOT A GREP OF .env ──────────────────────────────────────────
 # Compose strips quotes and takes the last of duplicate keys, so a grep of the file
 # and the value the container receives can disagree — a disagreement of exactly that
@@ -137,10 +143,13 @@ rows="$(printf '%s' "$config_json" | jq -r '
 checked=0
 skipped=0
 failed=0
+inspected=""
 
 while IFS=$'\t' read -r svc var value; do
   [ -n "${var:-}" ] || continue
   is_switchyard_token_var "$var" || continue
+  inspected="$inspected$var
+"
 
   if [ -z "${value:-}" ]; then
     # Two different situations, and the same sentence is wrong for one of them.
@@ -193,14 +202,70 @@ if [ "$failed" -gt 0 ]; then
   exit 1
 fi
 
-# Matching NOTHING is a failure, not a pass. This is a gate in deploy-dev.yml, and what
-# decides whether it inspects anything is a container-side variable name in
-# docker-compose.dev.yml — not a place anyone editing that file would think to look. If a
-# name moves, every check here silently covers zero variables while still printing a line
-# that reads green. That is the failure this repo keeps naming: the step directly below
-# this one in deploy-dev.yml asserts its own coverage in both directions for the same
-# reason ("a pin nothing reads looks like a control and is not one"), and
-# mint-prober-token.sh asserts its granted scopes rather than trusting the request.
+# ── COVERAGE: WHAT THE RESOLVED CONFIG DID NOT SHOW US ──────────────────────────
+# Matching NOTHING is a failure, not a pass. This is a gate in deploy-dev.yml AND,
+# since SERV-124, in deploy.yml — so on both tiers what decides whether it inspects
+# anything is a container-side variable name in a compose file, not a place anyone
+# editing that file would think to look. If a name moves, every check here silently
+# covers zero variables while still printing a line that reads green. That is the
+# failure this repo keeps naming: the step below this one in deploy-dev.yml asserts
+# its own coverage in both directions for the same reason ("a pin nothing reads looks
+# like a control and is not one"), and mint-prober-token.sh asserts its granted scopes
+# rather than trusting the request.
+#
+# A ZERO-MATCH TEST ONLY CATCHES THE TOTAL CASE, and there is a partial one that
+# reaches the same end. `docker compose config` is PROFILE-FILTERED — measured, and
+# the reason the Makefile threads COMPOSE_PROFILES through to this script for dev —
+# so a switchyard consumer added behind a `profiles:` key is absent from the resolved
+# config entirely. The loop above cannot fail on a variable it was never handed: the
+# count stays at four or five, the summary prints, and the deploy goes green having
+# inspected a set nobody chose. The same hole opens if one of several names is
+# renamed while others still match.
+#
+# So compare against what the compose file DECLARES, read raw. This is the one thing
+# the raw file is a better source for than the resolved config, and it does not
+# reopen the "why compose, and not a grep" argument at the top: that is about VALUES,
+# which are interpolated and quote-stripped and must come from compose. These are
+# NAMES, written literally in the file, and the whole point is to see the ones the
+# resolved view drops. Both env forms are read; a non-token name matching neither
+# case in is_switchyard_token_var is discarded, so over-matching here is harmless.
+#
+# WHAT THIS DOES NOT BOUND, said rather than implied: it compares NAMES, not
+# service/name pairs. A profile-hidden service whose token variable is ALSO declared
+# by a visible one — two consumers both reading SWITCHYARD_TOKEN, say — still passes,
+# because that name was inspected, just elsewhere. Closing that would mean tying each
+# name to its service from raw YAML, which needs a real parser; the resolved config is
+# what carries that association and is exactly what drops the service. So the bound is
+# "no declared token variable goes entirely uninspected", which is the case that turns
+# a green summary into a lie about coverage.
+declared="$(grep -vE '^[[:space:]]*#' "$COMPOSE_FILE" \
+  | sed -nE -e 's/^[[:space:]]*-[[:space:]]*([A-Z][A-Z0-9_]*)=.*/\1/p' \
+            -e 's/^[[:space:]]+([A-Z][A-Z0-9_]*):[[:space:]].*/\1/p' \
+  | sort -u)"
+
+declared_tokens=""
+while IFS= read -r var; do
+  [ -n "$var" ] || continue
+  is_switchyard_token_var "$var" && declared_tokens="$declared_tokens$var
+"
+done <<< "$declared"
+
+missed="$(comm -23 <(printf '%s' "$declared_tokens" | sort -u) \
+                  <(printf '%s' "$inspected" | sort -u))"
+
+if [ -n "$missed" ]; then
+  err "ERROR: $COMPOSE_FILE declares switchyard token variable(s) this check never saw:"
+  printf '%s\n' "$missed" | sed 's/^/  - /' >&2
+  err ""
+  err "They are in the file but not in the resolved config, so nothing above could have"
+  err "failed on them. The usual cause is a \`profiles:\` key — 'docker compose config' is"
+  err "profile-filtered, so a consumer behind one is invisible here while still being"
+  err "deployed by anything that enables that profile. Set COMPOSE_PROFILES to include it"
+  err "(the Makefile's dev targets already do this via DEV_PROFILES) so the variable is"
+  err "inspected rather than quietly skipped."
+  exit 1
+fi
+
 if [ "$((checked + skipped))" -eq 0 ]; then
   err "ERROR: no switchyard token variables matched — this check inspected nothing."
   err ""

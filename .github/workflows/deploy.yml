@@ -79,6 +79,38 @@ jobs:
           # is verified, not assumed: run against a --depth 1 clone it exits 3.
           fetch-depth: 0
 
+      - name: Verify required tools are on PATH
+        # The runner is a systemd service with a bare system PATH and no login shell, so
+        # anything under $HOME is invisible to it. Check explicitly rather than letting a
+        # missing binary surface as `command not found` from three layers down inside a
+        # script (SERV-62 hit this twice).
+        #
+        # deploy-dev.yml has carried this step since SERV-97 (and added jq to it in
+        # SERV-118); prod never had one at all, and until now that was survivable. jq is
+        # reached by delivery-reportable.sh, which checks for it itself, and by
+        # report-deploy.sh, which does not — but both run at the very END of the deploy
+        # under continue-on-error, so a miss costs a report on a stack that is already
+        # up. The token gate below changes that: it reads compose's resolved config as
+        # JSON, and a gate that exits 2 on a missing dependency is a gate that did not
+        # run. That failure should read as "jq is not on PATH" here, rather than as
+        # "cannot resolve the environment" eight steps later.
+        #
+        # Each name earns its place: docker and rsync for the sync and deploy steps, jq
+        # for the token gate and report-deploy.sh, python3 for deploy-scope.sh and
+        # check-edge-auth.sh, curl for the reporting and edge-auth steps. `git` is
+        # deliberately absent — actions/checkout above cannot have succeeded without it,
+        # so checking here would be a test that can only pass.
+        run: |
+          missing=""
+          for b in docker rsync jq python3 curl; do
+            command -v "$b" >/dev/null 2>&1 || missing="$missing $b"
+          done
+          if [ -n "$missing" ]; then
+            echo "Error: not on the runner's PATH:$missing"
+            echo "The runner does not source a login shell — add the directory via \$GITHUB_PATH."
+            exit 1
+          fi
+
       - name: Verify deploy root exists
         # Fail loudly rather than creating it here: /opt is root-owned and the
         # runner has a bare system PATH with no login shell, so a mkdir would need
@@ -142,6 +174,73 @@ jobs:
           fi
           printf '%s\n' "$PROD_ENV_FILE" | ./scripts/render-env.sh - versions.env "$DEPLOY_ROOT/.env"
           chmod 600 "$DEPLOY_ROOT/.env"
+
+      - name: Verify the rendered environment holds tokens switchyard will accept (SERV-124)
+        # The render-time gate dev has had since SERV-118, now on the tier that needed it
+        # more. `assert-token-shapes.sh` shipped gating deploy-dev.yml while prod got the
+        # same script as a DIAGNOSTIC — `make assert-tokens`, which nobody is obliged to
+        # run. Prod carries five of these variables to dev's two and the worse failure:
+        # since SWY-295 a malformed BOOTSTRAP_TOKEN makes switchyard REFUSE TO BOOT, and
+        # prod switchyard is the ticket system the rest of the estate is tracked in.
+        #
+        # THE GATE IS NOT ONLY A DETECTOR — IT IS WHAT PRESERVES THE RECOVERY.
+        # `ensureBootstrapToken` is additive, so a bad value cannot be repaired by
+        # correcting the variable: it adds a second dead row. The last copy of the good
+        # token lives in the RUNNING container's environment, and it survives exactly
+        # until the recreate. Stopping here — after the render, before anything pulls,
+        # builds or recreates — is what keeps it readable. That is not hypothetical: on
+        # 2026-08-22 this script failed the dev deploy at precisely this point,
+        # switchyard-dev was never recreated, and the good value was still there to be
+        # recovered from it.
+        #
+        # AND "PROD IS SAFER BECAUSE IT IS SIGNET-MANAGED" IS FALSE. SERV-118 left prod
+        # ungated partly on that reasoning; the same day disproved it. DEV_ENV_FILE was
+        # brought under Signet seeded from a stale `creds/dev.env`, and `signet render
+        # --check` compares key SETS, not values — by design, so it can run without
+        # holding secrets. A vault handover therefore cannot see a wrong value on its way
+        # in, and that is as true of a prod handover as it was of dev's. Vault management
+        # protects against a hand-EDITED value; it does nothing about a WRONG one, and
+        # `sync` will silently revert an out-of-band correction because whatever the vault
+        # holds wins. Both tiers are Signet-rendered now, so the two are symmetric.
+        #
+        # ENFORCING, NOT A REHEARSAL MODE, AND THE REASON IS NOT IMPATIENCE.
+        # cf-access-guard shipped with `CF_ACCESS_GUARD_MODE=audit` because the question
+        # it asked — which real requests carry a valid Access JWT — could only be answered
+        # against live traffic nobody had characterised. There is no equivalent unknown
+        # here: the input is five variables, every one of them was inspected on
+        # 2026-08-22, and `make assert-tokens` reported 5/5 well shaped. A warn period
+        # would observe what is already known, and it would need its own forcing function
+        # — check-edge-auth.sh fails while that audit mode is set, which is the only
+        # reason that rehearsal did not become the steady state. Enforcing from the start
+        # is the cheaper honest option.
+        #
+        # THE COST, STATED PLAINLY. The regex is a SECOND COPY, in shell, in this repo, of
+        # switchyard's `API_TOKEN_RE_SOURCE`, and it fails CLOSED: if switchyard widens the
+        # alphabet or the length, a newly minted VALID token fails this check and blocks
+        # the production deploy path until someone edits a shell script here. That is the
+        # accepted trade, not an oversight — the ungated failure mode is prod switchyard
+        # refusing to boot after a rotation, with its own recovery path destroyed by the
+        # recreate, which is strictly worse than a loud deploy failure fixable in one
+        # line. Same direction as SERV-102 and SERV-106: prefer the noisy failure to the
+        # silent one. SWY-303 removes the copy by publishing the pattern for this script
+        # to read; when it lands, this comment is what should shrink.
+        #
+        # THE GATE IS STACK-WIDE AND THE DEPLOYS IT GATES ARE NOT. Under SERV-109 a
+        # promote or rollback pulls and recreates only the services behind the pins that
+        # moved, so a malformed leaf-consumer token — SWITCHYARD_TOKEN_N8N_VOX_DICTATE,
+        # which authenticates one n8n workflow — fails this step and therefore fails a
+        # rollback of, say, purser, which would never have touched n8n. A rollback runs
+        # with prod already broken and its whole value is being predictable, so it is the
+        # deploy least able to absorb a new precondition. Left stack-wide anyway: scoping
+        # the check to the services being recreated would mean the environment is only
+        # ever inspected where it is already being changed, and the failure this exists to
+        # catch is a bad value sitting in a variable nobody touched. Worth knowing which
+        # deploy it will bite, which is why it is written here rather than only weighed.
+        #
+        # No credential reaches the log — the script reports the variable, its length and
+        # whether it carries the `sw_` prefix, and its header has the reasoning for that
+        # and for asking compose rather than grepping .env.
+        run: ./scripts/assert-token-shapes.sh
 
       - name: Verify first-party image tags are pinned
         # The `:-latest` default in docker-compose.yml is a bootstrap convenience, and
