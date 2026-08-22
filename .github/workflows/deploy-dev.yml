@@ -348,15 +348,23 @@ jobs:
         # an address traefik-dev cannot reach — reads as correct everywhere except
         # here.
         #
-        # Skipped, not faked, when the edge is not deployed: with no tunnel there is
-        # no dev origin to interrogate, and a check that "passes" by having nothing
-        # to check is worse than one that says it did not run. The property that
-        # matters while dev has no edge is the isolation assert above, which always
-        # runs.
+        # RUNS UNCONDITIONALLY, and the target decides — keying off whether an edge
+        # container is actually RUNNING, not off whether the token says one should be.
+        # Those come apart: `compose up -d` with a profile off does not stop the
+        # containers that profile created, so removing DEV_CLOUDFLARE_TUNNEL_TOKEN
+        # leaves a live edge serving while intent says "not deployed". Gating this step
+        # on intent would have taken the auth assertion silent over exactly that edge,
+        # which is worse than not having it. `make dev-up` above now reconciles the
+        # half-on state; this is the belt to that braces.
+        #
+        # When nothing is running it prints why and exits 0 — a check that "passes" by
+        # having nothing to check would be dishonest, but so would a red job over an
+        # edge that was never set up. The property that matters while dev has no edge is
+        # the isolation assert above, which always runs.
         #
         # always(), for the same reason the isolation check is always() — a failed
         # health check is not a reason to stop asking the security question.
-        if: always() && steps.edge.outputs.on == '1'
+        if: always()
         run: make dev-edge-auth-check
 
       - name: Report what dev is running

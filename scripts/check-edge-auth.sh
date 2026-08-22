@@ -120,6 +120,26 @@ done
 
 FAIL=0
 
+# AN EMPTY AUD MAP IS PENDING SETUP, NOT A REGRESSION — but only while nothing is
+# serving. The dev edge ships with CF_ACCESS_AUD_MAP empty because the AUDs come from
+# Access applications that do not exist until someone creates them, and the guard
+# refuses to start on an empty map, so an unconfigured dev edge cannot be serving
+# anything. Reporting that as FAIL makes the ordinary pending state indistinguishable
+# from a real fault and puts a permanent red in front of a check that should be usable
+# in CI.
+#
+# Narrow on purpose. It applies only when the map is ENTIRELY empty, only in --dev, and
+# only when the guard is not running. A map with some entries but not others is drift; a
+# running guard means the edge IS serving and every host had better be mapped. Prod is
+# never eligible.
+AUD_PENDING_OK=0
+if [ "$DEV" -eq 1 ]; then
+  if ! command -v docker >/dev/null 2>&1 \
+     || [ "$(docker inspect -f '{{.State.Running}}' "$GUARD_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
+    AUD_PENDING_OK=1
+  fi
+fi
+
 # The config parse below also emits the live half's probe list, so both halves
 # read one parse of one file and cannot disagree about which hosts are tunneled.
 PROBES="$(mktemp)"
@@ -137,6 +157,7 @@ echo
 # holding the deployed environment.
 ROUTERS="$ROUTERS" STATIC="$STATIC" COMPOSE="$COMPOSE" MIDDLEWARE="$MIDDLEWARE" PROBE_OUT="$PROBES" \
 TRAEFIK_SERVICE="$TRAEFIK_SERVICE" EDGE_NET="$EDGE_NET" EXEMPT_JSON="$EXEMPT_JSON" \
+AUD_PENDING_OK="$AUD_PENDING_OK" \
 python3 <<'PY' || FAIL=1
 import json, os, re, sys, yaml
 
@@ -211,7 +232,15 @@ else:
 
 unmapped = sorted(set(hosts) - set(aud_map))
 dead = sorted(set(aud_map) - set(hosts))
-if unmapped:
+pending = bool(unmapped) and not aud_map and os.environ.get("AUD_PENDING_OK") == "1"
+if pending:
+    # Not a failure, and not silent either. See the shell above for how narrow this is.
+    print(f"  PEND  no AUD recorded yet for: {', '.join(unmapped)}")
+    print("        The guard refuses to start on an empty map, so nothing is being served")
+    print("        unauthenticated — this edge is not up. Create the Access applications")
+    print("        and paste each AUD into CF_ACCESS_AUD_MAP; docs/dev-environment.md has")
+    print("        the runbook.")
+elif unmapped:
     bad(f"tunneled host(s) with no AUD registered: {', '.join(unmapped)}")
     print("        The guard refuses an unmapped host, so these are unreachable.")
 if dead:
@@ -256,6 +285,8 @@ elif ip:
 # error and a live bypass are separate findings and the run should report both.
 with open(os.environ["PROBE_OUT"], "w") as fh:
     fh.write(f"addr {addr}\n")
+    if pending:
+        fh.write("pending 1\n")
     for h in sorted(hosts):
         fh.write(f"host {h}\n")
     for name in sorted(EXEMPT):
@@ -281,7 +312,15 @@ if [ "$CONFIG_ONLY" -eq 1 ]; then
   echo "        correctly while the origin serves 200 is the failure this exists"
   echo "        to catch, so run without the flag on the box before believing it."
   echo
-  [ "$FAIL" -eq 0 ] && { echo "Config checks passed."; exit 0; }
+  if [ "$FAIL" -eq 0 ]; then
+    if grep -q '^pending 1$' "$PROBES" 2>/dev/null; then
+      echo "Config checks passed — but the AUD map is empty, so this edge cannot serve."
+      echo "Nothing here is wrong; it is unfinished. See the PEND line above."
+    else
+      echo "Config checks passed."
+    fi
+    exit 0
+  fi
   echo "Config checks FAILED."; exit 1
 fi
 

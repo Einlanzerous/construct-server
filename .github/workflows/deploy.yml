@@ -10,6 +10,13 @@ on:
       - 'docker-compose.yml'
       - '.env.example'
       - 'config/**'
+      # ...but NOT the dev edge's Traefik config (SERV-93). Nothing in the prod stack
+      # reads it, and `config/**` would otherwise make a dev-only routing edit fire a
+      # PROD deploy — which, being a change outside versions.env, takes the whole-stack
+      # path in deploy-scope.sh (SERV-109) and pulls every first-party service whose
+      # major.minor pin has published since. A dev edit must not roll prod forward.
+      # deploy-dev.yml carries the matching positive trigger.
+      - '!config/traefik-dev/**'
       - 'aperture/**'
       - 'db/**'
       - 'caddy/**'

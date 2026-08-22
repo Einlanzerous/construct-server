@@ -302,6 +302,13 @@ anything deploys or gets versioned.
   Access application per hostname, its AUD into `CF_ACCESS_AUD_MAP` on
   `cf-access-guard-dev`), and an empty `TUNNEL_TOKEN` does not disable cloudflared —
   it crash-loops it. The runbook is in `docs/dev-environment.md`; do not re-derive it.
+  **The credential is an on switch; compose does not make it an off switch.**
+  `up -d` with a profile off does NOT stop the containers that profile created — they
+  stay `Up` and are not orphans. So removing the token leaves a live edge serving while
+  every intent-based check calls it "not deployed", which takes the auth assertion
+  silent over a running origin. `make dev-up` reconciles (see `dev-edge-down`), and
+  `make dev-edge-auth-check` keys off what is **running** rather than off the token:
+  if something is serving, it gets probed. Do not re-gate that check on the token.
   Isolation is asserted by `make dev-verify-isolation` — which now probes
   **reachability** from the dev network with a positive control, not just attachment,
   because attachment is a proxy and proxies are what let SERV-25's deferral hide for

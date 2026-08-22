@@ -179,7 +179,8 @@ make dev-versions           # what dev is running, by the commit each image was 
 make dev-assert-tokens      # will switchyard accept the tokens this .env renders? (SERV-118)
 make dev-health-check       # fail if anything crashed
 make dev-verify-isolation   # can dev reach prod? (probed, not inferred)
-make dev-edge-status        # is the edge on, and if not, why not
+make dev-edge-status        # ON / HALF-ON / OFF, and why
+make dev-edge-down          # take the edge down now (dev-up does it when the token goes)
 make dev-edge-auth-check    # does the dev origin refuse an unauthenticated request? (SERV-93)
 make dev-logs svc=purser-dev
 make dev-recreate svc=switchyard-dev
@@ -291,6 +292,29 @@ someone has to remember — half of this ticket lives in the Cloudflare Zero Tru
 dashboard and no file in this repo can create it, and an empty `TUNNEL_TOKEN` does
 not disable `cloudflared`, it crash-loops it. Until the token exists, dev runs on
 loopback exactly as before.
+
+**Turning it off is not symmetrical, and the Makefile has to do the work.**
+`docker compose up -d` with a profile *off* does not stop the containers that profile
+created — measured on compose v5.0.0; they stay `Up` and are not treated as orphans.
+So removing the token stops the edge being *started* without stopping it *running*:
+the tunnel stays connected, the hostnames stay served, and every check keyed on the
+token calls it "not deployed". That is the worst of the three states, because the auth
+assertion goes quiet over a live origin.
+
+Two things close it. `make dev-up` **reconciles** — token gone, containers up, it takes
+them down and says why (`make dev-edge-down` does it immediately). And
+`make dev-edge-auth-check` keys off what is **running**, not off the token, so anything
+serving gets probed regardless of what the environment claims. `make dev-edge-status`
+names all four states, including `HALF-ON`.
+
+**Where the token should live.** `DEV_ENV_FILE` is how it *reaches* the stack — that is
+the only path `deploy-dev.yml` reads. Where it is *kept* should be Signet, the way prod's
+`CLOUDFLARE_TUNNEL_TOKEN` already is: the `construct-server` project renders straight into
+the `PROD_ENV_FILE` environment secret. There is no dev counterpart yet, which is why
+`DEV_ENV_FILE` is still hand-written and why a malformed value once sat in it for two days
+(SERV-118). Standing one up is **SERV-94** / **SGNT-24**; until then, keep the token in the
+vault and copy it into `DEV_ENV_FILE`, rather than letting the only copy be the GitHub
+secret.
 
 **The dashboard half — written down here rather than remembered.** `cloudflared` runs
 a dashboard-managed *token* tunnel (`tunnel --no-autoupdate run`, no config file), so

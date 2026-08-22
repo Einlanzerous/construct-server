@@ -1,7 +1,7 @@
 .PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions assert-tokens deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens \
-        dev-edge-status dev-edge-on dev-build-guard dev-edge-auth-check \
+        dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
@@ -259,12 +259,33 @@ DEV_PROJECT = construct-server-dev
 # `DEV_CLOUDFLARE_TUNNEL_TOKEN=` line reads as absent, which it is — an empty
 # environment variable is not a value (CLAUDE.md).
 #
-# COMPOSE_PROFILES rather than `--profile`, because it reaches the SCRIPTS too:
-# assert-healthy.sh, report-versions.sh and assert-token-shapes.sh all build their
-# own `docker compose` invocation, and a profile passed as a flag here would be
-# invisible to them — so `make dev-health-check` would cheerfully report a healthy
-# dev while ignoring the three containers the edge is made of.
+# COMPOSE_PROFILES rather than `--profile`, because it reaches the scripts that build
+# their own `docker compose` invocation. Specifically report-versions.sh and
+# assert-token-shapes.sh, which read `compose config` — that IS profile-filtered, so
+# without this they would silently under-report the edge. assert-healthy.sh is NOT
+# affected: it enumerates with `compose ps -a`, which lists profile-disabled
+# containers regardless (measured on compose v5.0.0, not assumed). Said precisely
+# because an earlier draft of this comment claimed the health check had a coverage
+# gap, and it does not — which would have sent the next reader hunting for one.
 DEV_EDGE := $(shell grep -qsE '^DEV_CLOUDFLARE_TUNNEL_TOKEN=..' $(DEV_ROOT)/.env && echo 1)
+
+# WHAT IS ACTUALLY RUNNING, which is a different question from the one above and the
+# reason both exist. `DEV_EDGE` is INTENT — what the credential says should happen.
+# This is REALITY.
+#
+# They come apart in one direction that matters: `docker compose up -d` with a profile
+# OFF does not stop the containers that profile created. Measured on compose v5.0.0 —
+# a profile-gated container stays `Up` and is not treated as an orphan. So removing the
+# token turns the edge on-switch off and leaves the running edge exactly where it was:
+# the tunnel still connected, the hostnames still served, and every check that keyed
+# off intent alone quietly reporting "not deployed, nothing to assert" about a live
+# origin. The auth assertion going silent over a serving edge is strictly worse than it
+# never having existed.
+#
+# So: `dev-up` RECONCILES (see dev-edge-down), and `dev-edge-auth-check` keys off this
+# rather than off the token — if something is serving, it gets probed.
+DEV_EDGE_LIVE := $(shell docker ps --format '{{.Names}}' 2>/dev/null | grep -qxE 'traefik-dev|cf-access-guard-dev|cloudflared-dev' && echo 1)
+
 DEV_PROFILES = COMPOSE_PROFILES=$(if $(DEV_EDGE),edge,)
 
 DEV_COMPOSE = $(DEV_PROFILES) docker compose -p $(DEV_PROJECT) -f $(DEV_ROOT)/docker-compose.dev.yml \
@@ -323,6 +344,7 @@ dev-bootstrap: dev-network
 dev-up: dev-root dev-network
 	@$(MAKE) --no-print-directory dev-edge-status DEV_ROOT=$(DEV_ROOT)
 	$(if $(DEV_EDGE),@$(MAKE) --no-print-directory dev-build-guard DEV_ROOT=$(DEV_ROOT))
+	$(if $(DEV_EDGE),,$(if $(DEV_EDGE_LIVE),@$(MAKE) --no-print-directory dev-edge-down DEV_ROOT=$(DEV_ROOT)))
 	$(DEV_COMPOSE) up -d --wait postgres-dev
 	@$(MAKE) --no-print-directory dev-db-init DEV_ROOT=$(DEV_ROOT)
 	$(DEV_COMPOSE) up -d
@@ -337,13 +359,34 @@ dev-edge-on:
 # "dev has no hostnames" and "dev's edge failed to start" look identical from outside,
 # and only one of them is a problem.
 dev-edge-status:
-	@if [ -n "$(DEV_EDGE)" ]; then \
-	  echo "Dev edge: ON (edge profile) — traefik-dev, cf-access-guard-dev, cloudflared-dev"; \
+	@if [ -n "$(DEV_EDGE)" ] && [ -n "$(DEV_EDGE_LIVE)" ]; then \
+	  echo "Dev edge: ON — token present, containers running."; \
+	elif [ -n "$(DEV_EDGE)" ]; then \
+	  echo "Dev edge: ON (token present) — containers not up yet; 'make dev-up' starts them."; \
+	elif [ -n "$(DEV_EDGE_LIVE)" ]; then \
+	  echo "Dev edge: HALF-ON — no DEV_CLOUDFLARE_TUNNEL_TOKEN, but edge containers ARE running."; \
+	  echo "          The token is the switch, and compose does not stop a profile-gated"; \
+	  echo "          container when its profile goes off — so a live edge is still serving"; \
+	  echo "          while every intent-based check calls it 'not deployed'. 'make dev-up'"; \
+	  echo "          reconciles this; 'make dev-edge-down' does it now."; \
 	else \
-	  echo "Dev edge: OFF — no DEV_CLOUDFLARE_TUNNEL_TOKEN in $(DEV_ROOT)/.env."; \
-	  echo "          Dev runs on its loopback ports only. See docs/dev-environment.md"; \
-	  echo "          for the Cloudflare Zero Trust steps that turn it on (SERV-93)."; \
+	  echo "Dev edge: OFF — no DEV_CLOUDFLARE_TUNNEL_TOKEN in $(DEV_ROOT)/.env,"; \
+	  echo "          and nothing running. Dev is on its loopback ports only. See"; \
+	  echo "          docs/dev-environment.md for the Zero Trust steps (SERV-93)."; \
 	fi
+
+# Take the dev edge down. The other half of "the credential is the switch": without
+# this, removing the token stops the edge being STARTED without stopping it RUNNING.
+#
+# COMPOSE_PROFILES=edge unconditionally, not $(DEV_PROFILES) — this target runs
+# precisely when the profile is off, and compose cannot address a service whose profile
+# is disabled. Naming the three explicitly rather than `down`, which would take the
+# whole dev project with it.
+dev-edge-down: dev-root
+	@echo "Stopping the dev edge — the tunnel token is gone, so it must not keep serving."
+	COMPOSE_PROFILES=edge docker compose -p $(DEV_PROJECT) -f $(DEV_ROOT)/docker-compose.dev.yml \
+	  --project-directory $(DEV_ROOT) --env-file $(DEV_ROOT)/.env \
+	  rm -sf traefik-dev cf-access-guard-dev cloudflared-dev
 
 # Build cf-access-guard for the DEV project. Explicit, because `up -d` builds only
 # when the image is MISSING — it does not notice that the source changed, and for the
@@ -461,9 +504,8 @@ dev-verify-isolation:
 # Usage: make dev-edge-auth-check
 #        make dev-edge-auth-check config_only=1
 dev-edge-auth-check:
-	@if [ -z "$(DEV_EDGE)" ] && [ -z "$(config_only)" ]; then \
-	  echo "Dev edge is not deployed — no DEV_CLOUDFLARE_TUNNEL_TOKEN in $(DEV_ROOT)/.env."; \
-	  echo "There is no dev origin to probe, so this check has nothing to assert."; \
+	@if [ -z "$(DEV_EDGE_LIVE)" ] && [ -z "$(config_only)" ]; then \
+	  echo "No dev edge container is running, so there is no origin to interrogate."; \
 	  echo "Run 'make dev-edge-auth-check config_only=1' to check the committed config,"; \
 	  echo "and see docs/dev-environment.md for the Zero Trust steps (SERV-93)."; \
 	else \
