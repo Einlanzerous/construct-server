@@ -323,6 +323,9 @@ dev-network:
 dev-bootstrap: dev-network
 	@mkdir -p "$(DEV_ROOT)" 2>/dev/null || { echo "Cannot create $(DEV_ROOT) — run: sudo install -d -o $$(id -un) -g $$(id -gn) $(DEV_ROOT)"; exit 1; }
 	rsync -a docker-compose.dev.yml dev-versions.env Makefile "$(DEV_ROOT)/"
+	@# rsync creates only the LAST component of a destination path, so the two
+	@# nested syncs below need their parent directories to exist first (SERV-93).
+	mkdir -p "$(DEV_ROOT)/config" "$(DEV_ROOT)/services"
 	rsync -a --delete ./db/ "$(DEV_ROOT)/db/"
 	rsync -a --delete ./scripts/ "$(DEV_ROOT)/scripts/"
 	rsync -a --delete ./config/traefik-dev/ "$(DEV_ROOT)/config/traefik-dev/"

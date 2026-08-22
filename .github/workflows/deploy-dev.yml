@@ -120,6 +120,11 @@ jobs:
         # not linger, and .env is never inside a synced directory — it is written by the
         # next step and has to survive this one.
         run: |
+          # rsync creates the LAST component of a destination path and no intermediate
+          # ones, so `$DEV_ROOT/config/traefik-dev/` fails on a dev root that has never
+          # held a config/ — which is every dev root before SERV-93. db/ and scripts/
+          # are one level deep and happened not to need this; the two below are two.
+          mkdir -p "$DEV_ROOT/config" "$DEV_ROOT/services"
           rsync -a --delete ./db/      "$DEV_ROOT/db/"
           rsync -a --delete ./scripts/ "$DEV_ROOT/scripts/"
           # The dev edge (SERV-93): traefik-dev mounts config/traefik-dev/, and
