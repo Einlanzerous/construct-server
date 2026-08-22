@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.22.0](https://github.com/Einlanzerous/construct-server/compare/v4.21.0...v4.22.0) (2026-08-22)
+
+
+### Features
+
+* **dev:** give dev its own edge rather than a leg of prod's Traefik (SERV-93) ([#137](https://github.com/Einlanzerous/construct-server/issues/137)) ([4a0cc6f](https://github.com/Einlanzerous/construct-server/commit/4a0cc6f0c471063f09e1d4ca6940874ca018a2bf))
+
+
+### Bug Fixes
+
+* **dev:** create the dev root's nested dirs before rsyncing into them (SERV-93) ([#139](https://github.com/Einlanzerous/construct-server/issues/139)) ([73225ad](https://github.com/Einlanzerous/construct-server/commit/73225ada3b6e65990f56ee8519171348b2472438))
+
 ## [4.21.0](https://github.com/Einlanzerous/construct-server/compare/v4.20.0...v4.21.0) (2026-08-21)
 
 
