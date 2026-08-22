@@ -217,8 +217,27 @@ concurrency:
   # they are closed structurally rather than by key surgery (SERV-87): a skip is
   # now a skipped job, not a green one. Keep this key as it is anyway — a
   # cancelled run still reports as cancelled, which is neither.
+  #
+  # Variant six is not a key problem either, and is the first that is not a
+  # cancellation at all: a PR that conflicts with its base fires no
+  # `pull_request` run to cancel, so it never gets its unconditional `opened`
+  # review and every later `synchronize` was skipped for lacking the label
+  # (SERV-126). Closed at the triage rule, not here — see it for the mechanism.
   group: pr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}-${{ github.event.action }}
   cancel-in-progress: true
+
+# Workflow level rather than job level: BOTH jobs now need it. The review job
+# asserts a review appeared by counting before and after; triage asks whether
+# one ever has (SERV-126). Two copies of an identity that must match exactly is
+# the drift this shared workflow exists to stop.
+env:
+  # The identity the reviewer posts its review as. The prompt posts through
+  # `gh api` with `github_token: ${{ github.token }}`, which authors as
+  # github-actions[bot]; the counts filter on it so a human review landing
+  # mid-run cannot satisfy the "a review appeared" assertion. If this ever
+  # stops matching, the assertion fails loudly on every run rather than passing
+  # silently — which is the right way round.
+  REVIEWER_LOGIN: "github-actions[bot]"
 
 jobs:
   # Triage is a separate job so that declining to review can be expressed as a
@@ -374,8 +393,58 @@ jobs:
             # Re-reviewing on every push is the single largest cost multiplier,
             # and most pushes are a typo fix on a PR that was already read. Opt
             # in per PR with the label when a change is worth watching closely.
+            #
+            # But note the word RE-review: this rule is about the second read
+            # onward, and it was suppressing the first (SERV-126). A PR that
+            # conflicts with its base produces NO `pull_request` runs at all —
+            # GitHub evaluates the event against `refs/pull/N/merge`, which does
+            # not exist while the merge is unresolvable — so a PR opened
+            # conflicting never fires `opened`, the one action that reviews
+            # unconditionally. Every event it ever sees is a `synchronize` from
+            # the rebase that fixes the conflict, and each one landed here.
+            # argosy#194 went green in 9 seconds having been read by nothing.
+            #
+            # That is the sixth variant of the silent pass the concurrency key
+            # above keeps the ledger of, and the first that is not a
+            # cancellation: there was no run to cancel. So the test is not
+            # "which action is this" but "has anything ever read this PR" —
+            # which closes the class rather than this instance, and leaves the
+            # cost rule doing exactly the job it was written for.
+            #
+            # Conflicting PRs are also the ones being rebased and force-pushed,
+            # which is where mistakes get made.
+            #
+            # What closing it costs, because this file writes consequences down:
+            # a duplicate concurrent review inside the first review's window.
+            # The scenario is the one the ledger's variant three already names —
+            # a fixup pushed minutes after opening — and the action stays in the
+            # concurrency key, so the two runs do not cancel each other. The
+            # `opened` review is still running and has posted nothing, so the
+            # `synchronize` sees PRIOR=0 and reviews too. Both post. Before this
+            # change the second was skipped unconditionally.
+            #
+            # Accepted rather than prevented: reviewing twice is the safe
+            # direction and the second read sees the newer code, whereas
+            # detecting an in-flight run (a `gh run list` probe) is more
+            # machinery than a duplicate is worth — and machinery of exactly the
+            # kind the ledger above records five failures of.
             if [ "$ACTION" = "synchronize" ] && [[ ",$LABELS," != *",review:always,"* ]]; then
-              skip "push without the 'review:always' label"
+              # Same idiom as the review job's before/after assertion: stream
+              # the ids and count lines, because `--paginate` applies `--jq` per
+              # page and a `length` filter would emit one number per page.
+              #
+              # `|| PRIOR=0` guards the query, not the decision. An API hiccup
+              # must not read as "already reviewed" — unreachable means unknown,
+              # and unknown resolves toward reviewing. The cost of being wrong
+              # that way is one extra review; the cost of being wrong the other
+              # way is this ticket.
+              PRIOR=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
+                        --jq ".[] | select(.user.login == \"$REVIEWER_LOGIN\") | .id" | wc -l) || PRIOR=0
+
+              if [ "$PRIOR" -gt 0 ]; then
+                skip "push without the 'review:always' label ($PRIOR prior review(s) on this PR)"
+              fi
+              echo "→ push, but no review has ever been posted here — reviewing rather than skipping (SERV-126)"
             fi
           fi
 
@@ -721,13 +790,7 @@ jobs:
       # matter run before anything guarantees a remote, and relying on job
       # ordering for repo resolution is what broke triage. See the triage job.
       GH_REPO: ${{ github.repository }}
-      # The identity the reviewer posts its review as. The prompt posts through
-      # `gh api` with `github_token: ${{ github.token }}`, which authors as
-      # github-actions[bot]; the before/after count filters on it so a human
-      # review landing mid-run cannot satisfy the "a review appeared" assertion.
-      # If this ever stops matching, the assertion fails loudly on every run
-      # rather than passing silently — which is the right way round.
-      REVIEWER_LOGIN: "github-actions[bot]"
+      # REVIEWER_LOGIN is workflow-level — triage reads it too. See the top.
 
     steps:
       - name: Preflight

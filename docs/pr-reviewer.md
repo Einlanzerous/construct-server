@@ -25,7 +25,7 @@ name: PR Review
 
 on:
   pull_request:
-    types: [opened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     types: [created]
 
@@ -147,9 +147,45 @@ source — for exactly the case the expression existed to serve.
 
 1. Not a PR, or a fork, or a non-member `@claude review` → the whole workflow is skipped.
 2. Draft PR → skip. (`@claude review` overrides.)
-3. `synchronize` without the `review:always` label → skip. **This is the common
-   case; a green check after pushing fixes usually means this fired.** Comment
-   `@claude review` to force a re-review.
+3. `synchronize` without the `review:always` label, **on a PR the reviewer has
+   already reviewed at least once** → skip. **This is the common case; a skipped
+   check after pushing fixes usually means this fired.** Comment `@claude review`
+   to force a re-review.
+
+   The "already reviewed at least once" clause is the whole of SERV-126, and it
+   is load-bearing. This rule is about *re*-review, and it was suppressing the
+   *first* read: a PR that conflicts with its base produces **no `pull_request`
+   runs at all** — GitHub evaluates the event against `refs/pull/N/merge`, which
+   does not exist while the merge is unresolvable — so a PR opened conflicting
+   never fires `opened`, the one action that reviews unconditionally. Every
+   event it ever sees is a `synchronize` from the rebase that fixes the
+   conflict, and every one of those hit this skip. argosy#194 went green in nine
+   seconds having been read by nothing.
+
+   So the question is not "which action is this" but "has anything ever read
+   this PR", which closes the class rather than the instance. The count comes
+   from the same `pulls/N/reviews` filter on `REVIEWER_LOGIN` that the review
+   job's before/after assertion uses — hence `REVIEWER_LOGIN` living at workflow
+   level, since both jobs now need it and two copies of an identity that must
+   match exactly is precisely the drift this shared workflow exists to stop.
+
+   An API error while counting resolves toward **reviewing**, not skipping:
+   unreachable means unknown, and the cost of guessing wrong that way is one
+   extra review rather than another silent pass.
+
+   Closing it costs a **duplicate concurrent review** in one case: a fixup
+   pushed while the `opened` review is still running sees no posted review yet,
+   so it reviews too, and the action is in the concurrency key so neither run
+   cancels the other. Accepted — reviewing twice is the safe direction and the
+   second read sees the newer code.
+
+   **This is the only action-gated rule.** `opened`, `reopened` and
+   `ready_for_review` pass straight through it — and then go on to the rules
+   below, which apply to every action alike. Note what that means for
+   **`reopened`**: closing and reopening a PR that already has three reviews
+   buys a fourth, no `review:always` needed. Deliberate — it is the one way back
+   into a PR that opened conflicting and became mergeable with no push at all
+   (the residual gap SERV-126 leaves open), for anyone who thinks to use it.
 4. Empty diff → skip.
 5. Bot-authored release PR whose changed paths are all generated release
    material → skip. The expected set is **derived from
