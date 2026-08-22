@@ -425,6 +425,21 @@ There is no test suite — this repo is configuration, so validation is mostly
   on anything unhealthy and lists every container with no healthcheck at all.
   `deploy.yml` runs it as a post-deploy gate (SERV-102). `make dev-health-check`
   is the dev project's copy, run by `deploy-dev.yml`.
+- `make assert-tokens` / `make dev-assert-tokens` after anything that changes the
+  rendered environment — a vault edit, a `signet sync`, a rotation. It asks whether the
+  switchyard API tokens in the resolved compose config carry a shape switchyard will
+  accept, and **both tiers now gate their deploy on it** (SERV-118 for dev, SERV-124 for
+  prod), ahead of any pull or recreate. Malformed is not a degraded state: switchyard
+  refuses to boot on one (SWY-295), and `ensureBootstrapToken` is additive, so correcting
+  the variable afterwards adds a second dead row instead of repairing the first — the
+  last good copy lives in the running container's environment and dies with the recreate.
+  Stopping the deploy before that recreate is the recovery path, not just the alarm.
+  It **fails closed**: the pattern is a shell copy of switchyard's `API_TOKEN_RE_SOURCE`,
+  so if switchyard ever widens the alphabet or the length, a valid new token blocks the
+  prod deploy until `scripts/assert-token-shapes.sh` follows. Accepted deliberately;
+  SWY-303 removes the copy. Being Signet-managed is **not** a substitute — `signet render
+  --check` compares key sets, not values, so a vault seeded from a stale file renders the
+  stale value and reports success.
 - `make probe-status` after touching the prober or its role — it shows the timer
   *and* the last oneshot run, which is the pair that matters: the failure mode is
   the service landing in `failed` while the timer keeps cheerfully firing it.

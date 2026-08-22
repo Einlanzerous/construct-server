@@ -13,6 +13,12 @@
 # two days. A deploy that renders an environment the application will REFUSE should
 # fail at render. That is all this script is.
 #
+# It gated dev from the start and prod from SERV-124, which also recorded why the
+# asymmetry was wrong: prod carries more of these variables and the worse blast radius,
+# and "prod is safer because it is Signet-managed" turned out to be false — `signet
+# render --check` compares key SETS, not values, so a vault seeded from a stale file
+# renders the stale value and reports success. That is how the dev value above got in.
+#
 # ── WHY COMPOSE, AND NOT A GREP OF .env ──────────────────────────────────────────
 # Compose strips quotes and takes the last of duplicate keys, so a grep of the file
 # and the value the container receives can disagree — a disagreement of exactly that
@@ -193,11 +199,11 @@ if [ "$failed" -gt 0 ]; then
   exit 1
 fi
 
-# Matching NOTHING is a failure, not a pass. This is a gate in deploy-dev.yml, and what
-# decides whether it inspects anything is a container-side variable name in
-# docker-compose.dev.yml — not a place anyone editing that file would think to look. If a
-# name moves, every check here silently covers zero variables while still printing a line
-# that reads green. That is the failure this repo keeps naming: the step directly below
+# Matching NOTHING is a failure, not a pass. This is a gate in deploy-dev.yml AND, since
+# SERV-124, in deploy.yml — so on both tiers what decides whether it inspects anything is
+# a container-side variable name in a compose file, not a place anyone editing that file
+# would think to look. If a name moves, every check here silently covers zero variables
+# while still printing a line that reads green. That is the failure this repo keeps naming: the step directly below
 # this one in deploy-dev.yml asserts its own coverage in both directions for the same
 # reason ("a pin nothing reads looks like a control and is not one"), and
 # mint-prober-token.sh asserts its granted scopes rather than trusting the request.
