@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.23.0](https://github.com/Einlanzerous/construct-server/compare/v4.22.0...v4.23.0) (2026-08-22)
+
+
+### Features
+
+* **deploy:** gate the prod deploy on switchyard token shape too (SERV-124) ([#140](https://github.com/Einlanzerous/construct-server/issues/140)) ([a8d5949](https://github.com/Einlanzerous/construct-server/commit/a8d5949b46b108f737065e0938085da4f778aa16))
+
+
+### Bug Fixes
+
+* **ci:** review a PR that has never been reviewed, whatever the action (SERV-126) ([#141](https://github.com/Einlanzerous/construct-server/issues/141)) ([9612f22](https://github.com/Einlanzerous/construct-server/commit/9612f222f1d1932479ed8bc386499c62ab1d54c5))
+
 ## [4.22.0](https://github.com/Einlanzerous/construct-server/compare/v4.21.0...v4.22.0) (2026-08-22)
 
 
