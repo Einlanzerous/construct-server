@@ -413,6 +413,21 @@ jobs:
             #
             # Conflicting PRs are also the ones being rebased and force-pushed,
             # which is where mistakes get made.
+            #
+            # What closing it costs, because this file writes consequences down:
+            # a duplicate concurrent review inside the first review's window.
+            # The scenario is the one the ledger's variant three already names —
+            # a fixup pushed minutes after opening — and the action stays in the
+            # concurrency key, so the two runs do not cancel each other. The
+            # `opened` review is still running and has posted nothing, so the
+            # `synchronize` sees PRIOR=0 and reviews too. Both post. Before this
+            # change the second was skipped unconditionally.
+            #
+            # Accepted rather than prevented: reviewing twice is the safe
+            # direction and the second read sees the newer code, whereas
+            # detecting an in-flight run (a `gh run list` probe) is more
+            # machinery than a duplicate is worth — and machinery of exactly the
+            # kind the ledger above records five failures of.
             if [ "$ACTION" = "synchronize" ] && [[ ",$LABELS," != *",review:always,"* ]]; then
               # Same idiom as the review job's before/after assertion: stream
               # the ids and count lines, because `--paginate` applies `--jq` per

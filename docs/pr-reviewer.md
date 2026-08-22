@@ -172,6 +172,20 @@ source — for exactly the case the expression existed to serve.
    An API error while counting resolves toward **reviewing**, not skipping:
    unreachable means unknown, and the cost of guessing wrong that way is one
    extra review rather than another silent pass.
+
+   Closing it costs a **duplicate concurrent review** in one case: a fixup
+   pushed while the `opened` review is still running sees no posted review yet,
+   so it reviews too, and the action is in the concurrency key so neither run
+   cancels the other. Accepted — reviewing twice is the safe direction and the
+   second read sees the newer code.
+
+   **This is the only action-gated rule.** `opened`, `reopened` and
+   `ready_for_review` pass straight through it — and then go on to the rules
+   below, which apply to every action alike. Note what that means for
+   **`reopened`**: closing and reopening a PR that already has three reviews
+   buys a fourth, no `review:always` needed. Deliberate — it is the one way back
+   into a PR that opened conflicting and became mergeable with no push at all
+   (the residual gap SERV-126 leaves open), for anyone who thinks to use it.
 4. Empty diff → skip.
 5. Bot-authored release PR whose changed paths are all generated release
    material → skip. The expected set is **derived from
