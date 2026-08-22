@@ -25,7 +25,7 @@ name: PR Review
 
 on:
   pull_request:
-    types: [opened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     types: [created]
 
@@ -147,9 +147,31 @@ source — for exactly the case the expression existed to serve.
 
 1. Not a PR, or a fork, or a non-member `@claude review` → the whole workflow is skipped.
 2. Draft PR → skip. (`@claude review` overrides.)
-3. `synchronize` without the `review:always` label → skip. **This is the common
-   case; a green check after pushing fixes usually means this fired.** Comment
-   `@claude review` to force a re-review.
+3. `synchronize` without the `review:always` label, **on a PR the reviewer has
+   already reviewed at least once** → skip. **This is the common case; a skipped
+   check after pushing fixes usually means this fired.** Comment `@claude review`
+   to force a re-review.
+
+   The "already reviewed at least once" clause is the whole of SERV-126, and it
+   is load-bearing. This rule is about *re*-review, and it was suppressing the
+   *first* read: a PR that conflicts with its base produces **no `pull_request`
+   runs at all** — GitHub evaluates the event against `refs/pull/N/merge`, which
+   does not exist while the merge is unresolvable — so a PR opened conflicting
+   never fires `opened`, the one action that reviews unconditionally. Every
+   event it ever sees is a `synchronize` from the rebase that fixes the
+   conflict, and every one of those hit this skip. argosy#194 went green in nine
+   seconds having been read by nothing.
+
+   So the question is not "which action is this" but "has anything ever read
+   this PR", which closes the class rather than the instance. The count comes
+   from the same `pulls/N/reviews` filter on `REVIEWER_LOGIN` that the review
+   job's before/after assertion uses — hence `REVIEWER_LOGIN` living at workflow
+   level, since both jobs now need it and two copies of an identity that must
+   match exactly is precisely the drift this shared workflow exists to stop.
+
+   An API error while counting resolves toward **reviewing**, not skipping:
+   unreachable means unknown, and the cost of guessing wrong that way is one
+   extra review rather than another silent pass.
 4. Empty diff → skip.
 5. Bot-authored release PR whose changed paths are all generated release
    material → skip. The expected set is **derived from
