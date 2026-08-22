@@ -109,10 +109,18 @@ edge-auth-check:
 versions:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/report-versions.sh $(svc)
 
-# The same shape check against PROD's rendered environment (SERV-118). Deliberately a
-# diagnostic here and NOT a gate in deploy.yml: prod's copy is Signet-managed and syncs
-# to both its targets, so the hand-written-secret failure mode that hit dev is not
-# reachable the same way. Run it when touching PROD_ENV_FILE.
+# The same shape check against PROD's rendered environment (SERV-118). Since SERV-124 it
+# is also a GATE in deploy.yml, run after the render and before anything pulls, builds or
+# recreates — so this target is the local rehearsal of a check the deploy now enforces,
+# not a diagnostic prod is exempt from.
+#
+# This comment previously said the opposite, and justified it with "prod's copy is
+# Signet-managed, so the hand-written-secret failure mode that hit dev is not reachable
+# the same way". That argument is retired, not merely outvoted: `signet render --check`
+# compares key SETS, not values, so a vault seeded from a stale file renders the stale
+# value and reports success — which is precisely how the bad dev token was installed.
+# Vault management protects against a hand-EDITED value and does nothing about a WRONG
+# one. Run this after touching PROD_ENV_FILE, and after any `signet sync`.
 # Usage: make assert-tokens
 assert-tokens:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-token-shapes.sh

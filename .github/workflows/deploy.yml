@@ -86,14 +86,14 @@ jobs:
         # script (SERV-62 hit this twice).
         #
         # deploy-dev.yml has carried this step since SERV-97 (and added jq to it in
-        # SERV-118); prod never had one at all, and until
-        # now that was survivable — jq was an undeclared dependency of report-deploy.sh
-        # and delivery-reportable.sh, both of which run at the very END of the deploy, so
-        # a missing jq cost a report on a stack that was already up. The token gate below
-        # changes that: it reads compose's resolved config as JSON, and a gate that exits
-        # 2 on a missing dependency is a gate that did not run. That failure should read
-        # as "jq is not on PATH" here, not as "cannot resolve the environment" eight
-        # steps later.
+        # SERV-118); prod never had one at all, and until now that was survivable. jq is
+        # reached by delivery-reportable.sh, which checks for it itself, and by
+        # report-deploy.sh, which does not — but both run at the very END of the deploy
+        # under continue-on-error, so a miss costs a report on a stack that is already
+        # up. The token gate below changes that: it reads compose's resolved config as
+        # JSON, and a gate that exits 2 on a missing dependency is a gate that did not
+        # run. That failure should read as "jq is not on PATH" here, rather than as
+        # "cannot resolve the environment" eight steps later.
         #
         # Each name earns its place: docker and rsync for the sync and deploy steps, jq
         # for the token gate and report-deploy.sh, python3 for deploy-scope.sh and
@@ -224,6 +224,18 @@ jobs:
         # line. Same direction as SERV-102 and SERV-106: prefer the noisy failure to the
         # silent one. SWY-303 removes the copy by publishing the pattern for this script
         # to read; when it lands, this comment is what should shrink.
+        #
+        # THE GATE IS STACK-WIDE AND THE DEPLOYS IT GATES ARE NOT. Under SERV-109 a
+        # promote or rollback pulls and recreates only the services behind the pins that
+        # moved, so a malformed leaf-consumer token — SWITCHYARD_TOKEN_N8N_VOX_DICTATE,
+        # which authenticates one n8n workflow — fails this step and therefore fails a
+        # rollback of, say, purser, which would never have touched n8n. A rollback runs
+        # with prod already broken and its whole value is being predictable, so it is the
+        # deploy least able to absorb a new precondition. Left stack-wide anyway: scoping
+        # the check to the services being recreated would mean the environment is only
+        # ever inspected where it is already being changed, and the failure this exists to
+        # catch is a bad value sitting in a variable nobody touched. Worth knowing which
+        # deploy it will bite, which is why it is written here rather than only weighed.
         #
         # No credential reaches the log — the script reports the variable, its length and
         # whether it carries the `sw_` prefix, and its header has the reasoning for that
