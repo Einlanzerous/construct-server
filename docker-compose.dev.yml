@@ -372,18 +372,21 @@ services:
       - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
       # host=aud, one entry per router in config/traefik-dev/dynamic/routers.yml.
       #
-      # EMPTY UNTIL THE ZERO TRUST DASHBOARD HALF IS DONE, and empty is a hard error
-      # rather than a default: the guard refuses to start with "CF_ACCESS_AUD_MAP is
-      # unset or empty, so no host could ever be authorised". That is the correct
-      # direction. Substituting a permissive default would serve dev unauthenticated
-      # to anything that reached the entrypoint; failing to start means the edge does
-      # not come up at all.
+      # One entry per dev Access application, and they are DIFFERENT values from prod's
+      # — checked, not assumed. Every application on the team domain is signed by the
+      # same key, so the audience is the only thing separating them: a dev hostname
+      # carrying prod switchyard's AUD would let a prod token open dev, and a prod
+      # token is exactly what an operator's browser is holding.
       #
-      # Fill it in with the AUD tag of each dev Access application:
-      #   CF_ACCESS_AUD_MAP=switchyard-dev.zerogravity.industries=<aud>,lyceum-dev.zerogravity.industries=<aud>
-      # See docs/dev-environment.md. `make dev-edge-auth-check config_only=1` lists
-      # exactly which hosts are still unmapped.
-      - CF_ACCESS_AUD_MAP=
+      # Empty is a hard error rather than a permissive default: the guard refuses to
+      # start with "CF_ACCESS_AUD_MAP is unset or empty, so no host could ever be
+      # authorised". Keep that property — a default that waved requests through would
+      # serve dev unauthenticated to anything reaching the entrypoint, where failing to
+      # start merely means the edge does not come up.
+      #
+      # `make dev-edge-auth-check config_only=1` lists any host still unmapped, and
+      # docs/dev-environment.md has the runbook for adding one.
+      - CF_ACCESS_AUD_MAP=switchyard-dev.zerogravity.industries=667784252e65bfcebe7e5c794ed3ec7bb6da6f0855acc8c53f280654a08ead81,lyceum-dev.zerogravity.industries=59de99bfd8d1f24c86e24bed2f065077f0ae7c30178108b9856a259d679dd5c1
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway. It exists for a cutover against real traffic and is not a
       # steady state; check-edge-auth.sh fails while it is set, which is what stops it
