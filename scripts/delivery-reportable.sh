@@ -111,7 +111,13 @@ SINCE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --since) SINCE="${2:-}"; [ -n "$SINCE" ] || { err "ERROR: --since needs a path"; exit 2; }; shift 2 ;;
-    -h|--help) sed -n '2,95p' "$0"; exit 0 ;;
+    # Anchored on `set -euo pipefail` rather than a line number, because a line
+    # number silently truncates. This was `2,95p` while the header ran to 104, so
+    # `--help` printed none of the exit codes — including the one explaining that
+    # an unreachable Switchyard is a hard failure here and a soft one in the
+    # caller, which is the least guessable thing on the page. It clipped quietly:
+    # help output that stops early looks exactly like help output that ended.
+    -h|--help) awk 'NR==1{next} /^set -euo pipefail$/{exit} {print}' "$0"; exit 0 ;;
     -*) err "ERROR: unknown option '$1'"; exit 2 ;;
     *) break ;;
   esac

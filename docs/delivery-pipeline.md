@@ -74,7 +74,8 @@ As surveyed, every first-party image in `docker-compose.yml` was a hardcoded
 `:latest` — aperture, cook_book, argosy, switchyard, centrifuge, lyceum, purser,
 interlock. **Closed by SERV-74 + SERV-88.** All 14 read `${<SERVICE>_TAG:-latest}`
 against real values: major.minor for the services with release-please versions, a
-sha for argosy and drydock, which at the time had no semver image to pin to. Verified by deploying twice
+sha for argosy and drydock, which at the time had no semver image to pin to.
+Verified by deploying twice
 from `main` with no merge in between and diffing the running digests — identical,
 and the second deploy recreated nothing.
 
@@ -109,8 +110,9 @@ version drift that does not exist.** Compare the `revision` label. It matters mo
 exactly where the stakes are highest — the deployments ledger (SWY-185/191) and
 rollback (SERV-79), where "is this the same code" is the entire question.
 
-So two of the ten pins were shas — argosy and drydock — and everything else tracks
-major.minor.
+So two of the ten pins are shas — argosy and drydock — and everything else tracks
+major.minor. They are still shas **today**: SERV-125 fixed the cause upstream, and
+the pins move via `promote.yml` once the back-publish has run.
 
 **They were not "genuine no-semver cases", which is what this document called them
 for months.** Both cut releases normally the whole time (`v0.25.1`, `v1.7.0`). What
