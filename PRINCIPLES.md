@@ -209,10 +209,22 @@ discover them. A service that is not in the inventory is never probed, however
 correct its `/healthz` is. Register it once — `POST /v1/services` with `name`,
 `port`, and `health_path` if it is not `/healthz`.
 
-Register it **only once the endpoint actually answers**. An unreachable service
-is flagged red, whereas one that answers without a version is `no_version`, which
-is explicitly *not* a failure and renders as a normal in-progress row. So
-registering early is safe and registering blind is not.
+**Register it only once it actually reports a version** — not when the PR
+merges, but after the release is built, deployed, and answering. This is the
+step whose timing looks harmless and is not.
+
+A service that answers without a version is `no_version`, which is correctly
+*not* a failure and renders as a normal in-progress row. But `no_version` writes
+no observation row at all — it only updates the pair's probe state. So the moment
+a deploy recreates that service, the reporter reports it (its only filter is
+whether the service is in the inventory), the report finds nothing to corroborate
+it, and the row is `claimed_not_confirmed`: red, permanently, on a service
+running exactly what it should be.
+
+In this estate `scripts/register-delivery-service.sh` enforces that. It probes
+from inside the switchyard container — the reconciler's own vantage point, and
+the only one that proves the address resolves — and refuses to register anything
+reporting no version, a `v` prefix, or `latest`.
 
 ## 5. Ticket and agent operations
 
