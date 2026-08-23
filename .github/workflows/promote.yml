@@ -25,8 +25,8 @@ name: Promote / Rollback a Version
 # larger first-party half — larger because those services have dependents, and per SERV-102
 # the Node ones do not recover on their own from a peer recreate that moves an address.
 #
-# Pinning could not have fixed the first-party half. Eight of the ten values in versions.env
-# are `LYCEUM_TAG=1.10`-shaped and that tag MOVES on a patch release *deliberately*, so
+# Pinning could not have fixed the first-party half. Every value in versions.env is
+# `LYCEUM_TAG=1.10`-shaped and that tag MOVES on a patch release *deliberately*, so
 # security fixes land without an edit. The float is the feature; scoping is what makes it
 # not apply to a rollback.
 #
