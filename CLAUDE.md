@@ -147,8 +147,13 @@ anything deploys or gets versioned.
   `${<SERVICE>_TAG:-latest}`, one variable per source repo — backend and frontend
   ship from one release and pin together, so 10 variables cover 14 images. Services
   with release-please versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so
-  patch releases still flow in on a `docker compose pull` and nothing else does;
-  argosy and drydock publish no semver and are pinned to a sha. **Change a version by
+  patch releases still flow in on a `docker compose pull` and nothing else does.
+  **`versions.env` is the source of truth for which form each service uses.** This
+  file states the rule and not the values, because duplicating them here is exactly
+  what went stale: it claimed argosy and drydock "publish no semver" long after both
+  were cutting releases normally, and someone reading it concluded the upstream repos
+  had no releases and stopped looking (SERV-125).
+  **Change a version by
   editing `versions.env` and merging it** — not with `gh secret set`, which is where
   these lived until SERV-96, and not by editing a deployed or checkout `.env`.
   An image tag is not a credential, and keeping the pins in git is what gives
@@ -161,14 +166,28 @@ anything deploys or gets versioned.
   Makefile targets, `check-compose-drift.sh` and a bare `docker compose` on the box
   all resolve the same values. The pins land below a marker comment in that file and
   are **regenerated every deploy** — editing them on the host is lost without warning.
-  Only argosy and drydock are sha-pinned; every other first-party service tracks
-  major.minor (amber and purser were the last two exceptions, reconciled by
-  SERV-89).
+  **A service is sha-pinned only when its repo publishes no semver image**, and that
+  is now a solved problem rather than a standing exception. argosy and drydock were
+  the last two, and the reason was never that they had no releases — they cut them
+  normally (`v0.25.1`, `v1.7.0`). Their publish workflows asked for semver tags on
+  `on: push: tags`, and that trigger had **never fired once** in either repo: release
+  tags are cut by release-please under `GITHUB_TOKEN`, and GitHub creates no workflow
+  runs from events that token authored. So the tag landed, nothing built, and no
+  versioned image ever existed to pin to. **This repo already knew that rule from the
+  other side** — it is why `promote.yml` must not also dispatch `deploy.yml`, since a
+  PAT-authored push fires it where a `GITHUB_TOKEN` one would not. Fixed upstream in
+  SERV-125 by calling publish from the release-please run instead, the same shape
+  aperture and lyceum already used; amber and purser were the two before them
+  (SERV-89).
+  Note what the sha pins cost while they lasted, because it is the argument for not
+  accepting the next one: no patch float, a `git log -p versions.env` rollback index
+  that reads as a list of hashes, and nothing to promote *to* — "promote argosy to
+  0.25" was not expressible.
   **A `sha-<short>` tag and a release tag can be different images from the same
-  commit.** The publish workflow runs once on the push to `main` and again on the
-  release tag, so it builds the same source twice, seconds apart, and the two
-  digests differ. SERV-88 read that digest difference as purser running *ahead* of
-  its release; it was not — `sha-2156151` and `0.13.0` both carried
+  commit.** A release builds the same source twice, seconds apart — once for the push
+  to `main` and once for the release — so the two digests differ. SERV-88 read that
+  digest difference as purser running *ahead* of its release; it was not —
+  `sha-2156151` and `0.13.0` both carried
   `org.opencontainers.image.revision=2156151434…`. **Compare the `revision` label,
   not the digest, before concluding anything about what code is deployed.** A
   digest comparison alone will invent version drift that does not exist, which

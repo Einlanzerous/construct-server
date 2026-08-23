@@ -78,8 +78,11 @@ if [ -n "$missing" ]; then
   err "Refusing to pin to it — the deploy would fail at 'docker compose pull', after the"
   err "commit had already landed on main."
   err
-  err "Check the tag really published, and remember the two sha forms differ: argosy"
-  err "publishes 'sha-<short>', drydock the full 40-char commit sha (see versions.env)."
+  err "Check the tag really published. A major.minor pin needs the release's publish"
+  err "workflow to have actually run for it — SERV-125 is the case where it never had,"
+  err "for either of the two services that were pinned by sha as a result. If you are"
+  err "pinning a sha, the forms differ: argosy tagged 'sha-<short>', drydock the full"
+  err "40-char commit sha with no prefix (see versions.env)."
   exit 1
 fi
 
