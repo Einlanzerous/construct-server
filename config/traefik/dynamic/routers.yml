@@ -296,6 +296,39 @@ http:
       middlewares:
         - cf-access-jwt
 
+    # THE SECOND EXEMPTION from origin auth (PCAD-5 / IDEA-22), whole-host where
+    # the webhook's is exact-Path — so state plainly what that costs: everything
+    # placard serves is reachable by anything that can reach the entrypoint.
+    #
+    # That is the service working as specified, not a compromise being tolerated.
+    # Placard exists to give the Cloudflare Access launcher (and PRSR-29's
+    # connector) a logo URL per service, and the launcher renders logo_url as an
+    # <img> in the VIEWER's browser: a new invitee has no Access session for
+    # placard, so a gated placard serves them login HTML instead of an image and
+    # every icon silently falls back to initials — the exact switchyard failure
+    # IDEA-22 audited. An Access gate here doesn't secure the service, it
+    # deletes it.
+    #
+    # What bounds the damage: placard's content is a copy of a PUBLIC GitHub
+    # repo (the canonical URLs are jsDelivr against that repo), so there is
+    # nothing here to protect; the one write path (POST …/upload, staged reads)
+    # is token-gated inside the app (PLACARD_UPLOAD_TOKEN), i.e. it
+    # authenticates with something Access cannot express, like the webhook's
+    # HMAC; and the DB it touches holds only URL-check observations and staged
+    # bytes. If placard ever grows a surface that is not public-by-design, that
+    # surface moves behind its own token or a separate gated hostname — this
+    # router does not acquire a middleware, because a gated placard is a broken
+    # placard.
+    #
+    # check-edge-auth.sh knows this router by name. Never attach a gated
+    # (self_hosted + members policy) Access application to this hostname either
+    # — the edge and the origin have to agree that it is open.
+    placard:
+      entryPoints:
+        - internal
+      rule: "Host(`placard.zerogravity.industries`)"
+      service: placard
+
   services:
     argosy:
       loadBalancer:
@@ -322,6 +355,13 @@ http:
         # port exists, so this router is the only route to it.
         servers:
           - url: "http://wiki:80"
+
+    placard:
+      loadBalancer:
+        # One Go binary serves the front page, the mark mirror and the API
+        # same-origin on :4009 (PCAD-4).
+        servers:
+          - url: "http://placard:4009"
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.
