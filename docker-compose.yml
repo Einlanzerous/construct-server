@@ -777,6 +777,12 @@ services:
       - PURSER_CF_ACCESS_GROUP_ID=${PURSER_CF_ACCESS_GROUP_ID:-}
       - PURSER_CF_ACCESS_GROUP_NAME=zerogravity-members
       - PURSER_CF_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      # Service spin-up coordinates (PRSR-22). Unread until those connectors
+      # exist; carried now so the env plumbing lands once (PRSR-11). Unset
+      # changes nothing. PURSER_CF_TUNNEL_ID is the same value as
+      # CLOUDFLARE_TUNNEL_ID.
+      - PURSER_CF_ZONE_ID=${PURSER_CF_ZONE_ID:-}
+      - PURSER_CF_TUNNEL_ID=${PURSER_CF_TUNNEL_ID:-}
       # Lyceum connector (SERV-42). OWNER_TOKEN must be an owner *session* token:
       # redeem a `lyceum mint-token` invite via POST /auth/session — a
       # LYCEUM_API_TOKENS entry can't reach /admin. The lyceum service must also
