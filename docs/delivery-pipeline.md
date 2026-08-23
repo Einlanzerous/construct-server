@@ -110,9 +110,8 @@ version drift that does not exist.** Compare the `revision` label. It matters mo
 exactly where the stakes are highest — the deployments ledger (SWY-185/191) and
 rollback (SERV-79), where "is this the same code" is the entire question.
 
-So two of the ten pins are shas — argosy and drydock — and everything else tracks
-major.minor. They are still shas **today**: SERV-125 fixed the cause upstream, and
-the pins move via `promote.yml` once the back-publish has run.
+So two of the ten pins were shas — argosy and drydock. Since SERV-125 all ten
+track major.minor.
 
 **They were not "genuine no-semver cases", which is what this document called them
 for months.** Both cut releases normally the whole time (`v0.25.1`, `v1.7.0`). What
