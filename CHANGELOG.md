@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.24.0](https://github.com/Einlanzerous/construct-server/compare/v4.23.0...v4.24.0) (2026-08-23)
+
+
+### Features
+
+* **delivery:** write the day-one version rule and let the reconciler see signet (SERV-128) ([#145](https://github.com/Einlanzerous/construct-server/issues/145)) ([1e88a68](https://github.com/Einlanzerous/construct-server/commit/1e88a680280f0379792d86c26e9f564f3aba73c0))
+
 ## [4.23.0](https://github.com/Einlanzerous/construct-server/compare/v4.22.0...v4.23.0) (2026-08-22)
 
 
