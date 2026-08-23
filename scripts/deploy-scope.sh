@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # deploy-scope.sh — Decide which services a deploy actually needs to touch (SERV-109).
 #
-# THE PROBLEM. `deploy.yml` runs a whole-stack `docker compose pull && up -d`, and eight
-# of the ten pins in versions.env are major.minor tags that MOVE on a patch release. That
+# THE PROBLEM. `deploy.yml` runs a whole-stack `docker compose pull && up -d`, and every
+# pin in versions.env is a major.minor tag that MOVES on a patch release. That
 # float is deliberate — it is how a security fix lands without an edit — but it means a
 # pull moves every service that published since the last deploy, not just the one being
 # repointed. Roll purser back 0.14 -> 0.13 while lyceum has cut 1.10.4 and you recreate

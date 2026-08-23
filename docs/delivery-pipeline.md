@@ -110,9 +110,8 @@ version drift that does not exist.** Compare the `revision` label. It matters mo
 exactly where the stakes are highest — the deployments ledger (SWY-185/191) and
 rollback (SERV-79), where "is this the same code" is the entire question.
 
-So two of the ten pins are shas — argosy and drydock — and everything else tracks
-major.minor. They are still shas **today**: SERV-125 fixed the cause upstream, and
-the pins move via `promote.yml` once the back-publish has run.
+So two of the ten pins were shas — argosy and drydock. Since SERV-125 all ten
+track major.minor.
 
 **They were not "genuine no-semver cases", which is what this document called them
 for months.** Both cut releases normally the whole time (`v0.25.1`, `v1.7.0`). What
@@ -311,9 +310,8 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
     moves on patch releases and a patch tag can be rebuilt in place. Four stay floating by
     design: the watchtower opt-ins, which cannot be rolled by watchtower once pinned.*
   - ***SERV-109** removed the first-party half, the larger one. Pinning could not close it:
-    eight of the ten values in `versions.env` are major.minor and that tag moves on a patch
-    release *deliberately*, which is the whole point of the convention — so the fix is to
-    scope rather than to pin harder. `scripts/deploy-scope.sh` recognises the one commit
+    a major.minor pin moves on a patch release *deliberately*, which is the whole point of
+    the convention — so the fix is to scope rather than to pin harder. `scripts/deploy-scope.sh` recognises the one commit
     shape a promote produces (`versions.env` and nothing else) and `deploy.yml` then pulls
     and recreates only the services behind the pins that changed, `--no-deps`. Ordinary
     merges still pull the whole stack, which is where the patch float is meant to land. The

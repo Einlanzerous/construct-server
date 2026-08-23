@@ -166,12 +166,8 @@ anything deploys or gets versioned.
   Makefile targets, `check-compose-drift.sh` and a bare `docker compose` on the box
   all resolve the same values. The pins land below a marker comment in that file and
   are **regenerated every deploy** — editing them on the host is lost without warning.
-  **A service is sha-pinned only when its repo publishes no semver image**, and that
-  cause is now fixed rather than a standing exception — **but the two pins have not
-  moved yet**, so `versions.env` still carries a sha for argosy and drydock today.
-  That is pending, not drift to tidy: they move via `promote.yml` once the
-  back-publish has run, and until it has, `verify-tag.sh` correctly refuses `0.25`
-  and `1.7` because no such image exists. argosy and drydock were
+  **A service is sha-pinned only when its repo publishes no semver image**, and no
+  service is any more — all ten pins track major.minor. argosy and drydock were
   the last two, and the reason was never that they had no releases — they cut them
   normally (`v0.25.1`, `v1.7.0`). Their publish workflows asked for semver tags on
   `on: push: tags`, and that trigger had **never fired once** in either repo: release
