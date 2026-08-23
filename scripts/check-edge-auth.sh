@@ -21,8 +21,11 @@
 # WHAT IS CHECKED
 #   1. Every router on the `internal` entrypoint carries the cf-access-jwt
 #      middleware.
-#   2. The guard's CF_ACCESS_AUD_MAP covers exactly those routers' hosts — no
-#      unmapped host (which would be unreachable) and no dead entry.
+#   2. The guard's CF_ACCESS_AUD_MAP covers exactly the GATED routers' hosts — no
+#      unmapped host (which would be unreachable) and no dead entry. A host whose
+#      every router is exempt (placard) must NOT carry an AUD: an Access
+#      application on a host the origin serves openly means the edge and the
+#      origin disagree about whether it is open.
 #   3. Where a service validates the same assertion itself for SSO (switchyard,
 #      lyceum), its CF_ACCESS_AUD agrees with the guard's entry for its host.
 #   4. traefik.yml's `internal` address matches Traefik's ipv4_address in the
@@ -46,8 +49,9 @@
 # is a second Traefik and a second tunnel rather than a leg of prod's, so there is
 # nothing shared to get confused about — but the QUESTION is identical, and asking it
 # with a second copy of this script is how the two would drift apart. The only
-# difference in substance is the exemption allowlist: prod has one entry (the GitHub
-# webhook), dev has none and must keep having none.
+# difference in substance is the exemption allowlist: prod has two entries (the
+# GitHub webhook's exact path, and placard's whole host — public by design,
+# IDEA-22), dev has none and must keep having none.
 #
 # Usage:
 #   ./scripts/check-edge-auth.sh                 # config + live (what deploy.yml runs)
@@ -107,7 +111,7 @@ else
   # neither gated nor named here fails the check. Adding to it is a reviewable diff in
   # a security script, which is the point — the failure mode this exists to prevent is
   # an exemption nobody had to argue for.
-  EXEMPT_JSON='{"switchyard-github-webhook": "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET"}'
+  EXEMPT_JSON='{"switchyard-github-webhook": "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET", "placard": "public by design (IDEA-22): every surface this host serves (mark mirror, front page, API) is contractually fetchable with no session — placard-host URLs are rendered sessionless in viewers browsers as launcher tiles and badges, and a gate turns them into silent login-HTML failures; content mirrors a public GitHub repo and the one write path is token-gated in the app"}'
 fi
 
 err() { printf '%s\n' "$*" >&2; }
@@ -206,12 +210,21 @@ for name, why in sorted(EXEMPT.items()):
 # Host(`x`) is the only rule form used on this entrypoint; anything else is a
 # router this script cannot reason about and is reported rather than ignored.
 hosts = {}
+host_routers = {}
 for name, r in internal.items():
     found = re.findall(r"Host\(`([^`]+)`\)", r.get("rule", ""))
     if not found:
         bad(f"router {name} has no Host(`...`) rule, so its audience cannot be checked")
     for h in found:
         hosts[h.lower()] = name
+        host_routers.setdefault(h.lower(), []).append(name)
+
+# A host whose EVERY router is exempt is open by design (placard). It needs no
+# AUD — there is deliberately no Access application — and the live half asserts
+# it SERVES rather than that it refuses. Computed per-host, not per-router,
+# because switchyard's host carries both a gated router and the exempt webhook
+# path and must stay in the gated set.
+open_hosts = {h for h, names in host_routers.items() if all(n in EXEMPT for n in names)}
 
 raw = open(compose_file).read()
 
@@ -230,8 +243,15 @@ else:
         host, _, aud = entry.partition("=")
         aud_map[host.strip().lower()] = aud.strip()
 
-unmapped = sorted(set(hosts) - set(aud_map))
+unmapped = sorted(set(hosts) - set(aud_map) - open_hosts)
 dead = sorted(set(aud_map) - set(hosts))
+misgated = sorted(open_hosts & set(aud_map))
+if misgated:
+    bad(f"host(s) exempt from origin auth but carrying an AUD: {', '.join(misgated)}")
+    print("        An AUD means a gated Access application exists for a host the origin")
+    print("        serves openly — the edge and the origin disagree about whether it is")
+    print("        open. For placard that gate breaks every launcher icon (IDEA-22):")
+    print("        remove the Access application, or remove the exemption, not neither.")
 pending = bool(unmapped) and not aud_map and os.environ.get("AUD_PENDING_OK") == "1"
 if pending:
     # Not a failure, and not silent either. See the shell above for how narrow this is.
@@ -245,8 +265,9 @@ elif unmapped:
     print("        The guard refuses an unmapped host, so these are unreachable.")
 if dead:
     bad(f"CF_ACCESS_AUD_MAP entries with no matching router: {', '.join(dead)}")
-if not unmapped and not dead and aud_map:
-    print(f"  ok    CF_ACCESS_AUD_MAP covers exactly the {len(hosts)} tunneled host(s)")
+if not unmapped and not dead and not misgated and aud_map:
+    gated_hosts = len(hosts) - len(open_hosts)
+    print(f"  ok    CF_ACCESS_AUD_MAP covers exactly the {gated_hosts} gated tunneled host(s)")
 
 # Cross-check against the AUDs the apps carry for their own SSO sign-in. A
 # mismatch means one of the two is stale, and the symptom would be "SSO works but
@@ -287,21 +308,29 @@ with open(os.environ["PROBE_OUT"], "w") as fh:
     fh.write(f"addr {addr}\n")
     if pending:
         fh.write("pending 1\n")
-    for h in sorted(hosts):
+    for h in sorted(set(hosts) - open_hosts):
         fh.write(f"host {h}\n")
     for name in sorted(EXEMPT):
         r = internal.get(name)
         if not r:
             continue
-        eh = re.findall(r"Host\(`([^`]+)`\)", r.get("rule", ""))
-        ep = re.findall(r"Path\(`([^`]+)`\)", r.get("rule", ""))
+        rule = (r.get("rule") or "").strip()
+        eh = re.findall(r"Host\(`([^`]+)`\)", rule)
+        ep = re.findall(r"Path\(`([^`]+)`\)", rule)
         if len(eh) == 1 and len(ep) == 1:
             fh.write(f"exempt {eh[0].lower()} {ep[0]}\n")
+        elif len(eh) == 1 and not ep and re.fullmatch(r"Host\(`[^`]+`\)", rule):
+            # A whole-host exemption: the rule is exactly one bare Host() and
+            # nothing else. Probed with the assertion INVERTED — the host must
+            # serve a sessionless request, guard uninvolved — because for a
+            # public-by-design host (placard, IDEA-22) "refuses without a
+            # session" is the broken state, not the safe one.
+            fh.write(f"exempt-host {eh[0].lower()}\n")
         else:
-            # An exemption that is not exactly one host and one exact path is
-            # broader than an exemption should be, and cannot be probed — so it
+            # Anything else — Host + PathPrefix, multiple hosts, an OR — is
+            # broader than either exemption shape and cannot be probed, so it
             # would sit here unverified. Refuse it.
-            bad(f"{name} is exempt but its rule is not one Host + one exact Path; too broad to verify")
+            bad(f"{name} is exempt but its rule is neither one Host + one exact Path nor one bare Host; too broad to verify")
 
 sys.exit(1 if fail else 0)
 PY
@@ -332,6 +361,7 @@ done
 ADDR="$(awk '$1=="addr"{print $2}' "$PROBES")"
 mapfile -t HOSTS < <(awk '$1=="host"{print $2}' "$PROBES")
 mapfile -t EXEMPTS < <(awk '$1=="exempt"{print $2, $3}' "$PROBES")
+mapfile -t EXEMPT_HOSTS < <(awk '$1=="exempt-host"{print $2}' "$PROBES")
 if [ -z "$ADDR" ] || [ "${#HOSTS[@]}" -eq 0 ]; then
   err "ERROR: could not derive the internal entrypoint address or its hosts from the config"
   exit 2
@@ -420,6 +450,33 @@ for entry in "${EXEMPTS[@]}"; do
       echo "        auto-close are silently failing right now (SERV-45)."
       FAIL=1 ;;
   esac
+done
+
+# 6b. Whole-host exemptions, asserted INVERTED. These hosts are public by
+# design, so "refuses a sessionless request" is the broken state: for placard a
+# gate means any sessionless viewer fetching a placard-hosted mark (a launcher
+# tile pointed at the mirror, a service badge) gets login HTML where an image
+# belongs, and the surface silently falls back to initials (IDEA-22). The
+# assertion is therefore that the host SERVES (200) and that the guard never
+# touched the request — the spoofed-Host loop above deliberately skips these
+# hosts.
+for host in "${EXEMPT_HOSTS[@]}"; do
+  code="$(probe "$host")"
+  verdict="$(guard_verdict "$host" "/")"
+  if [ "$verdict" = "none" ] && [ "$code" = "200" ]; then
+    echo "  ok    exempt host $host serves openly (200, guard uninvolved)"
+  elif [ "$verdict" = "unreachable" ] || [ "$code" = "000" ]; then
+    echo "  FAIL  exempt host $host is unreachable — openness cannot be verified"; FAIL=1
+  elif [ "$verdict" != "none" ]; then
+    echo "  FAIL  exempt host $host was handled by the guard ($verdict) — the whole-host exemption is not in effect"
+    echo "        If this is placard, its front page and every placard-hosted mark are"
+    echo "        silently serving login HTML right now (IDEA-22)."
+    FAIL=1
+  else
+    echo "  FAIL  exempt host $host answered $code to a sessionless request (expected 200)"
+    echo "        The route bypasses the guard but the service behind it is not serving."
+    FAIL=1
+  fi
 done
 
 # 7. A host nobody routed. Not a 403 necessarily — Traefik has no catch-all on

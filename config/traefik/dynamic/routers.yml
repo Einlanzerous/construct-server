@@ -296,6 +296,46 @@ http:
       middlewares:
         - cf-access-jwt
 
+    # THE SECOND EXEMPTION from origin auth (PCAD-5 / IDEA-22), whole-host where
+    # the webhook's is exact-Path — so state plainly what that costs: everything
+    # placard serves is reachable by anything that can reach the entrypoint.
+    #
+    # That is the service working as specified, not a compromise being tolerated.
+    # Be precise about the mechanism, because the obvious version of it is wrong:
+    # the CANONICAL logo URLs placard hands out are jsDelivr against its public
+    # GitHub repo, and those never touch this host — a gate here would not break
+    # them. What a gate breaks is everything that IS this host: the mirror URLs
+    # (the same repo-relative paths, placard's own fallback when jsDelivr is the
+    # thing that rots), the front page, and /api/services. All of those are
+    # public-with-no-session by contract (placard's CLAUDE.md invariant), because
+    # any placard URL is liable to be rendered sessionless in a viewer's browser
+    # — a launcher tile whose logo_url someone pointed at the mirror, a service
+    # badge on some future surface — and the viewer who matters most (a new
+    # invitee) has no Access session for placard. A gated placard serves that
+    # viewer login HTML where an image belongs, and the surface silently falls
+    # back to initials: the exact switchyard failure IDEA-22 audited, rebuilt at
+    # a different host, with no error anywhere. An Access gate here doesn't
+    # secure the service, it re-arms the trap the service exists to close.
+    #
+    # What bounds the damage: placard's content is a copy of a PUBLIC GitHub
+    # repo, so there is nothing here to protect; the one write path (POST
+    # …/upload, staged reads) is token-gated inside the app
+    # (PLACARD_UPLOAD_TOKEN), i.e. it authenticates with something Access cannot
+    # express, like the webhook's HMAC; and the DB it touches holds only
+    # URL-check observations and staged bytes. If placard ever grows a surface
+    # that is not public-by-design, that surface moves behind its own token or a
+    # separate gated hostname — this router does not acquire a middleware,
+    # because a gated placard is a broken placard.
+    #
+    # check-edge-auth.sh knows this router by name. Never attach a gated
+    # (self_hosted + members policy) Access application to this hostname either
+    # — the edge and the origin have to agree that it is open.
+    placard:
+      entryPoints:
+        - internal
+      rule: "Host(`placard.zerogravity.industries`)"
+      service: placard
+
   services:
     argosy:
       loadBalancer:
@@ -322,6 +362,13 @@ http:
         # port exists, so this router is the only route to it.
         servers:
           - url: "http://wiki:80"
+
+    placard:
+      loadBalancer:
+        # One Go binary serves the front page, the mark mirror and the API
+        # same-origin on :4009 (PCAD-4).
+        servers:
+          - url: "http://placard:4009"
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.

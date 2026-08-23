@@ -45,6 +45,8 @@ The following services are currently active:
 
 -   **[Drydock](https://github.com/Einlanzerous/drydock)**: Durable web terminal multiplexer for AI CLIs — agent sessions survive disconnects, so a run started from one machine is still running when you open another. Split across the host/container boundary like Signet, and for the same kind of reason: the **daemon** is a systemd **user** unit on `:4318` (`drydock-daemon`, checkout under `~/.drydock/prod`) because it spawns `claude` and shell PTYs as the host user and needs that user's repos, toolchain and `~/.claude`; only the **shell** — a static Vite bundle behind nginx, `drydock-shell` on `:5321` — is a container here. The browser loads the bundle and then talks to the daemon directly, so the container joins no internal network. Workspace state, session history and accounts live in the shared Postgres (`drydock` database); a database outage degrades the desk without touching a running agent. Image: `ghcr.io/einlanzerous/drydock/shell`.
 
+-   **[Placard](https://github.com/Einlanzerous/placard)**: Canonical, publicly fetchable home for every Construct service mark (Go, single static binary). Serves the designed front page, mirrors the marks of its public repo at `<service>/<service>-mark-{light,dark}.png`, exposes `/api/services` for machine consumers (Purser's Access-app connector, PRSR-29), and re-verifies the canonical jsDelivr URLs on a timer — Cloudflare accepts a 404 `logo_url` without complaint and the launcher just shows initials, so Placard is what notices. Backed by its own `placard` database (URL-check observations + staged uploads; the repo is the source of truth for every mark, so the DB is rebuildable commentary). The one tunneled hostname with **no Access gate, by design** — see the router note in `config/traefik/dynamic/routers.yml`. Image: `ghcr.io/einlanzerous/placard`.
+
 ### 🎮 Gaming & Remote Play
 -   **[Sunshine](https://github.com/LizardByte/Sunshine)**: High-performance game streaming host for Moonlight.
 
@@ -123,6 +125,7 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 | interlock | `interlock` | `interlock_user` | Custom SQL migrator (`packages/db`), advisory-locked so web + worker can't race at boot |
 | centrifuge | `centrifuge` | `centrifuge_user` | `centrifuge migrate` in the entrypoint |
 | amber | `amber` | `amber_user` | In-process embedded migrator (`internal/store/migrate.go`) at boot; append-only, each file's sha256 recorded |
+| placard | `placard` | `placard_user` | In-process embedded migrator (`internal/store`) at boot; `placard_test` provisioned alongside for CI/dev |
 | authentik | `authentik` | `authentik_user` | Django migrations on boot (`identity` profile — authored, not deployed) |
 | n8n | `n8n` | `n8n_user` | n8n auto-migrates on startup |
 | drydock | `drydock` | `drydock_user` | In-process migrator (`daemon/src/state/migrations/*.sql`), checksummed and **lazy** — nothing connects at boot, so an unreachable database can't stop a daemon holding live agent PTYs |

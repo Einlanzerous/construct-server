@@ -361,6 +361,10 @@ services:
       # embedded migrator at boot and treats this database as a derived index:
       # the archive on disk is the source of truth and can rebuild it.
       - AMBER_DB_PASSWORD=${AMBER_DB_PASSWORD}
+      # Placard (PCAD-1) — DB/user provisioned by db/init-db.sh. Same derived-data
+      # shape as amber: the placard repo is the source of truth for every mark;
+      # the DB holds URL-check observations and staged uploads.
+      - PLACARD_DB_PASSWORD=${PLACARD_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -794,6 +798,42 @@ services:
       - postgres
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4006/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # --- PLACARD (canonical home for service marks) — PCAD-1 / IDEA-22 ---
+  # Public brand-asset service: the designed front page, a mirror of every mark
+  # in the placard repo, /api/services for PRSR-29's Access-app connector, and
+  # periodic verification that the canonical jsDelivr URLs still serve images
+  # (Cloudflare accepts a 404 logo_url without complaint — placard is what
+  # notices). Its Traefik router is DELIBERATELY ungated: every surface this
+  # host serves — mark mirror, front page, API — is public-with-no-session by
+  # contract, because placard-host URLs get rendered sessionless in viewers'
+  # browsers (launcher tiles pointed at the mirror, service badges), and a gate
+  # turns each of those into silent login-HTML-instead-of-an-image failures.
+  # Everything served is already public in the GitHub repo; the one write path
+  # (staged uploads) is token-gated in the app. Full argument at the router:
+  # config/traefik/dynamic/routers.yml.
+  placard:
+    image: ghcr.io/einlanzerous/placard:${PLACARD_TAG:-latest}
+    container_name: placard
+    restart: unless-stopped
+    ports:
+      - "${PLACARD_PORT:-4009}:4009"
+    environment:
+      - PLACARD_ADDR=:4009
+      - PLACARD_DATABASE_URL=postgres://placard_user:${PLACARD_DB_PASSWORD}@postgres:5432/placard?sslmode=disable
+      # Gates POST /api/services/{slug}/upload and staged reads. Blank =>
+      # uploads disabled; marks and the front page still serve.
+      - PLACARD_UPLOAD_TOKEN=${PLACARD_UPLOAD_TOKEN:-}
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4009/healthz || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -70,6 +70,7 @@ on:
           - drydock
           - interlock
           - lyceum
+          - placard
           - purser
           - switchyard
       version:
@@ -221,7 +222,7 @@ jobs:
 
       - name: Resolve the pin variable
         # One variable per SOURCE REPO, not per image — a repo's backend and frontend ship
-        # from one release, so 10 variables cover 14 images (versions.env). The service
+        # from one release, so 11 variables cover 15 images (versions.env). The service
         # names in the dropdown map onto the keys by uppercasing, cook_book included.
         env:
           SERVICE: ${{ inputs.service }}
