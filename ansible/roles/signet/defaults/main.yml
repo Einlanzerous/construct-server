@@ -64,8 +64,24 @@ signet_api_token: ""
 signet_version: ""
 signet_repo: Einlanzerous/signet
 
+# THE TAG AND THE VERSION ARE DIFFERENT STRINGS, and every bug in this path has
+# been someone comparing one against the other (SERV-130).
+#
+# `signet_version` is the git TAG — `v1.9.1`. It is what `gh release download`
+# needs and it keeps its prefix. Everything that COMPARES versions uses the bare
+# form below, because every version signet itself produces is bare: SGNT-38
+# stripped the "v" from `/healthz`, from `signet version` and from the Makefile,
+# so that the delivery ledger — which compares with strict equality — could match
+# an image label against what a daemon reports.
+#
+# Comparisons also strip the reported side rather than trusting it (see
+# tasks/binary.yml and ops/update-signet.yml). Anything released before SGNT-38
+# still answers with a "v", and a rollback to one of those is a deploy this
+# playbook has to be able to verify, not fail.
+signet_version_bare: "{{ signet_version | regex_replace('^v', '') }}"
+
 # Release asset naming, from signet's release.yml build job.
-signet_asset: "signet-{{ signet_version | regex_replace('^v', '') }}-linux-amd64"
+signet_asset: "signet-{{ signet_version_bare }}-linux-amd64"
 
 # Scoped sudo rule letting the deploy restart the unit without a password. The
 # daemon is a *system* unit but its binary and vault live in the user's home, so

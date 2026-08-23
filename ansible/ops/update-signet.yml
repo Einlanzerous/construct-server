@@ -106,6 +106,16 @@
         # the process forks — and a stale process still holding the socket would
         # answer with the old version. This check is the only thing between a
         # failed deploy and a false green.
+        #
+        # COMPARED BARE ON BOTH SIDES (SERV-130). `signet_version` is the tag
+        # — `v1.9.1` — and /healthz has reported a bare `1.9.1` since SGNT-38,
+        # which stripped the prefix deliberately so the delivery ledger could
+        # match what a daemon reports against an image label. Comparing the two
+        # spellings failed v1.9.1's deploy ten retries deep on a daemon that was
+        # serving perfectly, and then advised rolling back to the binary whose
+        # prefix SGNT-38 had just removed.
+        #
+        # Do not "fix" a future recurrence by putting the v back on /healthz.
         - name: Verify the daemon is serving the new version
           ansible.builtin.uri:
             url: "http://{{ signet_health_addr }}/healthz"
@@ -114,7 +124,8 @@
           until:
             - signet_health.status is defined
             - signet_health.status == 200
-            - (signet_health.json.version | default('')) == signet_version
+            - (signet_health.json.version | default('') | regex_replace('^v', ''))
+              == signet_version_bare
           retries: 10
           delay: 3
 
@@ -126,9 +137,10 @@
         - name: Explain how to get back to the previous binary
           ansible.builtin.fail:
             msg: >-
-              {{ signet_version }} was installed but the daemon is not serving
-              it (last seen: {{ signet_health.json.version | default('no
-              response') }}). The previous binary was kept — roll back with:
+              {{ signet_version_bare }} was installed but the daemon is not
+              serving it (last seen: {{ signet_health.json.version
+              | default('no response') | regex_replace('^v', '') }}).
+              The previous binary was kept — roll back with:
               mv {{ signet_binary }}.prev {{ signet_binary }} &&
               sudo systemctl restart signet.
               Check what .prev actually is first: the unit binds
