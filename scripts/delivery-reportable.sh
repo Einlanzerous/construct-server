@@ -59,11 +59,18 @@
 #
 # ── Filter 3: `latest` is not a version ───────────────────────────────────
 #
-# argosy's publish workflow stamps `org.opencontainers.image.version=latest`
-# because it cuts no semver. `latest` names a moving target, not a build; the
-# ledger would store it as an identity, compare it against whatever /healthz
-# says, and disagree for ever. Dropped to empty, which the ledger records as
-# version-unknown — true, and not red.
+# argosy's publish workflow stamps `org.opencontainers.image.version=latest` on
+# a build from `main`, because the version label is derived from the image's own
+# tags and a main build is tagged `latest`. `latest` names a moving target, not a
+# build; the ledger would store it as an identity, compare it against whatever
+# /healthz says, and disagree for ever. Dropped to empty, which the ledger records
+# as version-unknown — true, and not red.
+#
+# This filter is NOT redundant now that SERV-125 makes releases publish real
+# semver images, and do not delete it on that basis: prod tracks a major.minor
+# pin, but a `main` build still stamps `latest` and is still what a floating or
+# hand-pulled container can be running. The filter narrows rather than widens —
+# a real version passes straight through it.
 #
 # ── The name the LEDGER uses is not always the container's ────────────────
 #
