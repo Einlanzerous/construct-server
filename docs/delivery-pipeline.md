@@ -396,6 +396,35 @@ the two disagree about what dev is running with nothing to say which was stale.
 `scripts/probe-delivery.sh` takes the in-image script path as `$1` for exactly
 this reason.
 
+**But "runs on the host" does not imply "becomes a producer"** (SERV-128). The
+obvious extension of the rule above — a host daemon needs a probe, the probe runs
+on the host, so it is another `ExecStart` — is wrong, and signet is the case that
+shows why. Two things block it:
+
+- The unit posts under a single `PROBE_ENVIRONMENT` for all of its targets, and
+  signet is not dev.
+- `prod` is `probe_mode: internal`, and ingest **rejects an external probe result
+  for an internal environment** with a 400 (`environment … is probed
+  internally`). That guard exists so a misconfigured prober cannot fight the
+  in-process reconciler over prod.
+
+So a third `ExecStart` could only file signet under a tier it does not run in, or
+justify a whole new environment column for one service.
+
+The answer is that signet does not need a producer at all. It binds `172.17.0.1`
+deliberately — its `Serve()` refuses to start if the docker-bridge bind fails,
+precisely so it cannot come up answering the host while refusing every container
+— so the **in-process reconciler** can reach it like anything else on
+`construct_net`. It is registered as an ordinary first-party service on port 4010
+and observed in the prod column, with `extra_hosts: signet:host-gateway` on the
+switchyard container making prod's `http://{service}:{port}` template resolve.
+
+Nothing was added to the host, so the one-cron rule is untouched rather than
+bent. The rule to carry forward is narrower than it first reads: **a host-side
+producer is for what the reconciler structurally cannot reach** — which is the
+dev tier, on a disjoint network — not for everything that happens to run outside
+a container.
+
 ### What the prober can see today
 
 Only `switchyard`. That is a limitation of the *inventory*, not the schedule:
