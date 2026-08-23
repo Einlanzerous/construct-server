@@ -561,6 +561,27 @@ services:
     # daemon bound to 127.0.0.1:4010 on the host.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      # `signet` resolving to the host is what lets the delivery reconciler
+      # observe signet at all (SERV-128). Signet is a HOST daemon with no
+      # container, so it has no name on construct_net — and the reconciler
+      # builds every probe URL from prod's host_template, `http://{service}:{port}`.
+      # For a service registered as `signet` with port 4010 that is
+      # `http://signet:4010/healthz`, which resolves only with this alias.
+      #
+      # A per-pair `host_override` column exists for exactly this shape and is
+      # NOT usable here: it lives on `service_environments`, that row is not
+      # created until the first probe, and no API writes it — so an override
+      # could only ever be set after the wrong address had already been tried
+      # and recorded. The alias sets the address right the first time.
+      #
+      # This adds no reach that was not already deliberate. Signet binds
+      # 172.17.0.1 itself, on purpose, so containers can call it — its Serve()
+      # refuses to start if the docker-bridge bind fails, precisely so it cannot
+      # come up answering the host while refusing every container. Switchyard
+      # already calls it through host.docker.internal above for the credentials
+      # connector; this is the same daemon on the same port under the name the
+      # ledger knows it by.
+      - "signet:host-gateway"
     volumes:
       - switchyard_uploads:/data/uploads
     networks:

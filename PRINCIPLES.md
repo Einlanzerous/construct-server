@@ -64,7 +64,7 @@ default is a common-but-wrong instinct worth pushing back on explicitly.
 | Backend (standalone) | Go (stdlib HTTP first; chi if routing) | Don't reach for a framework on day one. |
 | Backend (full-stack web) | TypeScript (Bun preferred, Node fine) | Share types with the Vue frontend across the API boundary. |
 | Database | PostgreSQL | Single shared instance on `construct_net`, one database per service. |
-| LLM (local) | Ollama + `gemma4:31b` | Local-first. See §6. |
+| LLM (local) | Ollama + `gemma4:31b` | Local-first. See §7. |
 | LLM (cloud) | Claude 5 family (Opus 5 / Sonnet 5) | Escalation, not default. |
 | Auth | Per-actor bearer tokens | Switchyard-style: one token per service. |
 | Secrets | Signet | The vault is the intended source of truth, and `signet render` writes the env files it manages. It does not yet cover every path — a deploy-time secret can legitimately live only in a GitHub Environment. Check `signet status` before assuming. |
@@ -117,7 +117,116 @@ title or branch, so the prefix buys nothing and costs a release.
 
 Branches are `{type}/{slug}-{key}`.
 
-## 4. Ticket and agent operations
+## 4. Version reporting
+
+**A service that cannot say what it is running cannot be deployed accountably.**
+Switchyard's delivery ledger has two halves: a *report* — what a deploy claims it
+shipped, taken from the image's `org.opencontainers.image.version` label — and an
+*observation* — what the running process says when asked. The matrix compares
+them, and a report with no matching observation is rendered red. Observations are
+the half that is supposed to be trustworthy, so the rules below are all about not
+fabricating one.
+
+**New repos adopt this on day one — it is not optional**, exactly like the release
+flow in §3. Every service in the estate that has it got it as retrofit work, and
+the retrofit is uniformly more expensive than the original would have been.
+
+### If the service has an HTTP surface
+
+Ship `GET /healthz` returning JSON with two fields, on day one:
+
+```json
+{ "status": "ok", "version": "1.10.0", "sha": "08679beff57e82e4749793b73bd7337bfeb796e8" }
+```
+
+- **`version` is bare semver — never a `v` prefix.** This is the rule that has
+  actually bitten. Switchyard compares the observed string against the image
+  label with *strict equality*, and `docker/metadata-action` stamps that label
+  bare. Report `v0.8.0` against a label of `0.8.0` and every deploy of that
+  service is filed `claimed_not_confirmed` for ever — a permanent red row, on a
+  service that is running perfectly. Anything that produces the version has to
+  produce the same form: `git describe` returns the tag *as written*, so a
+  Makefile that feeds it into a build needs `sed 's/^v//'`.
+- **`sha` is the full 40-character commit, or JSON `null`.** Never abbreviated —
+  the cross-service comparison is an equality test, not a prefix match. `null`
+  and `""` are different claims; absence is a value.
+- **Both fields appear on the 503 path too**, in the same body shape. A degraded
+  service is still running a version, and it is the one most worth identifying.
+  Dropping the identity on the failure path blinds the ledger to exactly the
+  services that need looking at.
+- **The endpoint is unauthenticated**, and answers `Content-Type:
+  application/json`. The reconciler carries no credentials, and it classifies a
+  markup body as `unreachable` — so an auth redirect or an SPA catch-all serving
+  `index.html` at `/healthz` reads as *down* rather than as *unprobed*. If the
+  service is an SPA with a catch-all route, register the health route ahead of
+  it and confirm with an actual request; a 200 is not enough, the body has to be
+  the payload.
+
+### Never guess a version
+
+- **Outside a container, report `version: "dev"` and `sha: null`.** A dev process
+  reporting a plausible semver is worse than one saying `dev`: it becomes a real
+  row in the ledger, indistinguishable from a real deploy. Never infer from
+  `go.mod`, `package.json` (usually pinned at `0.0.0` and always wrong), a VCS
+  stamp, or the image tag.
+- **A blank build arg is not an unset one.** A Docker `ARG` that is declared but
+  never passed expands to an **empty string**, and `-X pkg.Version=` or
+  `ENV VERSION=` links that empty string in *over* your default. Nothing crashes;
+  the service just reports a version of `""`. The fallback therefore has to live
+  in code — the `ARG` default cannot help, because it is bypassed in precisely
+  the case that matters.
+- **`latest` is not a version.** On a push to `main`, `docker/metadata-action`'s
+  `version` output is the literal `latest`. Passing that through as the build's
+  identity stores a *moving target* as a fixed identity, to be compared against
+  the label and disagree for ever. Pass the version only on a release build and
+  let a non-release fall through to `dev`.
+- **Do not default the ARG to the release version.** An image built outside the
+  release workflow must not be able to claim it is a release.
+
+### If the service has no HTTP surface
+
+A worker, a static frontend bundle, or a host daemon cannot answer a poll.
+**Declare which case it is** rather than leaving it looking like an unfinished
+tier-A service, and ship `org.opencontainers.image.version` +
+`.revision` on the image instead — collected by inspection, not by probing.
+Do not try to give a static bundle a `/healthz`. See drydock's `dry-91` decision
+doc for a worked label-only example.
+
+**A frontend that ships from its backend's release does not need its own row.**
+They pin to the same tag, so the backend's row already says what release the pair
+is on.
+
+**A host daemon adds itself as another `ExecStart` on the existing
+`delivery-prober` unit** — it does not get its own cron, its own env file, or its
+own token. Two host jobs with two configs writing one ledger is how they disagree
+at 3am with nothing to say which was stale.
+
+### Registering the service
+
+**Shipping the endpoint is not sufficient, and this is the step everyone misses.**
+Switchyard's reconciler iterates services it already knows about; it does not
+discover them. A service that is not in the inventory is never probed, however
+correct its `/healthz` is. Register it once — `POST /v1/services` with `name`,
+`port`, and `health_path` if it is not `/healthz`.
+
+**Register it only once it actually reports a version** — not when the PR
+merges, but after the release is built, deployed, and answering. This is the
+step whose timing looks harmless and is not.
+
+A service that answers without a version is `no_version`, which is correctly
+*not* a failure and renders as a normal in-progress row. But `no_version` writes
+no observation row at all — it only updates the pair's probe state. So the moment
+a deploy recreates that service, the reporter reports it (its only filter is
+whether the service is in the inventory), the report finds nothing to corroborate
+it, and the row is `claimed_not_confirmed`: red, permanently, on a service
+running exactly what it should be.
+
+In this estate `scripts/register-delivery-service.sh` enforces that. It probes
+from inside the switchyard container — the reconciler's own vantage point, and
+the only one that proves the address resolves — and refuses to register anything
+reporting no version, a `v` prefix, or `latest`.
+
+## 5. Ticket and agent operations
 
 **Switchyard is the system of record for work.** Every non-trivial task gets a
 ticket.
@@ -151,7 +260,7 @@ table, resolution-required-on-close, epic-close).
 
 `project_key` is immutable. Mis-routed tickets get deleted and recreated.
 
-## 5. Status hygiene
+## 6. Status hygiene
 
 Keep the status accurate while working a ticket. "In Progress is In Progress"
 applies equally to human and agent work; there is no separate human track.
@@ -180,7 +289,7 @@ whole time the PR is open** — there is no "PR Open" status and there shouldn't
 Move a ticket to `In Progress` when active coding starts. Don't leave tickets in
 `Backlog` while coding against them — the board should reflect reality.
 
-## 6. Local-first model use
+## 7. Local-first model use
 
 The local LLM (`gemma4:31b` on Ollama) is the default for codegen and
 normalization. Cloud is escalation, not the default:
@@ -191,7 +300,7 @@ normalization. Cloud is escalation, not the default:
 - New candidate local models go through a bake-off before becoming a default. The
   harness and results live in construct-server (`bakeoff/`, `docs/bakeoffs/`).
 
-## 7. Code quality
+## 8. Code quality
 
 These complement, and do not duplicate, an agent's base prompt — they are the rules
 the platform owner has surfaced explicitly:
@@ -219,7 +328,7 @@ the platform owner has surfaced explicitly:
 It does **not** apply to small bugfixes or single-file tweaks. The
 overhead-to-value ratio is wrong there.
 
-This is the *opposite timing* from the no-premature-abstractions rule in §7. That
+This is the *opposite timing* from the no-premature-abstractions rule in §8. That
 rule governs the *first* pass, when usage is hypothetical. The sweep governs the
 *last* pass, when usage exists and duplication is no longer speculative.
 
@@ -241,7 +350,7 @@ you surface something larger ("this whole module wants restructuring"), file a
 separate ticket and call it out in the PR description rather than silently expanding
 scope.
 
-## 8. What the reviewer and verifier do with this file
+## 9. What the reviewer and verifier do with this file
 
 Both the PR reviewer and the post-deploy verifier are expected to flag violations of
 this file. Concrete checks:

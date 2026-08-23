@@ -406,6 +406,24 @@ anything deploys or gets versioned.
   configs writing one ledger is how they disagree at 3am with nothing to say
   which was stale; `probe-delivery.sh` takes the in-image script path as `$1` so
   the second producer reuses it.
+  **A host daemon the reconciler can already reach is NOT a producer, and signet
+  is the case that settles it** (SERV-128). The obvious reading of the rule above
+  is that anything on the host becomes another `ExecStart`; for signet that is
+  wrong twice over. The prober posts under one `PROBE_ENVIRONMENT` for the whole
+  unit, and signet is not dev — while `prod` is `probe_mode: internal`, so ingest
+  **400s** an external probe result for it (`environment … is probed internally`).
+  A third `ExecStart` could therefore only file signet under a tier it does not
+  run in, or need a whole new environment column. Meanwhile signet binds
+  `172.17.0.1` deliberately — its `Serve()` refuses to start if the docker-bridge
+  bind fails, precisely so it cannot come up answering the host while refusing
+  every container — so the in-process reconciler can simply probe it. It is
+  registered as an ordinary first-party service on port 4010 and observed in the
+  **prod** column, with `extra_hosts: signet:host-gateway` on the switchyard
+  container making prod's `http://{service}:{port}` template resolve. No new cron,
+  no new environment, and the one-cron rule is untouched because nothing was
+  added to the host at all. The per-pair `host_override` column looks like the
+  intended seam for this and is not usable: no API writes it, and its row does not
+  exist until after the first probe has already been recorded at the wrong address.
   **Its token carries `deployments:observe` and never `deployments:write`.** A
   report is a claim, an observation corroborates it, and
   `claimed_not_confirmed` only means something if corroborating is the harder of

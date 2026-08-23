@@ -37,8 +37,7 @@ delivery_prober_interval: 5min
 # on every run, and the wrapper treats that as a hard failure.
 #
 # Only switchyard is listed, and that is a current limitation rather than the
-# intended end state. As of 2026-08-18 the inventory holds exactly one service.
-# The other three dev services CANNOT be added yet:
+# intended end state. As of 2026-08-23 the inventory holds exactly one service.
 #
 #   argosy  http://127.0.0.1:18096   needs health_path=/api/v1/ping — /healthz
 #                                    answers plain-text `ok`, which both probers
@@ -48,16 +47,26 @@ delivery_prober_interval: 5min
 #                                    health_path that registration would set.
 #   lyceum  http://127.0.0.1:14005   answers {"status":"ok","service":"lyceum"} —
 #   purser  http://127.0.0.1:14006   and {"service":"purser","status":"ok"}.
-#                                    Honest `no_version`; neither has adopted the
-#                                    SWY-192 health contract.
+#                                    Honest `no_version` until SERV-128's
+#                                    per-service PRs land and release.
 #
-# Adding any of them ALSO needs `service_environments.host_override` to have a
-# writer. Registering a first_party service creates its prod pair too, and the
-# in-process reconciler probes the full environment x service cross-product using
-# prod's `host_template` (`http://{service}:4002`) — right for switchyard, wrong
-# for argosy (8096), lyceum (4005) and purser (4006). Registering them today
-# paints three PROD cells `unreachable` for services that are running fine.
-# Tracked in SWY-194; uncomment each line as its service lands.
+# ── The prod-collateral blocker is GONE (SWY-294, verified 2026-08-23) ──────
+#
+# This list used to carry a second reason not to add them: that registering a
+# first_party service creates its PROD pair too, and the in-process reconciler
+# would probe every one of them at prod's `host_template` — then the literal
+# `http://{service}:4002`, which is switchyard's port and nobody else's. That
+# would have painted three prod cells `unreachable` for services running fine.
+#
+# SWY-294 replaced the literal with `{port}`, and prod's row on this box now
+# reads `http://{service}:{port}`. `resolveProbeUrl` returns null — "not
+# addressable", left at `not_probed` rather than marked failed — when a service
+# carries no port. So registering a service WITHOUT a port is inert, and
+# registering one WITH its correct port probes the right address. Neither
+# manufactures a red cell.
+#
+# What remains is only the health-contract gap above. Uncomment each line as its
+# service adopts SWY-192 and starts reporting a version.
 delivery_prober_targets:
   switchyard: "http://127.0.0.1:14002"
   # argosy: "http://127.0.0.1:18096"
