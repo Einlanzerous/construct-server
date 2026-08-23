@@ -808,11 +808,14 @@ services:
   # in the placard repo, /api/services for PRSR-29's Access-app connector, and
   # periodic verification that the canonical jsDelivr URLs still serve images
   # (Cloudflare accepts a 404 logo_url without complaint — placard is what
-  # notices). Its Traefik router is DELIBERATELY ungated: the launcher fetches
-  # logo_url as an <img> in the viewer's browser with no Access session, so
-  # gating this host breaks every icon, silently. Everything served is already
-  # public in the GitHub repo; the one write path (staged uploads) is
-  # token-gated in the app. See config/traefik/dynamic/routers.yml.
+  # notices). Its Traefik router is DELIBERATELY ungated: every surface this
+  # host serves — mark mirror, front page, API — is public-with-no-session by
+  # contract, because placard-host URLs get rendered sessionless in viewers'
+  # browsers (launcher tiles pointed at the mirror, service badges), and a gate
+  # turns each of those into silent login-HTML-instead-of-an-image failures.
+  # Everything served is already public in the GitHub repo; the one write path
+  # (staged uploads) is token-gated in the app. Full argument at the router:
+  # config/traefik/dynamic/routers.yml.
   placard:
     image: ghcr.io/einlanzerous/placard:${PLACARD_TAG:-latest}
     container_name: placard

@@ -358,15 +358,24 @@ anything deploys or gets versioned.
   weeks. A host with no AUD entry is refused, so a new tunneled router that nobody
   mapped is unreachable (loud) rather than unauthenticated (silent), and
   `scripts/check-edge-auth.sh` fails if a router lacks the middleware or the map and
-  the routers disagree. **There is exactly one exemption and it is an allowlist, not
-  a pattern**: `switchyard-github-webhook`, because GitHub cannot authenticate to
-  Access — Access carries a Bypass policy on that path and injects no assertion at
-  all, so without an exempt router the webhook 403s and external-ref updates and
-  PR-merge auto-close stop silently (SERV-45). It is not unauthenticated; it is
-  HMAC-gated by `GITHUB_WEBHOOK_SECRET`, which is authentication Access cannot
-  express. The exemption is one host and one **exact** `Path()` — the checker refuses
-  a `PathPrefix()` as too broad to verify — and an internal router that is neither
-  gated nor on the allowlist fails the check. It also runs the exploit itself against the live edge, from
+  the routers disagree. **Exemptions are an allowlist, not a pattern, and there are
+  exactly two, of two different shapes.** `switchyard-github-webhook` is one host and
+  one **exact** `Path()`, because GitHub cannot authenticate to Access — Access
+  carries a Bypass policy on that path and injects no assertion at all, so without
+  an exempt router the webhook 403s and external-ref updates and PR-merge auto-close
+  stop silently (SERV-45). It is not unauthenticated; it is HMAC-gated by
+  `GITHUB_WEBHOOK_SECRET`, which is authentication Access cannot express. `placard`
+  is one bare `Host()` — **whole-host, public by design** (IDEA-22 / PCAD-5): every
+  surface it serves is contractually fetchable with no session, its content mirrors
+  a public GitHub repo, and its one write path is token-gated in the app. The
+  checker verifies each shape differently: an exact-path exemption must bypass the
+  guard on that path while the rest of the host still 403s; a whole-host exemption
+  is asserted **inverted** — a sessionless request must get a 200 with the guard
+  uninvolved, and the host must carry **no AUD** (an Access application on a host
+  the origin serves openly is the edge and origin disagreeing). Anything broader
+  than those two shapes — a `PathPrefix()`, multiple hosts, an OR — is refused as
+  too broad to verify, and an internal router that is neither gated nor on the
+  allowlist fails the check. It also runs the exploit itself against the live edge, from
   the **host** — an unpublished container port is still routable from there, which no
   container-side probe sees. `--dev` points the same script at the dev edge (SERV-93)
   rather than there being a second copy of it — one question, one implementation, and

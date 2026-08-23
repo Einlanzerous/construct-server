@@ -301,24 +301,31 @@ http:
     # placard serves is reachable by anything that can reach the entrypoint.
     #
     # That is the service working as specified, not a compromise being tolerated.
-    # Placard exists to give the Cloudflare Access launcher (and PRSR-29's
-    # connector) a logo URL per service, and the launcher renders logo_url as an
-    # <img> in the VIEWER's browser: a new invitee has no Access session for
-    # placard, so a gated placard serves them login HTML instead of an image and
-    # every icon silently falls back to initials — the exact switchyard failure
-    # IDEA-22 audited. An Access gate here doesn't secure the service, it
-    # deletes it.
+    # Be precise about the mechanism, because the obvious version of it is wrong:
+    # the CANONICAL logo URLs placard hands out are jsDelivr against its public
+    # GitHub repo, and those never touch this host — a gate here would not break
+    # them. What a gate breaks is everything that IS this host: the mirror URLs
+    # (the same repo-relative paths, placard's own fallback when jsDelivr is the
+    # thing that rots), the front page, and /api/services. All of those are
+    # public-with-no-session by contract (placard's CLAUDE.md invariant), because
+    # any placard URL is liable to be rendered sessionless in a viewer's browser
+    # — a launcher tile whose logo_url someone pointed at the mirror, a service
+    # badge on some future surface — and the viewer who matters most (a new
+    # invitee) has no Access session for placard. A gated placard serves that
+    # viewer login HTML where an image belongs, and the surface silently falls
+    # back to initials: the exact switchyard failure IDEA-22 audited, rebuilt at
+    # a different host, with no error anywhere. An Access gate here doesn't
+    # secure the service, it re-arms the trap the service exists to close.
     #
     # What bounds the damage: placard's content is a copy of a PUBLIC GitHub
-    # repo (the canonical URLs are jsDelivr against that repo), so there is
-    # nothing here to protect; the one write path (POST …/upload, staged reads)
-    # is token-gated inside the app (PLACARD_UPLOAD_TOKEN), i.e. it
-    # authenticates with something Access cannot express, like the webhook's
-    # HMAC; and the DB it touches holds only URL-check observations and staged
-    # bytes. If placard ever grows a surface that is not public-by-design, that
-    # surface moves behind its own token or a separate gated hostname — this
-    # router does not acquire a middleware, because a gated placard is a broken
-    # placard.
+    # repo, so there is nothing here to protect; the one write path (POST
+    # …/upload, staged reads) is token-gated inside the app
+    # (PLACARD_UPLOAD_TOKEN), i.e. it authenticates with something Access cannot
+    # express, like the webhook's HMAC; and the DB it touches holds only
+    # URL-check observations and staged bytes. If placard ever grows a surface
+    # that is not public-by-design, that surface moves behind its own token or a
+    # separate gated hostname — this router does not acquire a middleware,
+    # because a gated placard is a broken placard.
     #
     # check-edge-auth.sh knows this router by name. Never attach a gated
     # (self_hosted + members policy) Access application to this hostname either

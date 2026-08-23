@@ -111,7 +111,7 @@ else
   # neither gated nor named here fails the check. Adding to it is a reviewable diff in
   # a security script, which is the point — the failure mode this exists to prevent is
   # an exemption nobody had to argue for.
-  EXEMPT_JSON='{"switchyard-github-webhook": "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET", "placard": "public by design (IDEA-22): the launcher fetches logo_url with no Access session, so a gated placard serves login HTML instead of images; content mirrors a public GitHub repo and the one write path is token-gated in the app"}'
+  EXEMPT_JSON='{"switchyard-github-webhook": "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET", "placard": "public by design (IDEA-22): every surface this host serves (mark mirror, front page, API) is contractually fetchable with no session — placard-host URLs are rendered sessionless in viewers browsers as launcher tiles and badges, and a gate turns them into silent login-HTML failures; content mirrors a public GitHub repo and the one write path is token-gated in the app"}'
 fi
 
 err() { printf '%s\n' "$*" >&2; }
@@ -454,10 +454,12 @@ done
 
 # 6b. Whole-host exemptions, asserted INVERTED. These hosts are public by
 # design, so "refuses a sessionless request" is the broken state: for placard a
-# gate means the launcher's <img> fetches get login HTML and every icon
-# silently falls back to initials (IDEA-22). The assertion is therefore that
-# the host SERVES (200) and that the guard never touched the request — the
-# spoofed-Host loop above deliberately skips these hosts.
+# gate means any sessionless viewer fetching a placard-hosted mark (a launcher
+# tile pointed at the mirror, a service badge) gets login HTML where an image
+# belongs, and the surface silently falls back to initials (IDEA-22). The
+# assertion is therefore that the host SERVES (200) and that the guard never
+# touched the request — the spoofed-Host loop above deliberately skips these
+# hosts.
 for host in "${EXEMPT_HOSTS[@]}"; do
   code="$(probe "$host")"
   verdict="$(guard_verdict "$host" "/")"
@@ -467,7 +469,8 @@ for host in "${EXEMPT_HOSTS[@]}"; do
     echo "  FAIL  exempt host $host is unreachable — openness cannot be verified"; FAIL=1
   elif [ "$verdict" != "none" ]; then
     echo "  FAIL  exempt host $host was handled by the guard ($verdict) — the whole-host exemption is not in effect"
-    echo "        If this is placard, every launcher icon is silently broken right now (IDEA-22)."
+    echo "        If this is placard, its front page and every placard-hosted mark are"
+    echo "        silently serving login HTML right now (IDEA-22)."
     FAIL=1
   else
     echo "  FAIL  exempt host $host answered $code to a sessionless request (expected 200)"
