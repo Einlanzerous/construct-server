@@ -73,7 +73,7 @@ on:
           - purser
           - switchyard
       version:
-        description: "Target tag — major.minor (1.11), or a sha for argosy/drydock"
+        description: "Target tag — major.minor (1.11), or a sha for argosy/drydock until SERV-125's back-publish moves them"
         required: true
         type: string
       kind:

@@ -74,7 +74,8 @@ As surveyed, every first-party image in `docker-compose.yml` was a hardcoded
 `:latest` — aperture, cook_book, argosy, switchyard, centrifuge, lyceum, purser,
 interlock. **Closed by SERV-74 + SERV-88.** All 14 read `${<SERVICE>_TAG:-latest}`
 against real values: major.minor for the services with release-please versions, a
-sha for argosy and drydock, which publish no semver. Verified by deploying twice
+sha for argosy and drydock, which at the time had no semver image to pin to.
+Verified by deploying twice
 from `main` with no merge in between and diffing the running digests — identical,
 and the second deploy recreated nothing.
 
@@ -109,8 +110,23 @@ version drift that does not exist.** Compare the `revision` label. It matters mo
 exactly where the stakes are highest — the deployments ledger (SWY-185/191) and
 rollback (SERV-79), where "is this the same code" is the entire question.
 
-So two of the ten pins are shas — argosy and drydock, the genuine no-semver cases
-— and everything else tracks major.minor.
+So two of the ten pins are shas — argosy and drydock — and everything else tracks
+major.minor. They are still shas **today**: SERV-125 fixed the cause upstream, and
+the pins move via `promote.yml` once the back-publish has run.
+
+**They were not "genuine no-semver cases", which is what this document called them
+for months.** Both cut releases normally the whole time (`v0.25.1`, `v1.7.0`). What
+neither published was a semver-tagged *image*, and that is a different claim — the
+one the pin actually depends on. Their publish workflows asked for the semver tags
+on `on: push: tags`, and that trigger had never fired once in either repo, because
+release-please cuts tags under `GITHUB_TOKEN` and GitHub creates no workflow runs
+from events that token authored. The tag landed, nothing built, nothing complained.
+Fixed upstream in SERV-125 by publishing from the release-please run instead.
+
+The phrasing mattered more than it looks: read as written it says the upstream repos
+have no releases, so the reader concludes there is nothing to pin to and stops
+looking — which is exactly what happened, for as long as it took SERV-73's audit to
+go and check the registry.
 
 One float is kept on purpose: major.minor means patch releases still land on a
 `docker compose pull`, so security fixes do not need a secret edit. Exact-version
