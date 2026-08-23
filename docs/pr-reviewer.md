@@ -203,6 +203,151 @@ source — for exactly the case the expression existed to serve.
 7. Documentation only → skip.
 8. Otherwise review, at the deeper tier if `sensitive_paths` matched.
 
+## What a review pass writes about itself (SERV-127)
+
+Every pass writes one small JSON file naming **which PR it reviewed and which
+pass it was**, so review spend can be divided by the PR rather than by the call.
+
+```
+~/.claude/ci-rounds/<sessionId>.json
+```
+
+`CLAUDE_CONFIG_DIR` is honoured if set; otherwise `$HOME/.claude`, the same
+directory Claude Code writes transcripts under.
+
+```json
+{
+  "schema": 1,
+  "session_id": "fc163979-fd6d-42f2-9585-b86fc9ddfbb0",
+  "job_class": "pr-review",
+  "pr_ref": "Einlanzerous/construct-server#215",
+  "round_id": "PR_kwDOL3QhOc6bF2xY",
+  "pass_n": 2,
+  "repository": "Einlanzerous/construct-server",
+  "pr_number": 215,
+  "event": "pull_request",
+  "manual": false,
+  "effort": "high",
+  "model": "opus",
+  "outcome": "completed",
+  "turns": 33,
+  "run_id": "31772576197",
+  "run_attempt": "1",
+  "run_url": "https://github.com/.../actions/runs/31772576197",
+  "prompt_repo": "Einlanzerous/construct-server",
+  "prompt_ref": "main",
+  "prompt_sha256": "6ae46e0b…",
+  "recorded_at": "2026-08-23T23:50:06Z"
+}
+```
+
+### Why it exists
+
+Switchyard measures LLM spend by sweeping the Claude Code transcript tree
+(SWY-302 / SWY-305), and the reviewer is a material slice of it — **14,510
+records, 14.6% of calls, ~8.0% of notional**, across 290 sessions and 6 repos on
+2026-08-22.
+
+The unit is the problem. **A PR does not cost one review, it costs N passes**:
+the workflow re-triggers while findings remain, with no cap configured. Per-call
+and per-session views hide that completely — five cheap passes look better than
+one expensive one right up until you divide by the PR — and a loop that will not
+converge is the expensive failure mode.
+
+### Why it cannot be recovered downstream
+
+It was tried. The review prompt carries **no PR reference** — it is the
+procedure, fetched from this repo, and nothing in it names the PR. Scanning the
+*whole* transcript for PR-shaped tokens finds a candidate in **289 of 290**
+sessions, but **106 of those are ambiguous**: the reviewer reads other PRs,
+follows issue links and cites prior work as part of reviewing. A heuristic would
+be wrong about a third of the time and would look fine doing it, because every
+wrong answer is still a plausible PR number.
+
+### Why a file and not an environment variable
+
+The cheaper shape — set `SWITCHYARD_JOB_*` on the Review step and let the reader
+pick it up alongside `cwd` and `gitBranch` — does not work, and it is worth
+recording *why* rather than re-proposing it. Transcript records carry `cwd`,
+`gitBranch`, `entrypoint`, `effort`, `version`, `sessionId` and the message.
+**They carry no environment at all** — verified against the union of top-level
+keys across every CI transcript on this host. An env var set here would be
+recorded nowhere, leaving the reader nothing to correlate by.
+
+That key union does contain `prNumber` / `prRepository` / `prUrl`, which look
+like the answer and are not: they belong to `type: "pr-link"` records Claude Code
+writes when a session *touches* a PR. Two of 333 CI transcripts have any, and one
+of those two carries several different PR numbers.
+
+### The fields that need explaining
+
+- **`pr_ref` carries the repository, always.** PR numbers are not unique across
+  the estate, which is why Switchyard's own convention is `SWY-191 (#247)` rather
+  than a bare `#247`.
+- **`round_id` is the PR's GraphQL node id**, which survives a repo rename where
+  `<owner>/<repo>#<number>` does not — and keeps `round_id` from being a
+  byte-for-byte copy of `pr_ref`. It falls back to `pr_ref` with a warning if the
+  node id cannot be resolved. On the `issue_comment` path it is fetched with
+  `gh pr view --json id`, because the comment payload's `issue.node_id` is the
+  **issue** node, a different object; reading that would key one PR two ways
+  depending on which event triggered the pass.
+- **`pass_n` is an ordering hint, not an authority.** It counts the reviewer
+  sessions *this host* has already recorded for the round, so it is exact for a
+  PR whose passes all ran here and were not swept. Order by `recorded_at` and the
+  transcript's own timestamps when it matters. It is deliberately **not** derived
+  from prior posted reviews (an exhausted pass posts none, and that is the pass
+  most worth counting), nor from `run_attempt` (that counts re-runs of one run,
+  not passes across pushes), nor from a run listing (an `issue_comment` pass runs
+  on the default branch, so no branch filter finds it).
+- **`prompt_sha256` is the exact revision of the procedure this pass ran.**
+  `prompt_ref` alone does not answer it — callers pin at different refs and
+  `main` moves, which is the drift this shared workflow exists to stop. Switchyard
+  had to approximate this by hashing the stable first ~1200 characters of the
+  prompt, recovering 7 revisions between 2026-08-03 and 2026-08-23; this makes it
+  exact, and makes "which revision of the prompt converges in fewer passes" a
+  question the data can answer.
+- **`job_class` is written explicitly rather than left to be derived.** Today
+  `service='claude-code-ci'` *is* pr-review exactly, because this is the only
+  `claude-code-action` workflow in the estate — but that is true by current fact,
+  not by construction, and the moment any repo adds a second one the CI figures
+  become a silent mixture with no signal (SWY-327).
+
+### The constraint on this step
+
+**Write-only, and it may never fail a review.** Nothing here calls Switchyard;
+the file is left on disk for a reader that may be offline, behind, or absent.
+Every failure inside it is a `::warning::` and `continue-on-error` is the backstop
+for the ones not anticipated — the measurement path may never slow or fail the
+thing it measures, which is the constraint SWY-302 placed on itself.
+
+It runs `if: always()`, because an **exhausted** pass is the single most
+interesting one to have measured — it is the non-converging tail the whole
+exercise exists to price — and it is exactly the pass whose Review step failed.
+
+The session id comes from the execution file, not from the action's `session_id`
+output: on the throw path the action re-emits `execution_file` and **not**
+`session_id`, so the output is empty on precisely the runs worth measuring. Same
+lesson, same place, as the classifier reading the execution file rather than the
+exit code.
+
+A pass with **no** resolvable session id records nothing and says so. A sidecar
+keyed on a guess is worse than an absent one, because the reader cannot tell them
+apart.
+
+Sidecars older than 60 days are swept by the step that writes them. That is
+aligned to Claude Code's own `cleanupPeriodDays` (30) with headroom: past that
+the transcript a sidecar annotates is gone, so keeping it buys nothing. It does
+mean `pass_n` restarts on a PR whose passes span more than that — the consistent
+answer rather than a lossy one, since the earlier passes are no longer observable
+either.
+
+### Consumer side
+
+**SWY-328** owns the capture and schema; **SWY-327** owns the `job_class`
+dimension the rounds hang off. Subagent transcripts carry the **parent**
+`sessionId`, so one sidecar per session covers those records too — though the
+reviewer runs with `--allowedTools Bash,Read,Grep,Glob` and spawns none today.
+
 ## Gotchas worth knowing before you change it
 
 - **`gh` does not read `GITHUB_REPOSITORY`.** It resolves from `--repo`, then
@@ -222,4 +367,7 @@ source — for exactly the case the expression existed to serve.
 - `REVIEW.md` — this repo's own review standards.
 - `PRINCIPLES.md` — estate-wide defaults the reviewer also applies.
 - SERV-59 (the reviewer), SERV-87 (the check now means something), SERV-92 (this
-  extraction), SGNT-36 (adopting it without thinking about the inputs).
+  extraction), SERV-126 (the first review a conflicting PR never got), SERV-127
+  (the round export), SGNT-36 (adopting it without thinking about the inputs).
+- SWY-302 (the transcript producer), SWY-327 (`job_class`), SWY-328 (the
+  consumer for the sidecar above).

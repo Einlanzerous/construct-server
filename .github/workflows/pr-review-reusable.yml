@@ -285,6 +285,13 @@ jobs:
       number: ${{ steps.pr.outputs.number }}
       manual: ${{ steps.pr.outputs.manual }}
       base_ref: ${{ steps.pr.outputs.base_ref }}
+      # The PR's GraphQL node id, and the only reason it is resolved at all is
+      # SERV-127's `round_id` — a key that must group every pass on one PR. It
+      # survives a repo rename, where `<owner>/<repo>#<number>` does not, and it
+      # keeps `round_id` from being a byte-for-byte copy of `pr_ref`. Empty is
+      # tolerated: the recorder falls back and warns rather than failing a
+      # review over a measurement field.
+      node_id: ${{ steps.pr.outputs.node_id }}
       review: ${{ steps.triage.outputs.review }}
       reason: ${{ steps.triage.outputs.reason }}
       effort: ${{ steps.triage.outputs.effort }}
@@ -335,12 +342,22 @@ jobs:
             # An explicit ask overrides every skip rule below, including drafts.
             echo "manual=true" >> "$GITHUB_OUTPUT"
             # The comment payload carries no base ref either, and the review
-            # scope is read from it (see the review-ignore fetch below).
-            echo "base_ref=$(gh pr view "$N" --json baseRefName --jq .baseRefName)" >> "$GITHUB_OUTPUT"
+            # scope is read from it (see the review-ignore fetch below). The
+            # node id comes out of the same call rather than a second one — and
+            # it has to be fetched on this path at all because the payload's
+            # `issue.node_id` is the ISSUE node, a different object from the
+            # pull request node the `pull_request` payload carries. Reading it
+            # would key the same PR two ways depending on which event triggered
+            # the pass, which is exactly the grouping `round_id` exists to make
+            # reliable.
+            PR_JSON=$(gh pr view "$N" --json baseRefName,id)
+            echo "base_ref=$(jq -r '.baseRefName' <<<"$PR_JSON")" >> "$GITHUB_OUTPUT"
+            echo "node_id=$(jq -r '.id // ""' <<<"$PR_JSON")" >> "$GITHUB_OUTPUT"
           else
             echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
             echo "manual=false" >> "$GITHUB_OUTPUT"
             echo "base_ref=${{ github.event.pull_request.base.ref }}" >> "$GITHUB_OUTPUT"
+            echo "node_id=${{ github.event.pull_request.node_id }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Triage — should this be reviewed, and how deeply
@@ -1226,6 +1243,279 @@ jobs:
             emit exhausted "$TURNS" "${ERRORS:-turn budget exhausted}"
           fi
           emit malfunction "$TURNS" "result subtype ${SUBTYPE}, is_error ${IS_ERROR}${ERRORS:+ — $ERRORS}"
+
+      # --- SERV-127: what this pass was, written where a transcript reader can
+      # find it ---------------------------------------------------------------
+      #
+      # Claude Code writes one JSONL transcript per session under
+      # `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, and Switchyard
+      # sweeps that tree for token usage (SWY-302/305). The reviewer is ~15% of
+      # the estate's LLM calls, and none of those records say which PR was being
+      # reviewed. This step is the only place that knows.
+      #
+      # The unit that matters is the ROUND, not the call and not the session: a
+      # PR does not cost one review, it costs N passes, because the workflow is
+      # re-triggered while findings remain and nothing caps that. Five cheap
+      # passes look better than one expensive one right up until you divide by
+      # the PR, so a per-call or per-session view hides the expensive failure
+      # mode — a loop that will not converge — completely.
+      #
+      # WHY NOT RECOVER IT DOWNSTREAM. Measured on 2026-08-22 across the whole
+      # transcript tree: no PR reference appears in the review prompt, because
+      # the prompt is the procedure and nothing in it names the PR. Scanning the
+      # entire transcript for PR-shaped tokens finds a candidate in 289 of 290
+      # sessions and 106 of those are AMBIGUOUS — the reviewer reads other PRs,
+      # follows issue links and cites prior work as part of reviewing. A
+      # heuristic would be wrong about a third of the time and would look fine
+      # doing it, because every wrong answer is still a plausible PR number.
+      #
+      # WHY NOT AN ENV VAR ON THE REVIEW STEP, which is the cheaper shape and
+      # was the ticket's first suggestion. Transcript records carry `cwd`,
+      # `gitBranch`, `entrypoint`, `effort`, `version`, `sessionId` and the
+      # message — and no environment at all. Verified against the live tree:
+      # the union of top-level keys across every CI transcript on this host has
+      # no env key of any kind, so an env var set here would be recorded
+      # nowhere and the consumer would have nothing to correlate BY. The
+      # sidecar is the second shape for that reason, not for preference.
+      #
+      # And do not reach for `prNumber` / `prRepository` / `prUrl`, which DO
+      # appear in that key union: they belong to `type: "pr-link"` records that
+      # Claude Code writes when a session touches a PR. Two of 333 CI files have
+      # any, and one of those two carries several different PR numbers. It is
+      # "PRs this session mentioned", which is the same ambiguity as scraping,
+      # wearing a field name that looks authoritative.
+      #
+      # WRITE-ONLY, AND IT MAY NEVER FAIL A REVIEW. Nothing here calls
+      # Switchyard; the file is left on disk for a reader that may be offline,
+      # behind, or absent. The measurement path may never slow or fail the thing
+      # it measures (the constraint SWY-302 placed on itself), so every failure
+      # below is a `::warning::` and `continue-on-error` is the backstop for the
+      # ones not anticipated.
+      #
+      # `if: always()` because an EXHAUSTED pass is the single most interesting
+      # one to have measured — it is the non-converging tail this exists to
+      # price — and it is exactly the pass whose Review step failed.
+      - name: Record the review round
+        if: always()
+        continue-on-error: true
+        env:
+          PR_NUMBER: ${{ needs.triage.outputs.number }}
+          PR_NODE_ID: ${{ needs.triage.outputs.node_id }}
+          MANUAL: ${{ needs.triage.outputs.manual }}
+          EFFORT: ${{ needs.triage.outputs.effort }}
+          MODEL: ${{ needs.triage.outputs.model }}
+          EXEC: ${{ steps.outcome.outputs.exec }}
+          STATE: ${{ steps.outcome.outputs.state }}
+          TURNS: ${{ steps.outcome.outputs.turns }}
+          # Set by the action on the success path only. On the throw path — the
+          # turn-overshoot case this workflow already exists to survive — the
+          # catch in base-action/src/index.ts re-emits `execution_file` and
+          # NOT `session_id`, so this is empty on precisely the runs worth
+          # measuring. The execution file is the fallback, same as the
+          # classifier's.
+          SESSION_HINT: ${{ steps.review.outputs.session_id }}
+          PROMPT_REPO: ${{ inputs.prompt_repo }}
+          PROMPT_REF: ${{ inputs.prompt_ref }}
+          # Sidecars older than this are swept. Aligned to Claude Code's own
+          # `cleanupPeriodDays` (30) with headroom: past that the transcript a
+          # sidecar annotates is gone, so keeping it buys nothing. It does mean
+          # `pass_n` restarts on a PR whose passes span more than this — which
+          # is the consistent answer rather than a lossy one, since the earlier
+          # passes are no longer observable either.
+          SIDECAR_RETENTION_DAYS: "60"
+        run: |
+          # NOT `set -e`. This step must not take a review down with it, so it
+          # checks and warns rather than exiting on the first surprise.
+          set -uo pipefail
+
+          warn() { echo "::warning::SERV-127 round export: $1"; }
+
+          # Same directory Claude Code writes transcripts under, resolved the
+          # same way it resolves it, so the sidecar cannot land somewhere the
+          # reader does not look when the runner's environment is unusual.
+          CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+          ROUND_DIR="$CLAUDE_DIR/ci-rounds"
+
+          # A flat, dedicated directory rather than beside each transcript. The
+          # alternative means reproducing Claude Code's cwd-to-directory
+          # encoding here, which couples CI to an internal layout for no gain —
+          # the reader keys on `sessionId` either way, and a sidecar that
+          # outlives its transcript is still readable.
+          if ! mkdir -p "$ROUND_DIR"; then
+            warn "could not create $ROUND_DIR; nothing recorded for this pass"
+            exit 0
+          fi
+
+          SESSION_ID="${SESSION_HINT:-}"
+          if [ -z "$SESSION_ID" ]; then
+            EXEC_FILE="${EXEC:-}"
+            [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
+            if [ -f "$EXEC_FILE" ]; then
+              # Every SDK message carries `session_id`; the `system`/`init` one
+              # is simply the first to arrive. Take the first non-empty value
+              # rather than naming a message type, so this keeps working if the
+              # init message is ever dropped from the execution file.
+              SESSION_ID=$(jq -r '[ .[]? | .session_id? // empty | select(. != "") ] | first // ""' \
+                             "$EXEC_FILE" 2>/dev/null) || SESSION_ID=""
+            fi
+          fi
+
+          # No session id means no transcript to annotate, which is the one
+          # honest reason to record nothing: a sidecar keyed on a guess is worse
+          # than an absent one, because the reader cannot tell them apart.
+          if [ -z "$SESSION_ID" ]; then
+            warn "no session id from the action output or the execution file; this pass is not attributable to a transcript and was not recorded"
+            exit 0
+          fi
+
+          # An assertion, not a lookup — the sidecar is written regardless. It
+          # catches the case where this runner's HOME is not where transcripts
+          # actually land, which would leave the reader with a directory of
+          # files describing sessions it will never see.
+          if ! find "$CLAUDE_DIR/projects" -maxdepth 2 -type f -name "${SESSION_ID}.jsonl" -print -quit 2>/dev/null | grep -q .; then
+            warn "no transcript for session ${SESSION_ID} under $CLAUDE_DIR/projects — recording anyway, but check that the runner and Claude Code agree on HOME"
+          fi
+
+          # jq's --argjson refuses a non-number, so an empty or malformed PR
+          # number would surface as "could not compose the sidecar" three
+          # screens further down. Say what actually happened instead.
+          case "${PR_NUMBER:-}" in
+            ''|*[!0-9]*)
+              warn "PR number '${PR_NUMBER:-}' is not a number; nothing recorded for this pass"
+              exit 0 ;;
+          esac
+
+          PR_REF="${GITHUB_REPOSITORY}#${PR_NUMBER}"
+
+          # PR numbers are NOT unique across the estate — `#56` is a different
+          # pull request in every repo that has one — which is why `pr_ref`
+          # carries the repository, and why Switchyard's own convention is to
+          # write `SWY-191 (#247)` rather than a bare `#247`.
+          ROUND_ID="${PR_NODE_ID:-}"
+          if [ -z "$ROUND_ID" ]; then
+            ROUND_ID="$PR_REF"
+            warn "no PR node id; grouping this round by ${PR_REF}, which a repo rename would split"
+          fi
+
+          # `pass_n` counts the reviewer sessions THIS HOST has already recorded
+          # for this round, so it is exact for a PR whose passes all ran here and
+          # were not swept. It is an ordering hint and says so: the authority for
+          # ordering is `recorded_at` and the transcript's own timestamps, which
+          # is why both are written.
+          #
+          # Deliberately not derived from prior posted reviews (an exhausted pass
+          # posts none, and the pass with no review is the one worth counting),
+          # nor from `github.run_attempt` (that counts re-runs of one run, not
+          # passes across pushes), nor from a run listing (an `issue_comment`
+          # pass runs on the default branch, so no branch filter finds it).
+          #
+          # grep prefilters and jq decides. Handing jq the whole directory at
+          # once is the obvious shape and is wrong twice: it reads every sidecar
+          # on the host to count one round's, and ONE unparseable file aborts
+          # the batch — so a single truncated write would silently reset the
+          # counter for every round on the box, which is the failure mode this
+          # step must not have. grep -F is a substring test and can over-match
+          # (`…#1` inside `…#15`); it is a filter, not the answer, and the jq
+          # equality below is what decides.
+          PRIOR=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            MATCH=$(jq -r --arg r "$ROUND_ID" \
+                      'select(.round_id == $r) | .session_id // empty' "$f" 2>/dev/null) || continue
+            [ -n "$MATCH" ] || continue
+            # A re-run of this same session re-writes its own file; it is this
+            # pass, not a prior one.
+            [ "$MATCH" = "$SESSION_ID" ] && continue
+            PRIOR=$((PRIOR + 1))
+          done < <(find "$ROUND_DIR" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null \
+                     | xargs -0 -r grep -lF -- "$ROUND_ID" 2>/dev/null)
+          PASS_N=$((PRIOR + 1))
+
+          # The exact revision of the procedure this pass ran, rather than the
+          # ~1200-character prefix hash Switchyard had to approximate it with.
+          # `prompt_ref` alone does not answer it: callers pin at different refs
+          # and `main` moves, which is the drift this shared workflow was created
+          # to stop and the drift a per-revision convergence comparison needs to
+          # see. Hashed here rather than in the fetch step so that a missing
+          # sha256sum degrades a measurement field instead of failing a review.
+          PROMPT_SHA=""
+          if [ -f "$RUNNER_TEMP/review-prompt.md" ] && command -v sha256sum >/dev/null; then
+            PROMPT_SHA=$(sha256sum "$RUNNER_TEMP/review-prompt.md" | cut -d' ' -f1) || PROMPT_SHA=""
+          fi
+
+          DEST="$ROUND_DIR/${SESSION_ID}.json"
+          TMP="$DEST.tmp.$$"
+
+          # `job_class` is written explicitly rather than left to be derived.
+          # Today `service='claude-code-ci'` IS pr-review exactly — this is the
+          # only claude-code-action workflow in the estate — but that is true by
+          # current fact, not by construction, and the moment any repo adds a
+          # second one the CI figures become a silent mixture with no signal
+          # (SWY-327).
+          if ! jq -n \
+                --argjson schema 1 \
+                --arg  session_id   "$SESSION_ID" \
+                --arg  job_class    "pr-review" \
+                --arg  pr_ref       "$PR_REF" \
+                --arg  round_id     "$ROUND_ID" \
+                --argjson pass_n    "$PASS_N" \
+                --arg  repository   "$GITHUB_REPOSITORY" \
+                --argjson pr_number "$PR_NUMBER" \
+                --arg  event        "$GITHUB_EVENT_NAME" \
+                --argjson manual    "$([ "$MANUAL" = "true" ] && echo true || echo false)" \
+                --arg  effort       "${EFFORT:-}" \
+                --arg  model        "${MODEL:-}" \
+                --arg  outcome      "${STATE:-unknown}" \
+                --argjson turns     "${TURNS:-0}" \
+                --arg  run_id       "$GITHUB_RUN_ID" \
+                --arg  run_attempt  "$GITHUB_RUN_ATTEMPT" \
+                --arg  run_url      "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                --arg  prompt_repo  "${PROMPT_REPO:-}" \
+                --arg  prompt_ref   "${PROMPT_REF:-}" \
+                --arg  prompt_sha256 "$PROMPT_SHA" \
+                --arg  recorded_at  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{schema: $schema, session_id: $session_id, job_class: $job_class,
+                  pr_ref: $pr_ref, round_id: $round_id, pass_n: $pass_n,
+                  repository: $repository, pr_number: $pr_number,
+                  event: $event, manual: $manual, effort: $effort, model: $model,
+                  outcome: $outcome, turns: $turns,
+                  run_id: $run_id, run_attempt: $run_attempt, run_url: $run_url,
+                  prompt_repo: $prompt_repo, prompt_ref: $prompt_ref,
+                  prompt_sha256: $prompt_sha256, recorded_at: $recorded_at}' \
+                > "$TMP" 2>/dev/null; then
+            rm -f "$TMP"
+            warn "could not compose the sidecar for session ${SESSION_ID}; nothing recorded for this pass"
+            exit 0
+          fi
+
+          # Rename rather than write in place: the reader may be mid-sweep, and
+          # a half-written JSON file is an unparseable one.
+          if ! mv -f "$TMP" "$DEST"; then
+            rm -f "$TMP"
+            warn "could not write $DEST"
+            exit 0
+          fi
+
+          echo "→ round ${ROUND_ID} pass ${PASS_N} — ${PR_REF}, session ${SESSION_ID}, outcome ${STATE:-unknown}"
+          echo "→ $DEST"
+
+          # Housekeeping, here rather than in a host cron: this is the only
+          # thing that writes the directory, so it is the only thing that should
+          # have to know about it. `-mtime` on a directory nobody else touches
+          # cannot reach a live file.
+          find "$ROUND_DIR" -maxdepth 1 -type f -name '*.json*' \
+               -mtime "+${SIDECAR_RETENTION_DAYS}" -delete 2>/dev/null || true
+
+          {
+            echo "### Review round"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| \`pr_ref\` | \`${PR_REF}\` |"
+            echo "| \`round_id\` | \`${ROUND_ID}\` |"
+            echo "| \`pass_n\` | ${PASS_N} |"
+            echo "| session | \`${SESSION_ID}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Silence is the worst possible output: a red check with nothing on the PR
       # is indistinguishable from a broken token or a dead runner (SERV-87 AC 2).
