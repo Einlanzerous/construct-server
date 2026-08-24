@@ -4,12 +4,16 @@ Design of record for how code reaches the Construct. Tracked in Switchyard under
 **IDEA-19**; this doc is the starting point for the deep dive that graduates it to
 an epic with per-service children (SERV / SWY / SGNT / LOOP).
 
-**Status: design only.** Nothing below is built. Current state is described in
-*Where we actually are*, and it is the reason step 0 is hygiene rather than features.
+**Status: mostly built.** This said *"design only. Nothing below is built"* until
+2026-08-23, long after most of it shipped — and because the header is what people read
+first, it sent them looking for work that was already done. The per-section *"Closed
+by …"* annotations below are accurate and are the thing to trust; the pipeline exists
+end to end, and what remains is the quality gate (SERV-80, SERV-81) plus the loose ends
+each section names.
 
 **Now ticketed.** The Switchyard slice is **SWY-184** (children SWY-185…194); the
-construct-server slice is **SERV-73** (children SERV-74…81). Where a ticket and this
-document disagree, the ticket is newer.
+construct-server slice is **SERV-73** (children SERV-74…81, and since SERV-108, 128,
+130). Where a ticket and this document disagree, the ticket is newer.
 
 **Superseded since writing.** imperium-loop is being wound down (SERV-82), so the
 Servo-Signal rows in *Shape* and **sequencing step 3 are dropped, not deferred**. The
@@ -330,8 +334,66 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
   behind the pin — a repo's backend and frontend ship from one release, so a version
   that published for one and not the other is refused rather than half-deployed.*
 
-*The `deployments` row is the piece still outstanding: the commit is the durable record
-for now (`git log -p versions.env`), and posting to Switchyard is SWY-191.*
+*The `deployments` row is no longer outstanding. **SERV-117** wired the three call sites
+that actually deploy — `deploy.yml`, `deploy-dev.yml`, and `promote.yml` by way of the
+commit `deploy.yml` fires on — and **SERV-130** added the fourth, `deploy-signet.yml`.
+The commit remains the durable record either way (`git log -p versions.env`).*
+
+*Three git trailers carry a promote's intent to whichever run deploys it, because
+`promote.yml` deliberately does not deploy: `Delivery-Kind`, `Delivery-Reason` and —
+since SERV-130 — `Delivery-Actor`. The last one is not redundant with `github.actor`.
+The push that fires the deploy is authored by `PROMOTE_PUSH_TOKEN`'s owner, so both
+`github.actor` and `github.triggering_actor` in the deploying run name the PAT rather
+than the person who asked, and a rollback row with no actor is missing the one field an
+incident review wants from it. All three live in a single `-m` block: git parses only
+the last paragraph as trailers, so a second block would make them invisible to
+`%(trailers:key=…)`. Dev reports an actor only for a `workflow_dispatch` — its other
+triggers are a cron and `repository_dispatch`, and on a scheduled run `github.actor` is
+whoever last edited the workflow file, which is worse than recording nobody.*
+
+### Signet takes the same path, out of a second pins file
+
+*Closed by **SERV-130**. Until then signet was the one first-party service still on the
+pre-SERV-73 shape: a release deployed itself straight to prod, with no pin, no rollback
+and no report. It did not appear in `git log -p versions.env` at all.*
+
+*It now promotes and rolls back through the same `promote.yml` as everything else —
+same direction input, same required reason, same `production-promote` gate, same
+`Delivery-Kind` / `Delivery-Reason` trailers. Three things differ, and all three follow
+from signet being a **host binary under systemd** rather than a container:*
+
+- ***The pin lives in `versions-host.env`, not `versions.env`.** Not a filing preference.
+  `deploy-scope.sh` maps each changed pin in `versions.env` onto compose services and
+  refuses one that no image interpolates — and its caller correctly reads any refusal as
+  "pull the whole stack". A `SIGNET_VERSION` in `versions.env` would therefore make every
+  signet promote pull and recreate the entire prod stack: the SERV-109 regression,
+  arriving through the file that guards against it. The separate file has its own path
+  trigger on `deploy-signet.yml`, so `deploy.yml` never fires and `deploy-scope.sh` never
+  sees it.*
+- ***The pin is a full release tag (`v1.9.1`), not major.minor.** The container pins let
+  the registry resolve the newest patch behind `1.12`, which is the one float kept
+  deliberately. A releases API has nothing to resolve — `gh release download v1.9` 404s —
+  so a host pin names the exact release. The `v` stays because the value is consumed as a
+  git tag; everything that **compares** versions strips it, since signet has reported bare
+  since SGNT-38 and the ledger compares with strict equality.*
+- ***Verification asks the releases API, not a registry.** `verify-tag.sh` derives its
+  image list from `docker-compose.yml` and has no entry to find, so `promote.yml` checks
+  that the release exists **and carries the binary and its checksum**. Tag-exists alone
+  would not be enough: SERV-125 is a whole ticket about release tags that existed for
+  months with no artifact ever built behind them.*
+
+*Rollback is now the pin, run backwards through the gated workflow. `.prev` survives as
+documented break-glass for when that path cannot serve, rather than as the primary
+recovery advertised in an ansible failure message — which is what it used to be, on the
+credential daemon, discovered at the moment it was needed (SERV-79's argument, applied).
+A rollback below `v1.4.1` is **refused** at promote time rather than warned about: the
+unit binds two addresses and an older binary cannot parse that, so it fails to start
+entirely, loopback included, instead of degrading.*
+
+*A signet release still fires `signet-released` at this repo and it no longer deploys
+anything — it writes a summary saying a version is available and how to promote it. The
+dispatch keeps its meaning and loses its authority, which is step 3 semantics rather
+than step 2.*
 
 **9. Post-prod smoke.** On failure, auto-rollback to the last-good version, which the
 `deployments` table already knows.

@@ -62,6 +62,7 @@ def ticket_keys:
 + ($sha           | opt("sha"))
 + ($deployed_at   | opt("deployed_at"))
 + ($deployed_by   | opt("deployed_by"))
++ ($deployed_by_login | opt("deployed_by_login"))
 + ($source_ref    | opt("source_ref"))
 + ($run_url       | opt("run_url"))
 + ($gate_run_url  | opt("gate_run_url"))

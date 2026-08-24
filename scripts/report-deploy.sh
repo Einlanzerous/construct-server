@@ -23,6 +23,18 @@
 # against the shared `CreateDeployment` schema. If the contract changes, both
 # move — see docs in switchyard's `docs/delivery.md`.
 #
+# THAT DISCIPLINE HAS ALREADY FAILED ONCE, SILENTLY (SERV-130). Switchyard added
+# `deployed_by_login` to `payload.jq` and the `--arg` block below; this copy did
+# not follow, and nothing noticed because no caller here set the field — a copy
+# missing a line it never exercises looks identical in every way that gets
+# tested. It surfaced only when a caller finally wanted an actor and reached for
+# `deployed_by`, the UUID field beside it, which would have 400'd every prod
+# report. There is no automated check: switchyard is private and this repo is
+# public, which is the same constraint that made this a vendored copy rather
+# than a `uses:` in the first place. So when you touch either side, diff the two
+# by hand — `diff payload.jq` against the switchyard checkout is two seconds and
+# is the only thing standing behind the word "byte copy" above.
+#
 # The push half of the delivery ledger. Everything it sends is a CLAIM about a
 # deploy that this workflow performed; the reconciler's observations are what
 # corroborate it. See switchyard's `docs/delivery.md` for the contract and
@@ -165,6 +177,7 @@ for target in "${targets[@]}"; do
     --arg sha          "${RD_SHA:-}" \
     --arg deployed_at  "${RD_DEPLOYED_AT:-}" \
     --arg deployed_by  "${RD_DEPLOYED_BY:-}" \
+    --arg deployed_by_login "${RD_DEPLOYED_BY_LOGIN:-}" \
     --arg source_ref   "${RD_SOURCE_REF:-}" \
     --arg run_url      "${RD_RUN_URL:-}" \
     --arg gate_run_url "${RD_GATE_RUN_URL:-}" \

@@ -560,6 +560,14 @@ jobs:
           RD_GATE_TOTAL: ${{ github.event.client_payload.gate_total }}
           RD_GATE_RUN_URL: ${{ github.event.client_payload.gate_run_url }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # ONLY on a manual dispatch, and the condition is the whole point (SERV-130).
+          # Prod reports an actor because a promote has one; dev's deploys are almost
+          # all machine-initiated — the hourly cron and `repository_dispatch` from the
+          # service repos — and on a `schedule` run `github.actor` is whoever last
+          # edited the workflow file. Filing that name against a deploy they did not
+          # make is worse than filing none, so absence stays absence and the ledger
+          # omits the field. A `workflow_dispatch` genuinely has a person behind it.
+          RD_DEPLOYED_BY_LOGIN: ${{ github.event_name == 'workflow_dispatch' && github.actor || '' }}
         run: ./scripts/report-deploy.sh
       - name: Report everything else dev moved to
         if: always() && steps.reportable.outputs.plain != ''
@@ -574,4 +582,6 @@ jobs:
           RD_SERVICES: ${{ steps.reportable.outputs.plain }}
           RD_STATUS: ${{ steps.reportable.outputs.status }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Manual dispatch only — see the step above for why a cron run reports none.
+          RD_DEPLOYED_BY_LOGIN: ${{ github.event_name == 'workflow_dispatch' && github.actor || '' }}
         run: ./scripts/report-deploy.sh

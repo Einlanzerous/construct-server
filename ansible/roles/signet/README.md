@@ -42,8 +42,20 @@ The asset and its `.sha256` are downloaded with `gh`, the checksum is verified
 *before* anything moves into place, and the install is a rename rather than a
 write — the old binary is mapped by the running daemon, so truncating it in
 place would corrupt a live process. The outgoing binary is kept at
-`<binary>.prev` so a failed deploy can be reversed with one `mv`. Already on the
-target version? Nothing happens.
+`<binary>.prev` as **break-glass** — not as the rollback path. Already on the
+target version? Nothing happens, and since SERV-130 that is actually true: the
+idempotency check compared `signet version`'s bare output against the
+`v`-prefixed tag, so it was unconditionally true, and every deploy reinstalled an
+identical binary, bounced the credential daemon, and overwrote `.prev` with a
+copy of what was already running — discarding the only version there was to go
+back to.
+
+**To roll back, repoint the pin.** `SIGNET_VERSION` in `versions-host.env` is
+what prod runs; move it with Actions > *Promote / Rollback a Version*
+(`service=signet`, `kind=rollback`), which is the same code path as a promote
+and therefore the tested one. `git log -p versions-host.env` is the history of
+what was pinned when. Reach for `mv <binary>.prev <binary>` only when that path
+cannot serve — and repoint the pin afterwards, or the next deploy undoes it.
 
 The checksum establishes **integrity, not authenticity**: the binary and its
 `.sha256` come from the same release, so this catches a corrupt or truncated
@@ -56,6 +68,11 @@ runs unprivileged, restarting through the scoped sudo rule.
 
 This is what `.github/workflows/deploy-signet.yml` runs, gated behind a required
 reviewer in the `signet-prod` GitHub Environment.
+
+That workflow fires on a change to `versions-host.env`, **not** on a signet
+release (SERV-130). A release now only announces that a version is available;
+prod moves when someone promotes it with a reason, and the run reports the
+result to Switchyard's delivery ledger.
 
 ## Required variable
 `signet_api_token` — the bearer the daemon requires and the Switchyard

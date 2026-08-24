@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# set-version.sh — Repoint one first-party image pin in versions.env
+# set-version.sh — Repoint one first-party version pin
+#
+# Two files use it, and it does not need to know which: versions.env for the container
+# images, and versions-host.env for signet, the one first-party service that is a host
+# binary rather than a container (SERV-130). Both are KEY=VALUE and both are tracked, so
+# the write is the same; what differs is which workflow fires on the resulting commit.
+# Pass the file as $3.
 #
 # The single write behind promote and rollback (SERV-78, SERV-79). Both are the same
 # operation — "make prod run this exact version" — so both come through here; the only
@@ -18,9 +24,15 @@
 # later as "the version did not take" with no obvious cause.
 #
 # Usage:
-#   set-version.sh <KEY> <VERSION> [versions.env]
-#     KEY      the pin to change, e.g. LYCEUM_TAG
-#     VERSION  the tag to pin to, e.g. 1.11 or sha-2f641bd
+#   set-version.sh <KEY> <VERSION> [FILE]
+#     KEY      the pin to change, e.g. LYCEUM_TAG or SIGNET_VERSION
+#     VERSION  the value to pin to, e.g. 1.11 (an image tag) or v1.9.1 (a release tag)
+#     FILE     defaults to versions.env; versions-host.env for signet
+#
+# The alphabet check below is common to both, but the SHAPE each file wants is enforced
+# by its consumer, not here: promote.yml and deploy-signet.yml both require
+# `^v[0-9]+\.[0-9]+\.[0-9]+$` for signet, because a host pin has no registry to resolve
+# a major.minor against.
 #
 # Prints `<KEY>: <old> -> <new>`, or `<KEY>: already <value>` when it is a no-op.
 #
@@ -52,26 +64,32 @@ case "$key" in
 esac
 
 # An empty or whitespace-only version is the empty-environment-variable invariant
-# (CLAUDE.md): `LYCEUM_TAG=` interpolates to `image: …/lyceum:`, which is neither an
-# error nor `latest`, so it would sail past a naive check and float the service.
+# (CLAUDE.md). Both files suffer it, differently: `LYCEUM_TAG=` interpolates to
+# `image: …/lyceum:`, which is neither an error nor `latest`, so it sails past a naive
+# check and floats the service; `SIGNET_VERSION=` reaches deploy-signet.yml, which
+# refuses it rather than resolving it to anything. Neither is a state worth writing.
 if [ -z "${version//[[:space:]]/}" ]; then
   err "ERROR: refusing to set $key to an empty value"
-  err "An empty pin interpolates to a bare 'image: …/service:', which is not an error"
-  err "and not 'latest' — it silently deploys something nobody chose."
+  err "An empty image pin interpolates to a bare 'image: …/service:', which is not an"
+  err "error and not 'latest' — it silently deploys something nobody chose. An empty"
+  err "host pin has no release to download and stops the deploy instead."
   exit 2
 fi
 
-# Tags are a restricted alphabet, and this value is about to be written into a file that
-# a shell and docker both read. Anything outside it is either a typo or an injection.
+# A restricted alphabet, and this value is about to be written into a file that a shell
+# reads — and, for the image pins, docker too. Anything outside it is a typo or an
+# injection. The set is docker's, which is the stricter of the two and a superset of
+# what a git release tag needs, so one check covers both files.
 case "$version" in
   *[!A-Za-z0-9._-]*)
-    err "ERROR: '$version' is not a valid image tag"
-    err "Docker tags allow letters, digits, and . _ - only."
+    err "ERROR: '$version' is not a valid pin"
+    err "Letters, digits, and . _ - only (docker's tag alphabet, which also covers a"
+    err "release tag like v1.9.1)."
     exit 2
     ;;
 esac
 case "$version" in
-  [.-]*) err "ERROR: an image tag may not start with '.' or '-' (got '$version')"; exit 2 ;;
+  [.-]*) err "ERROR: a pin may not start with '.' or '-' (got '$version')"; exit 2 ;;
 esac
 
 current="$(grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2- || true)"
