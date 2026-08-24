@@ -239,6 +239,26 @@ git push'
 expect deny "$TMP/dirty" 'git commit -m "docs: explain << redirects"
 git push'
 
+# A newline INSIDE a quoted string is text, not a command boundary. This is the
+# single-line quoted-separator case one axis over, and the single-line/multi-line axis
+# has now been the gap three rounds running — so every quote case above gets its
+# multi-line spelling here. All of these block a command that is not a push, and none of
+# them can take `--no-verify`.
+expect allow "$TMP/dirty" 'git commit -m "docs: release runbook
+
+To ship a release:
+git push origin main
+"'
+expect allow "$TMP/dirty" 'gh pr create --title x --body "Steps:
+git push origin main
+done"'
+expect allow "$TMP/dirty" "gh issue comment 1 --body 'then:
+git push origin main
+'"
+# …and the separator still works on the far side of a multi-line quoted argument.
+expect deny "$TMP/dirty" 'git commit -m "line one
+line two" && git push'
+
 echo "lint-gate: the gate answers fast enough to leave on"
 start=$(date +%s%N)
 decision "$TMP/clean" "ls" >/dev/null

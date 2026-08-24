@@ -217,9 +217,14 @@ deny() {
 split_segments() {
   SEGMENTS=()
   local seg
-  while IFS= read -r seg; do
+  # NUL-delimited, not newline-delimited. A segment may now legitimately CONTAIN a
+  # newline (a multi-line quoted string is one segment), so splitting the awk output on
+  # newlines here would undo the fix below and hand back `git push origin main` as its
+  # own segment again.
+  while IFS= read -r -d "" seg; do
     SEGMENTS+=("$seg")
   done < <(printf '%s' "$1" | awk '
+    function emit(s) { printf "%s%c", s, 0 }
     BEGIN { SQ = sprintf("%c", 39); DQ = sprintf("%c", 34); BS = sprintf("%c", 92)
             q = ""; term = ""; cur = "" }
     {
@@ -263,11 +268,24 @@ split_segments() {
           cur = cur "<<"; i++; continue
         }
 
-        if (c == "&" || c == "|" || c == ";") { print cur; cur = ""; continue }
+        if (c == "&" || c == "|" || c == ";") { emit(cur); cur = ""; continue }
         cur = cur c
       }
-      print cur; cur = ""                       # end of line is itself a separator
+      # End of line is a separator — but ONLY outside quotes. `q` deliberately survives
+      # across lines (it is initialised in BEGIN, not per record), so an unterminated
+      # quote here means the newline is part of a multi-line string, not a command
+      # boundary. Printing unconditionally made every line of a multi-line `-m` or
+      # `--body` command position: `git commit -m "…⏎git push origin main⏎"` and
+      # `gh pr create --body "…"` both blocked, on commands that are not pushes and
+      # where `--no-verify` has nowhere to go.
+      #
+      # This is the single-line quoted-separator bug one axis over, and it was a
+      # regression: the bash character loop this replaced tested the quote state before
+      # the separator and got it right.
+      if (q != "") { cur = cur "\n"; next }
+      emit(cur); cur = ""
     }
+    END { if (cur != "") emit(cur) }            # flush an unterminated trailing quote
   ')
 }
 

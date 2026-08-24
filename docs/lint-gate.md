@@ -195,6 +195,7 @@ was a real bug caught in review:
 | `git commit -m "wip; git push later"` | allow | A blind split treats that `;` as real and blocks the **commit** |
 | `cat > deploy.md <<EOF … git push … EOF` | allow | A heredoc body is **not shell-quoted**, so quote tracking alone does not save it |
 | `git add -A`⏎`git commit -m x`⏎`git push` | deny | So newline must stay a separator |
+| `git commit -m "…⏎git push origin main⏎"` | allow | …but only **outside quotes** — a newline inside a quoted string is text |
 
 The heredoc case is the worse of the two failures, and not only because it is easy to hit
 — writing this very document from a heredoc trips it. The command being blocked is a file
