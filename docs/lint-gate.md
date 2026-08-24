@@ -101,6 +101,19 @@ never blocks on something CI would accept.
   push*, after you have reviewed the diff, is a worse bug than the one it fixes. Every
   command above is a check. The gate reports; you fix.
 
+### What it does execute, which is worth being explicit about
+
+Selecting a repo's `lint` / `format:check` script means **running a command the repository
+controls**, from a hook, for every repo on the box — outside the tool-permission path the
+same command would go through if an agent ran it directly. Inside the estate that is
+fine and is the point: argosy, lyceum and interlock all define read-only `eslint` /
+`prettier --check`, and the *writing* `format` script is deliberately not selected. But
+the property is "this machine only holds repos you trust", not something the gate
+enforces. A hostile `package.json` dropped into any directory you `git push` from would
+execute. If that stops being true of this box, narrow the dispatch to fixed binaries
+(`eslint`, `prettier`) rather than named scripts, or drop back to the language checks
+that take no repo input at all — `gofmt`, `cargo fmt`, `dart format`.
+
 ## It fails open, and that is the opposite of `deploy-scope.sh`
 
 `scripts/deploy-scope.sh` fails **closed**: when it cannot answer, the deploy does the
@@ -129,6 +142,15 @@ Anything it could not run is reported as a skip and does not block. Concretely:
   CLAUDE.md's own invariant is that it runs as a systemd service with a bare system
   `PATH` and cannot see anything under `$HOME` — **`bun` included**. Every Node check
   skips there, which is correct; the runner is not where pushes are authored.
+- **`gofmt` or `go` not on `PATH` → skip**, and this one bit for real. `gofmt` was
+  unguarded while `go` was guarded for vet, so with `gofmt` absent `xargs` wrote
+  `xargs: gofmt: No such file or directory` to stderr and the gate reported it as a
+  *parse failure* — denying every push from every repo with a `go.mod`, against a
+  correctly formatted tree, with nothing the agent could fix. It is not an exotic state:
+  `go` and `gofmt` live in `~/go/bin` here, which only `~/.zshrc` adds to `PATH`, so
+  every non-login shell is in it — the runner included, and the PR reviewer that caught
+  this. Both are guarded now, a 127 or 124 out of the `gofmt` pipeline is a skip rather
+  than a finding, and `make lint-gate-test` asserts it with `PATH` stripped.
 
 ## Exemptions
 
@@ -163,6 +185,15 @@ The corollary is that `git push` must be recognised in **command position** only
 on it matched anywhere in the string, which meant
 `git commit -m 'remember to git push'` blocked a *commit*. A gate people cannot predict
 is a gate they switch off.
+
+Command position is decided by splitting on `&&`, `||`, `;` and newline **outside
+quotes**, via a single character pass that tracks quote state. Splitting blind is not
+enough and the difference is easy to miss: it gets the separator-free message above right
+while still blocking the commit for `git commit -m "wip; git push later"`, because the
+`;` inside the message opens a segment that starts with `git push`. Both forms are in the
+test suite. Backslash escaping is deliberately not modelled — it does not change what a
+`git push` segment looks like in practice, and a mis-split errs toward linting when it
+did not need to, which is the safe direction.
 
 **The installer copies the script; it does not point at the checkout.** Registering
 `~/construct-server/scripts/lint-gate.sh` would keep the gate current on every `git

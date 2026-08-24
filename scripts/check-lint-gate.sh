@@ -137,6 +137,29 @@ n="$(units)"
 # failure-direction note in lint-gate.sh. A slow linter is a skip, not a denial.
 # --------------------------------------------------------------------------
 echo "lint-gate: fail-open"
+# The regression from PR #158's review. gofmt was guarded nowhere while `go` was guarded
+# for vet, so with gofmt off PATH xargs wrote "No such file or directory" to stderr and
+# the gate reported it as a parse FAILURE — denying every push from every repo with a
+# go.mod, against a correctly formatted tree. On this box `go`/`gofmt` live in ~/go/bin,
+# which only ~/.zshrc adds, so any non-login shell (the self-hosted runner included)
+# is in exactly that state.
+#
+# $TMP/dirty IS misformatted, so this asserts the harder direction: with no gofmt to
+# prove it, the gate must still allow rather than invent a finding.
+got="$(PATH=/usr/bin:/bin decision "$TMP/dirty" "git push")"
+[ "$got" = allow ] && ok "gofmt off PATH is a skip, not a block" \
+                   || bad "gofmt off PATH" "expected allow, got $got"
+
+# A shell separator inside a quoted commit message must not put `git push` in command
+# position — it would block the COMMIT, not a push.
+for msg in 'wip; git push later' 'wip && git push later' 'remember to git push'; do
+  got="$(decision "$TMP/dirty" "git commit -m \"$msg\"")"
+  [ "$got" = allow ] && ok "allow  <- git commit -m \"$msg\"" \
+                     || bad "git commit -m \"$msg\"" "expected allow, got $got"
+done
+# …while a real separator outside quotes still must be found.
+expect deny "$TMP/dirty" "git commit -m 'wip' && git push"
+
 SLOW="$TMP/slow"
 mkdir -p "$SLOW/node_modules"
 ( cd "$SLOW" && git init -q -b main . && git config user.email t@example.com && git config user.name t )

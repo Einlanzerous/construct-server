@@ -159,20 +159,55 @@ deny() {
 # a segment, not anywhere inside one. Sets PUSH_ARGS to that push's own arguments, which
 # is what the exemption parser needs; feeding it the whole command string instead is what
 # made `git push origin v1.0.0` parse `push` as a refspec.
+# Split on shell separators, but only ones OUTSIDE quotes.
+#
+# A blind split treats the separator in `git commit -m "wip; git push later"` as a real
+# one, which puts `git push later` in command position and blocks the *commit*. The
+# quote-blind version got the frequently-tested form right (`-m 'remember to git push'`,
+# no separator) while still failing the moment a message contained a `;` or `&&`.
+#
+# One character-at-a-time pass tracking quote state is enough. Backslash escaping is not
+# modelled: it does not change what a `git push` segment looks like in practice, and the
+# failure direction of a mis-split is that the gate lints when it did not need to.
+split_segments() {
+  local s="$1" i c n q="" cur=""
+  SEGMENTS=()
+  n=${#s}
+  for (( i = 0; i < n; i++ )); do
+    c="${s:i:1}"
+    if [ -n "$q" ]; then
+      # Inside quotes: only the matching quote ends them; separators are just text.
+      [ "$c" = "$q" ] && q=""
+      cur+="$c"
+      continue
+    fi
+    case "$c" in
+      "'"|'"') q="$c"; cur+="$c" ;;
+      '&'|'|'|';'|$'\n')
+        SEGMENTS+=("$cur"); cur="" ;;
+      *) cur+="$c" ;;
+    esac
+  done
+  SEGMENTS+=("$cur")
+}
+
 PUSH_ARGS=""
 find_git_push() {
-  local norm seg
-  norm="${1//&&/$'\n'}"
-  norm="${norm//||/$'\n'}"
-  norm="${norm//;/$'\n'}"
-  norm="${norm//|/$'\n'}"
-  while IFS= read -r seg; do
+  local seg
+  # A pathological command is not worth a character loop; fall back to "assume it is a
+  # push" so the gate errs toward running the checks rather than toward silence.
+  if [ "${#1}" -gt 8192 ]; then
+    case "$1" in *"git push"*) PUSH_ARGS=""; return 0 ;; esac
+    return 1
+  fi
+  split_segments "$1"
+  for seg in ${SEGMENTS+"${SEGMENTS[@]}"}; do
     seg="${seg#"${seg%%[![:space:]]*}"}"   # strip leading whitespace
     case "$seg" in
       "git push")   PUSH_ARGS=""; return 0 ;;
       "git push "*) PUSH_ARGS="${seg#git push }"; return 0 ;;
     esac
-  done <<< "$norm"
+  done
   return 1
 }
 
@@ -363,20 +398,41 @@ check_go() {
   # and it skips testdata and generated trees that git already knows to ignore.
   files="$(cd "$dir" && git ls-files -- '*.go' 2>/dev/null)"
   if [ -n "$files" ]; then
-    RAN=$((RAN + 1))
-    local errs
-    errs="$(mktemp)"
-    # stdout is the list of files that need formatting; stderr is parse errors. They mean
-    # different things and must not be blended — "needs gofmt: syntax error" reads as a
-    # formatting nit and is actually broken code.
-    out="$(cd "$dir" && printf '%s\n' "$files" | timeout "$CHECK_TIMEOUT" xargs -r gofmt -l 2>"$errs")"
-    if [ -n "$out" ]; then
-      record_failure "gofmt — $rel" "$(printf '%s' "$out" | sed 's|^|  needs gofmt: |')"
+    # gofmt must be guarded exactly like `go` below, and the omission was not academic.
+    # `go` and `gofmt` live in ~/go/bin here, which reaches PATH only through ~/.zshrc —
+    # so any non-login shell cannot see them, INCLUDING the self-hosted runner that
+    # CLAUDE.md already has a bare-system-PATH invariant about. Unguarded, xargs wrote
+    # `xargs: gofmt: No such file or directory` to stderr, the `-s "$errs"` test below
+    # turned that into a "could not parse" FAILURE, and every push from every repo with a
+    # go.mod was denied — naming a formatting problem that did not exist, on a tree that
+    # was correctly formatted, with no way for the agent to fix it. That is the precise
+    # scenario the fail-open invariant exists to forbid, arrived at from inside.
+    if ! command -v gofmt >/dev/null 2>&1; then
+      record_skip "gofmt — $rel" "gofmt is not on PATH"
+    else
+      RAN=$((RAN + 1))
+      local errs rc
+      errs="$(mktemp)"
+      # stdout is the list of files that need formatting; stderr is parse errors. They mean
+      # different things and must not be blended — "needs gofmt: syntax error" reads as a
+      # formatting nit and is actually broken code.
+      out="$(cd "$dir" && printf '%s\n' "$files" | timeout "$CHECK_TIMEOUT" xargs -r gofmt -l 2>"$errs")"
+      rc=$?
+      if [ "$rc" = 127 ] || [ "$rc" = 124 ]; then
+        # 127: xargs could not exec gofmt at all. 124: the timeout fired. Neither is a
+        # statement about the code. stderr is a catch-all, so the exit status is what
+        # separates "gofmt spoke" from "gofmt never ran".
+        record_skip "gofmt — $rel" "gofmt could not run (exit $rc)"
+      else
+        if [ -n "$out" ]; then
+          record_failure "gofmt — $rel" "$(printf '%s' "$out" | sed 's|^|  needs gofmt: |')"
+        fi
+        if [ -s "$errs" ]; then
+          record_failure "gofmt could not parse — $rel" "$(cat "$errs")"
+        fi
+      fi
+      rm -f "$errs"
     fi
-    if [ -s "$errs" ]; then
-      record_failure "gofmt could not parse — $rel" "$(cat "$errs")"
-    fi
-    rm -f "$errs"
   fi
 
   if command -v go >/dev/null 2>&1; then
@@ -577,7 +633,9 @@ main() {
   fi
 
   # The whole-run ceiling. gather() runs in this shell (it accumulates state), so the
-  # ceiling is enforced by a watchdog that kills us; the ERR trap then allows.
+  # ceiling is enforced by a watchdog that sends us TERM; the TERM trap below then allows.
+  # (Not the ERR trap — see the long note above; that one was removed because it never
+  # fired. A signal trap does fire in the main shell, which is why this one works.)
   # >/dev/null 2>&1 detaches the child from our stdout; see stop_watchdog.
   ( sleep "$TOTAL_TIMEOUT" && kill -TERM $$ 2>/dev/null ) >/dev/null 2>&1 &
   WATCHDOG_PID=$!
