@@ -202,7 +202,9 @@
     # made every ansible run silently overwrite the deployed .env with whatever is in
     # the local ansible/../.env — a different and staler source than the PROD_ENV_FILE
     # environment secret that CLAUDE.md names as authoritative (SERV-48). Steady-state
-    # secret changes belong in `gh secret set PROD_ENV_FILE --env home-server`.
+    # secret changes belong in the Signet vault, applied with `signet sync` — that
+    # secret is RENDERED by Signet, so a `gh secret set` on it is reverted by the next
+    # sync rather than persisting.
     force: false
 
 # The deployed environment has two sources (SERV-96): credentials, from the secret on

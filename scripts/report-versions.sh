@@ -123,7 +123,11 @@ for cid in $container_ids; do
     digest="${digest:0:19}"
   elif [ "$image_readable" -eq 1 ]; then
     # Locally built (`build:`, never pushed), so there is no registry digest to have.
-    # Normal, and reachable on the prod project today: servo-signal and autosavant-bot.
+    # Normal, and still reachable: `cf-access-guard` is the one service that builds on
+    # the box (CLAUDE.md says why — it is stdlib-only Go and deploy.yml builds it
+    # explicitly). It became the ONLY one when imperium-loop went (SERV-82) and
+    # servo-signal and autosavant-bot were removed, so this branch is live but now has
+    # a single occupant rather than being dead code.
     digest="(not from a registry)"
   else
     # The image is gone, so whether it ever had a digest is unknowable. Reporting "not
