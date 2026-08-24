@@ -179,13 +179,8 @@
     - POSTGRES_PASSWORD
     - COOK_BOOK_DB_PASSWORD
     - SWITCHYARD_DB_PASSWORD
-    # Imperium-Loop pipeline (n8n / Switchyard / Anthropic / Discord)
-    - N8N_API_KEY
-    - ANTHROPIC_API_KEY
+    # Switchyard
     - SWITCHYARD_PUBLIC_URL
-    - DISCORD_BOT_TOKEN
-    - DISCORD_GUILD_ID
-    - DISCORD_CHANNEL_ID
 
 # Deliberately does NOT notify a Docker restart (SERV-84). Restarting the daemon
 # restarts containers with their OLD spec, so it cannot deliver an env change —

@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "servo-signal": {
-      "type": "http",
-      "url": "http://localhost:8090/mcp"
-    }
-  }
-}

@@ -234,46 +234,6 @@ services:
     depends_on:
       - aperture-backend
 
-  # --- AUTOMATION (n8n / Vox-Command) ---
-  n8n:
-    image: n8nio/n8n:latest@sha256:f5140088385af2d4e681e177d8264bcb41e8fe126062030c5c65cd8f3e1605e1   # 2.34.6
-    container_name: n8n
-    restart: unless-stopped
-    ports:
-      - "5678:5678"
-    environment:
-      - N8N_SECURE_COOKIE=false
-      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
-      - NODE_FUNCTION_ALLOW_EXTERNAL=mammoth
-      # WEBHOOK_URL controls the host n8n stamps into $execution.resumeUrl
-      # (the Wait-node signed-resume accessor) and any other webhook URLs it
-      # returns. We keep it on the construct_net hostname so Autosavant —
-      # which lives in the same Docker network — can POST approve/reject
-      # replies back. Host-side debug still works via the 5678:5678 port
-      # mapping. See LOOP-22.
-      - WEBHOOK_URL=http://n8n:5678/
-      # LOOP-28: pipeline GitHub identity. Stored in .env as IL_GH_PAT
-      # (Imperium-Loop GitHub PAT, matching the GitHub-side token name);
-      # remapped to GITHUB_PAT here so consumer code (Servo-Signal, n8n
-      # HTTP nodes) stays unchanged. Token is a classic PAT with repo +
-      # workflow scopes.
-      - GITHUB_PAT=${IL_GH_PAT}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      # LOOP-24: provider toggle for The High Review. Default is claude (the
-      # workflow's gate node also defaults to claude when unset, this just
-      # makes the var visible in `docker exec n8n env` for debugging). Flip
-      # to gemini via the PROD_ENV_FILE environment secret to swap back without
-      # code edits — editing a checkout's .env does not reach the deployed stack.
-      - HIGH_REVIEW_PROVIDER=${HIGH_REVIEW_PROVIDER:-claude}
-      - SWITCHYARD_TOKEN=${SWITCHYARD_API_TOKEN}
-      - SWITCHYARD_TOKEN_N8N_VOX_DICTATE=${SWITCHYARD_TOKEN_N8N_VOX_DICTATE}
-      - SWITCHYARD_WEBHOOK_SECRET=${SWITCHYARD_WEBHOOK_SECRET}
-    volumes:
-      - n8n_data:/home/node/.n8n
-    networks:
-      - construct_net
-
   # --- AUTOMATION (Semaphore UI) ---
   semaphore:
     image: semaphoreui/semaphore:latest@sha256:7da3364f331a80d5d47998866f5833c8de978bd57ad49beb69ad2d1d0f3c5f20   # v2.19.8
@@ -365,58 +325,6 @@ services:
       # shape as amber: the placard repo is the source of truth for every mark;
       # the DB holds URL-check observations and staged uploads.
       - PLACARD_DB_PASSWORD=${PLACARD_DB_PASSWORD}
-    networks:
-      - construct_net
-
-  # --- MCP TOOLING (Servo-Signal) ---
-  servo-signal:
-    build:
-      context: ../imperium-loop/servo-signal
-      dockerfile: Dockerfile
-    container_name: servo-signal
-    restart: unless-stopped
-    ports:
-      - "8090:8090"
-    environment:
-      # LOOP-28: see n8n service comment above. IL_GH_PAT is the classic
-      # PAT with repo + workflow scopes; remapped to GITHUB_PAT inside the
-      # container so Servo-Signal's Go code (os.Getenv("GITHUB_PAT")) is
-      # unchanged.
-      - GITHUB_PAT=${IL_GH_PAT}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - WORKSPACES_VOLUME=construct-server_servo_signal_workspaces
-      - PRINCIPLES_PATH=/data/principles/PRINCIPLES.md
-    volumes:
-      - servo_signal_workspaces:/data/workspaces
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Absolute path: the runner-side compose is checked out at a different
-      # location than ~/construct-server (the GH Actions runner only has
-      # construct-server, no sibling imperium-loop), so `../imperium-loop/...`
-      # resolves to a nonexistent path during CI deploys. Docker auto-creates
-      # the target as an empty directory when the source is missing, which
-      # makes /principles 404 silently. Pinning to the canonical host path.
-      - /home/magos/imperium-loop/PRINCIPLES.md:/data/principles/PRINCIPLES.md:ro
-    networks:
-      - construct_net
-
-  # --- HUMAN-IN-THE-LOOP (Autosavant Discord bot) ---
-  autosavant-bot:
-    build:
-      context: ../imperium-loop/autosavant-bot
-      dockerfile: Dockerfile
-    container_name: autosavant-bot
-    restart: unless-stopped
-    ports:
-      - "8091:8091"
-    environment:
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
-      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
-      - AUTOSAVANT_HTTP_TOKEN=${AUTOSAVANT_HTTP_TOKEN}
-      - SWITCHYARD_TOKEN=${SWITCHYARD_API_TOKEN}
-      - STATE_PATH=/data/state.json
-    volumes:
-      - autosavant_state:/data
     networks:
       - construct_net
 
@@ -1430,13 +1338,10 @@ services:
 volumes:
   open-webui:
   ollama_data:
-  n8n_data:
   copyparty_data:
   uptime-kuma-data:
   semaphore_data:
   postgres_data:
-  servo_signal_workspaces:
-  autosavant_state:
   switchyard_uploads:
   argosy_artwork:
   argosy_subtitles:
