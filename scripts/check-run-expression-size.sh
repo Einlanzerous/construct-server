@@ -46,17 +46,42 @@ python3 -c 'import yaml' 2>/dev/null || {
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 
+WF_DIR="$REPO_ROOT/.github/workflows"
+
 if [ $# -gt 0 ]; then
   FILES=("$@")
+  # An explicitly named file that is not there is a broken invocation, not an
+  # empty result. Say so rather than reporting on the files that did exist.
+  for f in "${FILES[@]}"; do
+    [ -f "$f" ] || { echo "ERROR: no such file: $f" >&2; exit 2; }
+  done
 else
-  # No nullglob assumption: if the glob matches nothing python reports it.
-  mapfile -t FILES < <(find "$REPO_ROOT/.github/workflows" -maxdepth 1 -name '*.yml' -o -maxdepth 1 -name '*.yaml' 2>/dev/null | sort)
+  # Grouped, so the implicit -print applies to BOTH branches rather than
+  # depending on how find reads a bare -o, and -maxdepth is given once because
+  # it is a global option that GNU find warns about when repeated.
+  #
+  # A MISSING DIRECTORY IS AN ERROR, NOT AN EMPTY RESULT. This is a guard, and
+  # "I checked nothing" must never exit the same way as "everything is fine" —
+  # that is the silent-green failure the script exists to catch, and it would be
+  # embarrassing to ship it in the catcher. An EMPTY directory is a real answer
+  # and exits 0.
+  [ -d "$WF_DIR" ] || {
+    echo "ERROR: no workflow directory at $WF_DIR" >&2
+    echo "Run this from the repo, or pass files explicitly." >&2
+    exit 2
+  }
+  mapfile -t FILES < <(find "$WF_DIR" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null | sort)
 fi
 
-[ "${#FILES[@]}" -gt 0 ] || { echo "No workflow files found."; exit 0; }
+if [ "${#FILES[@]}" -eq 0 ]; then
+  echo "No workflow files in $WF_DIR — nothing to measure."
+  exit 0
+fi
 
 python3 - "${FILES[@]}" <<'PY'
-import sys, yaml
+import os, sys, yaml
+
+IN_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
 
 CAP = 21000
 # Warn well before the cliff: the point is to notice while there is still room to
@@ -95,14 +120,24 @@ if not rows:
 print(f"Largest `run:` blocks (cap {CAP}):\n")
 for size, path, job, name in rows[:10]:
     pct = size / CAP
+    short = path.split("/")[-1]
     if size >= CAP:
         mark, worst_rc = "OVER ", 1
+        ann = "error"
     elif pct >= WARN_AT:
-        mark = "TIGHT"
+        mark, ann = "TIGHT", "warning"
     else:
-        mark = "ok   "
-    short = path.split("/")[-1]
+        mark, ann = "ok   ", None
     print(f"  {mark} {size:6d}  {CAP - size:+6d} headroom  {short}  {job}/{name}")
+    # In CI, print it as an annotation too. TIGHT stays a WARNING rather than a
+    # failure on purpose: the largest block in this repo has been over 85% for
+    # its whole life, so failing there would just be a red check nobody can
+    # clear. The job exists to force the look on any workflow edit, and only the
+    # cap itself — where GitHub refuses to load the file — is worth blocking on.
+    if ann and IN_ACTIONS:
+        print(f"::{ann} file={path}::{job}/{name}: run block is {size}/{CAP} "
+              f"characters ({CAP - size:+d} headroom). Shell comments inside the "
+              f"block count; put prose in a YAML comment above the step.")
 
 if worst_rc:
     print(f"\nAt least one `run:` block is at or over the {CAP}-character cap.")
