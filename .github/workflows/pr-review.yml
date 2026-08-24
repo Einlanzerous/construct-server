@@ -57,12 +57,21 @@ jobs:
       # addition escalates and none de-escalates, so the direction is safe.
       sensitive_paths: '^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|docker-compose\.dev\.yml|versions\.env|dev-versions\.env|REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/review-ignore)'
 
-      # release-please runs here in non-manifest mode, so a release PR is
-      # CHANGELOG.md alone — there is no .release-please-manifest.json in this
-      # tree. The default list is a superset and the rule is a subset test, so
-      # the default would work; naming it is cheaper than making the next reader
-      # check which mode this repo uses.
-      release_files: 'CHANGELOG.md'
+      # NO release_files OVERRIDE (SERV-136). This used to pin 'CHANGELOG.md' and
+      # justify it with "there is no .release-please-manifest.json in this tree" —
+      # true when it was written, false since SERV-131 added a release-please
+      # manifest config to release pkg/cfaccess as its own module.
+      #
+      # It was already dead by then: the reusable workflow DERIVES the set from
+      # release-please-config.json whenever the base ref has one, and only falls
+      # back to this input when it does not. So the stale value changed nothing —
+      # which is exactly why it survived being wrong. Left in place it would come
+      # back to life the moment the config was removed or its fetch failed, and it
+      # omits the manifest, so no release PR would skip.
+      #
+      # Deleting it is not just tidying: the derivation is the only reader that
+      # can stay correct on its own, because it reads what release-please is
+      # actually configured to write.
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       switchyard_token: ${{ secrets.SWITCHYARD_REVIEWER_TOKEN }}

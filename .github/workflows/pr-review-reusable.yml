@@ -570,11 +570,23 @@ jobs:
             rm -f "$RP_ERR"
 
             if [ "$RP_FOUND" = yes ]; then
-              # Single-package layout (`packages["."]`). A multi-package config
-              # does not yield nothing — the `// "CHANGELOG.md"` default fires
-              # against the empty object and emits the root changelog anyway.
-              # Such a release PR touches packages/*/CHANGELOG.md, which this set
-              # does not contain, so the subset test fails and it gets reviewed.
+              # EVERY package, not just `packages["."]` (SERV-136).
+              #
+              # This read `packages["."]` alone, and the comment here said so and
+              # accepted the consequence: "such a release PR touches
+              # packages/*/CHANGELOG.md, which this set does not contain, so the
+              # subset test fails and it gets reviewed." That was a fair trade
+              # while no repo using this workflow was multi-package. SERV-131 made
+              # construct-server the first, and the very next release PR —
+              # `chore(main): release pkg/cfaccess 1.0.0` — was reviewed instead of
+              # skipped and its Gate went red, on a PR that is nothing but a
+              # changelog and a manifest bump. Measured, not predicted: the root
+              # release PR beside it skipped correctly, so the split was exactly
+              # component-vs-root.
+              #
+              # A package's paths are relative to its own directory, so each entry
+              # is prefixed by its key — `pkg/cfaccess` -> `pkg/cfaccess/CHANGELOG.md`
+              # — and `.` contributes no prefix at all.
               RELEASE_FILES=$(
                 {
                   echo '.release-please-manifest.json'
@@ -585,12 +597,25 @@ jobs:
                   # per-package options (`release-type`, `changelog-sections`)
                   # at the root, so the pattern is live here. Missing a
                   # root-level `extra-files` yields a short set and reproduces
-                  # the argosy red exactly.
+                  # the argosy red exactly. Being defaults, they inherit into
+                  # each package and are therefore prefixed per package too.
+                  #
+                  # `.packages // {".": {}}` keeps a config with no `packages`
+                  # key behaving exactly as before: one root package, and the
+                  # `// "CHANGELOG.md"` default fires against the empty object.
                   jq -r '
-                    (.packages["."] // {}) as $p |
-                    ($p["changelog-path"] // .["changelog-path"] // "CHANGELOG.md"),
-                    ((($p["extra-files"] // []) + (.["extra-files"] // []))[]?
-                       | if type == "string" then . else .path end)
+                    . as $cfg
+                    | ($cfg.packages // {".": {}})
+                    | to_entries[]
+                    | .key as $dir
+                    | .value as $p
+                    | (if $dir == "." or $dir == "" then ""
+                       else ($dir | sub("/+$"; "")) + "/" end) as $prefix
+                    | ($prefix + ($p["changelog-path"] // $cfg["changelog-path"] // "CHANGELOG.md")),
+                      ((($p["extra-files"] // []) + ($cfg["extra-files"] // []))[]?
+                         | (if type == "string" then . else .path end)
+                         | select(. != null)
+                         | $prefix + .)
                   ' <<<"$RP_CONFIG" 2>/dev/null || true
                 } | sed '/^[[:space:]]*$/d' | sort -u
               )
