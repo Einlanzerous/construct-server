@@ -82,9 +82,17 @@ expect deny  "$TMP/dirty" "git add -A && git commit -m 'x' && git push"
 expect deny  "$TMP/dirty" "git push -u origin HEAD"
 # --follow-tags still pushes the branch, so the branch still gets checked.
 expect deny  "$TMP/dirty" "git push --follow-tags"
+# ...and so does `--tags` WITH a refspec: git pushes every tag IN ADDITION TO the refs
+# named, so the branch still goes. Exempting these was a silent miss — the gate simply
+# stopped firing, and a gate that has stopped firing looks exactly like a clean tree.
+# The bare forms below are genuinely tag-only and stay exempt; that asymmetry is the
+# whole point of these four cases.
+expect deny  "$TMP/dirty" "git push --tags origin main"
+expect deny  "$TMP/dirty" "git push origin main --tags"
 
 echo "lint-gate: exemptions (SERV-58 requires these never fire)"
 expect allow "$TMP/dirty" "git push --tags"
+expect allow "$TMP/dirty" "git push --tags origin"
 expect allow "$TMP/dirty" "git push origin v1.0.0"
 expect allow "$TMP/dirty" "git push origin refs/tags/v1.0.0"
 expect allow "$TMP/dirty" "git push origin release-please--branches--main"

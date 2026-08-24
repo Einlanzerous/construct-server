@@ -337,7 +337,17 @@ push_exemption() {
     esac
   done
 
-  [ "$tags_only" = 1 ] && { echo "--tags (tag push)"; return 0; }
+  # `--tags` pushes every tag IN ADDITION TO any refspec listed on the command line, so
+  # it is a pure tag push only when no refspec was given. `git push --tags origin main`
+  # still carries the branch, and exempting it was a SILENT MISS — the direction this
+  # file argues is the worse one, since the gate stops firing and a clean tree and a
+  # broken gate look identical. It is the same property that already keeps
+  # --follow-tags out of the exemption list above; the reasoning just was not applied
+  # here. Verified against git rather than assumed: `git push --tags origin` and a bare
+  # `git push --tags` land refs/tags/* and nothing else, so those stay exempt.
+  if [ "$tags_only" = 1 ] && [ "${#positional[@]}" -le 1 ]; then
+    echo "--tags (tag push)"; return 0
+  fi
 
   # positional[0] is the remote; the rest are refspecs. With no refspec, git pushes the
   # current branch, so that is what we have to resolve and judge.
