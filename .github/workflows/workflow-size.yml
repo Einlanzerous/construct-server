@@ -1,0 +1,73 @@
+name: Workflow Size
+
+# Guard the 21,000-character expression cap (SERV-136).
+#
+# A `run:` block is ONE expression to GitHub, and an expression may not exceed
+# 21,000 characters. Cross it and GitHub refuses to LOAD the workflow: every run
+# fails before a job is created, named after the file path rather than the
+# workflow, with no log and an error pointing at the `run:` key instead of the
+# line that was edited. Shell comments inside the block count toward it, so a
+# comment-only change can break CI — and actionlint, PyYAML and the SchemaStore
+# workflow schema all accept the file, so nothing else catches it.
+#
+# ── WHY THIS IS ITS OWN FILE ────────────────────────────────────────────────
+#
+# It cannot live in pr-review-reusable.yml, which is the file most likely to
+# trip the cap: a workflow that has failed to load runs nothing, so a guard
+# inside it is silent in exactly the case it exists for. It cannot live in
+# ansible-lint.yml either, whose `paths:` filter is `ansible/**`.
+#
+# So: one small file, its own trigger, no reusable-workflow call and no
+# self-hosted runner — nothing that can take it down alongside the thing it
+# watches. Keep it that way.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/check-run-expression-size.sh'
+  push:
+    branches: ["main"]
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/check-run-expression-size.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # GitHub-hosted images ship python3 with PyYAML, which is all the script
+      # needs. Deliberately NOT the self-hosted runner: this check should still
+      # report when that box is busy or down, and it has no reason to touch the
+      # stack.
+      - name: Measure every run block against the cap
+        run: ./scripts/check-run-expression-size.sh
+
+      # The script annotates TIGHT blocks as warnings and only FAILS at the cap
+      # itself. That split is deliberate: the largest block here has been above
+      # 85% for its whole life, so failing on TIGHT would be a permanently red
+      # check nobody can clear — and a check people learn to ignore is worse
+      # than none. The job's value is forcing the number in front of you on
+      # every workflow edit; the hard failure is reserved for the state where
+      # GitHub itself would reject the file.
+      - name: Explain a failure
+        if: failure()
+        run: |
+          {
+            echo "## A \`run:\` block is over GitHub's 21,000-character cap"
+            echo
+            echo "GitHub will refuse to load that workflow — every run fails before any"
+            echo "job starts, so this is not a style check."
+            echo
+            echo "**Fix:** move prose out of the \`run:\` block into a YAML comment *above*"
+            echo "the step. Those are not part of the expression and cost nothing. The"
+            echo "block keeps the code; the reasoning goes immediately above it."
+            echo
+            echo "Locally: \`make workflow-size\`"
+          } >> "$GITHUB_STEP_SUMMARY"
