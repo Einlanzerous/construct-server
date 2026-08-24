@@ -110,6 +110,12 @@ type Config struct {
 	// DefaultLeeway.
 	Leeway time.Duration
 
+	// FetchTimeout bounds one token-triggered key-set fetch. It exists because
+	// that fetch deliberately does NOT inherit the caller's cancellation (see
+	// Verify), so it needs a deadline of its own rather than the caller's.
+	// Defaults to DefaultFetchTimeout.
+	FetchTimeout time.Duration
+
 	// certsURL overrides the endpoint. Test seam only; there is no reason for a
 	// real consumer to point this anywhere but Cloudflare, and making it public
 	// would make "verified by Cloudflare Access" configurable.
@@ -132,6 +138,7 @@ type Verifier struct {
 	cooldown        time.Duration
 	staleAfter      time.Duration
 	leeway          time.Duration
+	fetchTimeout    time.Duration
 
 	// fetchMu serialises key-set fetches, so a burst of unknown-kid requests
 	// produces one HTTP call rather than one each. Held across the request; the
@@ -187,6 +194,7 @@ func New(cfg Config) (*Verifier, error) {
 		cooldown:        cfg.RefreshCooldown,
 		staleAfter:      cfg.StaleAfter,
 		leeway:          cfg.Leeway,
+		fetchTimeout:    cfg.FetchTimeout,
 		keys:            map[string]*rsa.PublicKey{},
 	}
 
@@ -216,6 +224,9 @@ func New(cfg Config) (*Verifier, error) {
 	}
 	if v.leeway <= 0 {
 		v.leeway = DefaultLeeway
+	}
+	if v.fetchTimeout <= 0 {
+		v.fetchTimeout = DefaultFetchTimeout
 	}
 	return v, nil
 }
@@ -392,6 +403,10 @@ func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) 
 //
 // A failed refresh leaves the previous key set in place. Replacing a working set
 // with nothing would turn a Cloudflare blip into a total outage.
+//
+// Unlike the token-triggered path, this one DOES honour ctx cancellation: an
+// explicit Refresh is the caller's own call, and Run needs it to stop on
+// shutdown.
 func (v *Verifier) Refresh(ctx context.Context) error {
 	return v.refresh(ctx, false)
 }
@@ -399,6 +414,34 @@ func (v *Verifier) Refresh(ctx context.Context) error {
 func (v *Verifier) refresh(ctx context.Context, throttled bool) error {
 	v.fetchMu.Lock()
 	defer v.fetchMu.Unlock()
+
+	if throttled {
+		// A token-triggered fetch populates a PROCESS-WIDE cache, so it must not
+		// inherit one caller's cancellation.
+		//
+		// Without this, a client that disconnects mid-fetch aborts the fetch while
+		// leaving lastAttempt stamped, and every other caller is then refused for a
+		// full cooldown having never reached Cloudflare. Two ways that bites on the
+		// auth path: a cold start (the initial Refresh is non-fatal by design, so
+		// the first request is what loads the keys), and a key rotation, where the
+		// unknown-kid path is the only prompt pickup — one request-then-abort per
+		// minute suppresses either until the hourly ticker fires. It is also a
+		// regression from the code this replaced, which fetched with a plain
+		// client.Get that no caller could cancel.
+		//
+		// Not-stamping-on-ctx.Err would fix the symptom and reopen the hole the
+		// cooldown exists for: an attacker's cancelled request would once again be
+		// one inbound request producing one outbound fetch. Detaching keeps both
+		// properties, and the cancelled caller's fetch still populates the cache
+		// for everyone else.
+		//
+		// WithoutCancel keeps context values (traces, deadline plumbing) and
+		// drops only cancellation; FetchTimeout supplies the deadline the caller's
+		// context is no longer providing.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), v.fetchTimeout)
+		defer cancel()
+	}
 
 	// Re-checked after acquiring fetchMu, not before: that is what turns a burst
 	// of concurrent unknown-kid requests into one fetch plus N no-ops instead of

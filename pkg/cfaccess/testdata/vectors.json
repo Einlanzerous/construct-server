@@ -51,6 +51,18 @@
         }
       ]
     },
+    "paddedWeakModulus": {
+      "keys": [
+        {
+          "alg": "RS256",
+          "e": "AQAB",
+          "kid": "sig-1024",
+          "kty": "RSA",
+          "n": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACyN3Ah0K5o54Pa9SLsF-jC6uoqq1yCp76C-Do-Z_k2R306OiD0y5EGHkfH7z9EGHy8tufoacghZxCGaKbgHIjZfegd3c_DDmAd0KWyL9D_Jm_zit4F1GDsrDybp4JbI-DRWEYDL0zIwsCdqTSN8VLrIAEbT5cKL-w1s9EZcwXsww",
+          "use": "sig"
+        }
+      ]
+    },
     "standard": {
       "keys": [
         {
@@ -310,6 +322,19 @@
       "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0xMDI0IiwidHlwIjoiSldUIn0.eyJhdWQiOlsiOGYwZTNjNmIxZDJhNGY1ZTljN2IwYTFkM2U1ZjcwOTFhMmIzYzRkNWU2ZjcwODE5MmEzYjRjNWQ2ZTdmODA5MSJdLCJlbWFpbCI6Im9wZXJhdG9yQGV4YW1wbGUudGVzdCIsImV4cCI6MTc4NzQ5MDAwMCwiaWF0IjoxNzg3NDg2MzQwLCJpc3MiOiJodHRwczovL3ZlY3RvcnMuY2xvdWRmbGFyZWFjY2Vzcy50ZXN0IiwibmJmIjoxNzg3NDg2MzQwLCJzdWIiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9.W6dMCMl-8b54PTvZ-sx-CUOvETMoiJZWNvEUad_RS0EX5JvqA85q3unFd65lW2xuX21q3v41RYXaafoCLo9JBcwgclO3gRtoSd9paJGc6TmYTwF6JCDeKbvHMGR-8R6_PpIHmOa-mwcDq6VNi97JKE8eZhURRwR08Gn8z2jHMpc",
       "expect": "reject",
       "because": "Cloudflare publishes 2048-bit keys; a shorter one is a downgrade, not a small key"
+    },
+    {
+      "name": "padded-weak-modulus",
+      "description": "the same 1024-bit key with its modulus zero-padded to 256 bytes — an identical key in a longer encoding",
+      "class": "keypolicy",
+      "keySet": "paddedWeakModulus",
+      "audience": [
+        "8f0e3c6b1d2a4f5e9c7b0a1d3e5f7091a2b3c4d5e6f708192a3b4c5d6e7f8091"
+      ],
+      "now": "2026-08-23T12:00:00Z",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0xMDI0IiwidHlwIjoiSldUIn0.eyJhdWQiOlsiOGYwZTNjNmIxZDJhNGY1ZTljN2IwYTFkM2U1ZjcwOTFhMmIzYzRkNWU2ZjcwODE5MmEzYjRjNWQ2ZTdmODA5MSJdLCJlbWFpbCI6Im9wZXJhdG9yQGV4YW1wbGUudGVzdCIsImV4cCI6MTc4NzQ5MDAwMCwiaWF0IjoxNzg3NDg2MzQwLCJpc3MiOiJodHRwczovL3ZlY3RvcnMuY2xvdWRmbGFyZWFjY2Vzcy50ZXN0IiwibmJmIjoxNzg3NDg2MzQwLCJzdWIiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9.W6dMCMl-8b54PTvZ-sx-CUOvETMoiJZWNvEUad_RS0EX5JvqA85q3unFd65lW2xuX21q3v41RYXaafoCLo9JBcwgclO3gRtoSd9paJGc6TmYTwF6JCDeKbvHMGR-8R6_PpIHmOa-mwcDq6VNi97JKE8eZhURRwR08Gn8z2jHMpc",
+      "expect": "reject",
+      "because": "the floor must measure the modulus, not its encoding; padding does not make a weak key strong"
     },
     {
       "name": "mixed-key-set",

@@ -129,8 +129,16 @@ func rsaKeyFromJWK(k jwk) (*rsa.PublicKey, error) {
 	if len(e) == 0 || len(e) > maxExponentBytes {
 		return nil, fmt.Errorf("exponent is %d bytes, which is not a usable RSA exponent", len(e))
 	}
-	if len(n)*8 < minModulusBits {
-		return nil, fmt.Errorf("modulus is %d bits, below the %d-bit minimum", len(n)*8, minModulusBits)
+
+	// BitLen of the INTEGER, not len(n)*8 of the encoding. JWK `n` is an unsigned
+	// big-endian integer with no canonical length, so left-padding with zero bytes
+	// does not change the key — and a 1024-bit modulus padded out to 256 bytes
+	// clears an encoding-length check while producing a 1024-bit key. Measured:
+	// bare 1024 rejected, the same integer zero-padded accepted. The check that
+	// looks equivalent is the one that does nothing.
+	modulus := new(big.Int).SetBytes(n)
+	if modulus.BitLen() < minModulusBits {
+		return nil, fmt.Errorf("modulus is %d bits, below the %d-bit minimum", modulus.BitLen(), minModulusBits)
 	}
 
 	var buf [maxExponentBytes]byte
@@ -143,5 +151,5 @@ func rsaKeyFromJWK(k jwk) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("exponent %d is out of range for an RSA public key", ev)
 	}
 
-	return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(ev)}, nil
+	return &rsa.PublicKey{N: modulus, E: int(ev)}, nil
 }

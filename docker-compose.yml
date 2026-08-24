@@ -1223,8 +1223,12 @@ services:
       additional_contexts:
         cfaccess: ./pkg/cfaccess
       args:
-        # deploy.yml sets this from `git log -1 -- services/cf-access-guard`; see the
-        # Dockerfile for why the image needs a source identity at all (SERV-109).
+        # deploy.yml sets this from
+        # `git log -1 -- services/cf-access-guard pkg/cfaccess` — BOTH paths since
+        # SERV-131, because the guard's behaviour is partly in the shared module now
+        # and a revision taken from the service directory alone would be unchanged by
+        # a module-only edit. See the Dockerfile for why the image needs a source
+        # identity at all (SERV-109).
         # `:-unknown` and not `:-`: an empty build arg would stamp an empty label, which
         # would compare equal to a container that has no label, and "no evidence" would
         # silently read as "up to date".

@@ -578,3 +578,85 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition was not met within 2s")
 }
+
+// A token-triggered fetch fills a process-wide cache, so one caller's
+// disconnection must not decide anything for the others. Before the fix, caller
+// A cancelling mid-fetch left `lastAttempt` stamped with no keys loaded, and
+// caller B — with a healthy context — was refused for the whole cooldown without
+// a single retry reaching Cloudflare.
+func TestOneDisconnectedClientCannotPoisonTheCache(t *testing.T) {
+	var hits atomic.Int64
+	body := goodJWKS(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		time.Sleep(100 * time.Millisecond) // a certs endpoint that is merely slow
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	c := &clock{t: time.Unix(1_700_000_000, 0).UTC()}
+	v, err := New(Config{TeamDomain: tIssuerDomain, Audience: []string{tAud}, Now: c.now, certsURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancelA() }()
+	_, _ = v.key(ctxA, tKid)
+
+	if _, err := v.key(context.Background(), tKid); err != nil {
+		t.Fatalf("a healthy caller was refused after another client disconnected: %v (upstream hits=%d)", err, hits.Load())
+	}
+	// A's fetch was detached rather than abandoned, so it populated the cache and
+	// B needed no second request.
+	if got := hits.Load(); got != 1 {
+		t.Errorf("upstream fetches = %d, want 1", got)
+	}
+}
+
+// The cooldown must still count an attempt that failed for an ordinary reason.
+// Detaching from the caller's context must not turn into "retry forever".
+func TestDetachingDoesNotDisarmTheCooldown(t *testing.T) {
+	c := &clock{t: time.Unix(1_700_000_000, 0).UTC()}
+	cs := newCertsServer(t, goodJWKS(t))
+	cs.set(http.StatusInternalServerError, nil)
+	v := newTestVerifier(t, cs, c, nil)
+
+	for i := 0; i < 10; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // every caller arrives already cancelled
+		_, _ = v.Verify(ctx, token(t, claimsAt(c.now())))
+	}
+	if got := cs.hits.Load(); got != 1 {
+		t.Fatalf("10 cancelled requests made %d fetches, want 1 — the amplifier is back", got)
+	}
+}
+
+// The 2048-bit floor has to measure the modulus, not its encoding. JWK `n` is an
+// unsigned big-endian integer with no canonical length, so a 1024-bit modulus
+// left-padded to 256 bytes is the SAME KEY and used to clear a len(n)*8 check.
+func TestTheModulusFloorMeasuresTheKeyNotTheEncoding(t *testing.T) {
+	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := weak.PublicKey.N.Bytes()
+	padded := make([]byte, 256)
+	copy(padded[256-len(bare):], bare) // identical integer, twice the bytes
+
+	for _, tc := range []struct {
+		name string
+		n    []byte
+	}{{"bare", bare}, {"zero-padded to 2048 bits' worth of bytes", padded}} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := rsaKeyFromJWK(jwk{
+				Kid: "weak", Kty: "RSA", Use: "sig",
+				N: b64(tc.n),
+				E: b64(big.NewInt(int64(weak.PublicKey.E)).Bytes()),
+			})
+			if err == nil {
+				t.Fatal("a 1024-bit signing key was accepted")
+			}
+		})
+	}
+}

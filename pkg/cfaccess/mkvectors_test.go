@@ -241,12 +241,24 @@ func TestUpdateVectors(t *testing.T) {
 	bigExp := jwkFor(&good.PublicKey, kidGood, "sig")
 	bigExp["e"] = b64([]byte{0x01, 0, 0, 0, 0, 0, 0, 0, 0x01})
 
+	// The same 1024-bit modulus, left-padded to 256 bytes. JWK `n` is an unsigned
+	// big-endian integer with no canonical length, so this is byte-for-byte a
+	// different encoding of an IDENTICAL key — and it is what slips past a floor
+	// that measures len(n)*8 instead of the integer's bit length.
+	paddedWeak := jwkFor(&weak.PublicKey, kidWeak, "sig")
+	bare := weak.PublicKey.N.Bytes()
+	padded := make([]byte, 256)
+	copy(padded[256-len(bare):], bare)
+	paddedWeak["n"] = b64(padded)
+
 	keySets := map[string]jwksDoc{
 		"standard":      {Keys: []map[string]any{goodJWK}},
 		"empty":         {Keys: []map[string]any{}},
 		"encryptionUse": {Keys: []map[string]any{jwkFor(&good.PublicKey, kidGood, "enc")}},
 		"weakModulus":   {Keys: []map[string]any{jwkFor(&weak.PublicKey, kidWeak, "sig")}},
-		"bigExponent":   {Keys: []map[string]any{bigExp}},
+		// The SAME key in a longer encoding — see paddedWeak above.
+		"paddedWeakModulus": {Keys: []map[string]any{paddedWeak}},
+		"bigExponent":       {Keys: []map[string]any{bigExp}},
 		// One usable key beside one that is not: the whole set must not be
 		// condemned by the bad one.
 		"mixed": {Keys: []map[string]any{jwkFor(&weak.PublicKey, kidWeak, "sig"), goodJWK}},
@@ -399,6 +411,13 @@ func TestUpdateVectors(t *testing.T) {
 			Audience:    []string{audWeb}, Now: nowStr,
 			Token:  signRS256(t, weak, rs256Header(kidWeak), baseClaims()),
 			Expect: "reject", Because: "Cloudflare publishes 2048-bit keys; a shorter one is a downgrade, not a small key",
+		},
+		{
+			Name: "padded-weak-modulus", Class: "keypolicy", KeySet: "paddedWeakModulus",
+			Description: "the same 1024-bit key with its modulus zero-padded to 256 bytes — an identical key in a longer encoding",
+			Audience:    []string{audWeb}, Now: nowStr,
+			Token:  signRS256(t, weak, rs256Header(kidWeak), baseClaims()),
+			Expect: "reject", Because: "the floor must measure the modulus, not its encoding; padding does not make a weak key strong",
 		},
 		{
 			Name: "mixed-key-set", Class: "keypolicy", KeySet: "mixed",

@@ -155,7 +155,9 @@ Each vector carries a `class`:
   *quietly*.
 - **`keypolicy`** — estate hardening about key material that a general JWT
   library does not necessarily enforce: the nine-byte exponent, the 2048-bit
-  modulus floor, `use: "enc"`, one bad key in an otherwise good set. Where an
+  modulus floor (twice — bare, and the same weak key zero-padded to a longer
+  encoding, which is what a `len(n)*8` check misses), `use: "enc"`, one bad key
+  in an otherwise good set. Where an
   implementation legitimately differs, the vector records it in `expectBy` rather
   than the difference being silently skipped.
 
