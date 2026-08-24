@@ -87,7 +87,7 @@ anything deploys or gets versioned.
   (`creds/dev.env`), never from the deployed `.env`: the deploy root already has a writer
   in `render-env.sh`, and it carries the `versions.env` tag pins, which belong to git
   (SERV-96) and must not acquire a second source in the vault. See
-  `docs/dev-environment.md`; the remaining prod cleanup is SERV-94.
+  `docs/dev-environment.md` and the ownership invariant below (SERV-94).
 - Credentials only a **workflow** uses (the reviewer's tokens) are repo-level
   and managed by Signet: `signet set --project construct-server --name X`, then
   `signet target add --secret construct-server/X --gh-repo owner/name`, then
@@ -163,9 +163,10 @@ anything deploys or gets versioned.
 - **First-party image tags are pinned, and tracked `versions.env` holds the values**
   (SERV-74, SERV-88, SERV-96). Every first-party image reads
   `${<SERVICE>_TAG:-latest}`, one variable per source repo — backend and frontend
-  ship from one release and pin together, so 10 variables cover 14 images. Services
-  with release-please versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so
-  patch releases still flow in on a `docker compose pull` and nothing else does.
+  ship from one release and pin together, so there are fewer variables than
+  images. Services with release-please versions are pinned to **major.minor**
+  (`LYCEUM_TAG=1.10`), so patch releases still flow in on a `docker compose pull`
+  and nothing else does.
   **`versions.env` is the source of truth for which form each service uses.** This
   file states the rule and not the values, because duplicating them here is exactly
   what went stale: it claimed argosy and drydock "publish no semver" long after both
@@ -185,7 +186,7 @@ anything deploys or gets versioned.
   all resolve the same values. The pins land below a marker comment in that file and
   are **regenerated every deploy** — editing them on the host is lost without warning.
   **A service is sha-pinned only when its repo publishes no semver image**, and no
-  service is any more — all ten pins track major.minor. argosy and drydock were
+  service is any more — every pin tracks major.minor. argosy and drydock were
   the last two, and the reason was never that they had no releases — they cut them
   normally (`v0.25.1`, `v1.7.0`). Their publish workflows asked for semver tags on
   `on: push: tags`, and that trigger had **never fired once** in either repo: release
@@ -287,6 +288,52 @@ anything deploys or gets versioned.
   config --images`, failing loudly if any first-party image resolves to `:latest`
   or a bare `:`. The two guard different things; neither supersedes the other, and
   a failing deploy is not fixed by deleting the check.
+- **Signet owns `PROD_ENV_FILE` and nothing else — the prod project has no host file
+  target** (SERV-94). The vault renders one thing, the `home-server` environment secret;
+  `deploy.yml` turns that into `/opt/construct-server/.env` via `render-env.sh` and is
+  the only writer of the credentials in it — ansible re-renders the *pin block* of that
+  same file in place on a cold host, which is a reconcile of git's values and not a
+  second source. Signet used to claim the path as well, and that one is a second source:
+  drift stops being a state you can read and becomes a race, and `signet target list` sat
+  at `changed` for a week and a half saying so with nobody able to act on it. It claimed `~/construct-server/.env` too — a third copy that stopped driving
+  anything when SERV-76 moved the deploy root, and which reported `in sync` the whole
+  time, because a render against a file nothing reads always succeeds. **A target whose
+  destination has another writer, or no consumer, is worse than no target**: both report
+  a state that means nothing, and the second one reports it in green.
+  **The vault must never deliver a key `versions.env` owns.** It delivered all ten from
+  2026-08-15, when SERV-96 moved the pins to git and the vault kept its copies, until
+  SERV-94 detached them — and eight had gone stale in that time. Nothing broke, for one
+  reason: `render-env.sh` strips every key the versions file defines from the base
+  before appending the tracked pins, so git won every time. That is a mitigation sitting
+  in one script, not a property — take `render-env.sh` out of the path, or let the vault
+  become the sole source, and prod silently rolls back every service whose vault copy
+  went stale. `deploy.yml`'s SERV-88 assertion would **not** catch it: a stale pin is a
+  real version, not `:latest`. The strip now names what it dropped instead of doing it
+  silently, and `make env-ownership-check` asks the vault directly so the answer does
+  not depend on that script still being there.
+  **Signet actively recommends the wrong fix here, and it does so in red.** `signet
+  render --project construct-server --check --against /opt/construct-server/.env` exits
+  **non-zero in the correct state**: it reports `WOULD DROP 11 key(s)` and ends `import
+  them into the vault, then signet target add-key …`. Both are right in general and
+  wrong for anything git owns, and following that advice re-creates the exact hazard.
+  The check compares the vault against the *deployed* file, and the deployed file is the
+  render **plus** what `render-env.sh` appends — so a healthy pipeline reads as a
+  shortfall. Dev's copy of this reports the same way over its four `DEV_*_TAG` keys. The
+  answer to a report like that is to confirm the dropped set is **exactly** the versions
+  file and nothing else — a credential in that list is a real problem — which is what
+  `make env-ownership-check` asks and exits 0 on.
+  Two consequences of having no file target, both easy to trip over:
+  **`import` no longer widens the key set**, because what `import` widens is a *file*
+  target's. A new stack credential is `signet set --project construct-server --name X`
+  followed by `signet target add-key --project construct-server --gh-secret
+  PROD_ENV_FILE --name X` — `signet set` alone mints a value that reaches nothing, which
+  is how four secrets in this project came to have no destination at all. And
+  **do not detach the render target and re-add it**: `--seed-from` reads a file target's
+  key set, there is no longer one to read, and an unseeded rendered target is created
+  with an *empty* key set. Use `target add-key` to change what it delivers.
+  **Dev's allowlist is deliberately not empty**: `construct-server-dev` keeps
+  `creds/dev.env`, the readable credential source it was seeded from, which
+  `deploy-dev.yml` never writes. One writer, so it is a state and not a race.
 - **`postgres` is pinned by digest, and recreating it breaks the Node services**
   (SERV-102). Every first-party service depends on the one postgres container, so
   it has the largest blast radius in the stack — and under the old floating
@@ -559,6 +606,15 @@ There is no test suite — this repo is configuration, so validation is mostly
   SWY-303 removes the copy. Being Signet-managed is **not** a substitute — `signet render
   --check` compares key sets, not values, so a vault seeded from a stale file renders the
   stale value and reports success.
+- `make env-ownership-check` / `make dev-env-ownership-check` after changing what the
+  vault *delivers* — a `signet target add-key`, an `import`, a re-seeded render target.
+  It is the ownership question, not the value question `assert-tokens` asks: whether the
+  vault claims a key `versions.env` owns, or writes a file something else also writes
+  (SERV-94). Both conditions held on the prod project for a week or two and neither was visible
+  from anywhere — the pins because `render-env.sh` strips them, the file target because a
+  losing writer leaves no trace. It reads target metadata only and never a value.
+  Host-side, and **not a deploy gate**: while the strip is in the path the hazard is
+  latent, and a red prod deploy is the wrong way to learn that a vault edit was careless.
 - `make probe-status` after touching the prober or its role — it shows the timer
   *and* the last oneshot run, which is the pair that matters: the failure mode is
   the service landing in `failed` while the timer keeps cheerfully firing it.

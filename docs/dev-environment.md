@@ -144,21 +144,36 @@ reasons, and both have already bitten the prod project:
 
 1. **The deploy root has a writer.** `deploy-dev.yml` regenerates that file on every
    run. A Signet file target there means two writers on one file, and drift becomes a
-   race rather than a state — which is why `file:/opt/construct-server/.env` reads
-   `changed` on the prod project (SERV-94).
+   race rather than a state — which is why `file:/opt/construct-server/.env` read
+   `changed` on the prod project for the week and a half before SERV-94 detached it.
 2. **It carries the tag pins.** The deployed `.env` is `creds/dev.env` *plus* the four
    `DEV_*_TAG` values `render-env.sh` appends from tracked `dev-versions.env`. Those
    belong to git (SERV-96), and importing them makes the vault a second apparent source
-   for a value it does not own. The prod project holds all ten `*_TAG` values today and
-   that is a bug, not a pattern to copy.
+   for a value it does not own. The prod project held all ten `*_TAG` values until
+   SERV-94 dropped them from its render — that was the bug, not a pattern to copy.
 
 `signet set` alone does **not** add a key to a target — it mints the value and leaves it
 reaching nothing, which is how `construct-server/DEV_SWITCHYARD_BOOTSTRAP_TOKEN` came to
 sit in the vault with no destination. Either add the key to `creds/dev.env` before
 importing, or attach it afterwards with `signet target add-key`.
 
-This is the dev half of **SERV-94**; the prod half (retiring the stale file targets and
-getting the tag pins out of the vault) is still open.
+This was the dev half of **SERV-94**. The prod half is now done too, and landed one
+asymmetry worth knowing before you reason from dev to prod: **`construct-server` has no
+file target at all.** Dev keeps `creds/dev.env` because it is the readable credential
+source and nothing else writes it; prod's credentials were imported once years of
+deploys ago and the vault has been the source ever since, so there is no local file it
+should be writing. Signet owns `PROD_ENV_FILE` and stops there.
+
+The consequence is that `import` cannot widen prod's key set — what `import` widens is a
+*file* target's, and prod has none. A new prod credential is two commands:
+
+```sh
+signet set --project construct-server --name SOME_TOKEN
+signet target add-key --project construct-server --gh-secret PROD_ENV_FILE --name SOME_TOKEN
+```
+
+`make env-ownership-check` asserts both halves of the rule for either tier — see the
+invariant in `CLAUDE.md`.
 
 ## How code gets into dev — `deploy-dev.yml` (SERV-97)
 
