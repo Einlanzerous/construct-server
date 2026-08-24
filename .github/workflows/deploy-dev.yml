@@ -128,7 +128,7 @@ jobs:
           # ones, so `$DEV_ROOT/config/traefik-dev/` fails on a dev root that has never
           # held a config/ — which is every dev root before SERV-93. db/ and scripts/
           # are one level deep and happened not to need this; the two below are two.
-          mkdir -p "$DEV_ROOT/config" "$DEV_ROOT/services"
+          mkdir -p "$DEV_ROOT/config" "$DEV_ROOT/services" "$DEV_ROOT/pkg"
           rsync -a --delete ./db/      "$DEV_ROOT/db/"
           rsync -a --delete ./scripts/ "$DEV_ROOT/scripts/"
           # The dev edge (SERV-93): traefik-dev mounts config/traefik-dev/, and
@@ -140,6 +140,20 @@ jobs:
           # than at review time, and syncing two small directories costs nothing.
           rsync -a --delete ./config/traefik-dev/        "$DEV_ROOT/config/traefik-dev/"
           rsync -a --delete ./services/cf-access-guard/  "$DEV_ROOT/services/cf-access-guard/"
+          # …and the shared verifier the guard is built FROM (SERV-131), which reaches
+          # that build as a named context. DEV_COMPOSE passes --project-directory
+          # $DEV_ROOT, so `cfaccess: ./pkg/cfaccess` resolves against the dev root and
+          # not against this checkout: without this the build fails with
+          # "failed to get build context cfaccess: stat .../pkg/cfaccess". That is
+          # `make dev-up`'s FIRST step when the edge profile is on, so it takes the
+          # whole dev deploy down and not just the edge.
+          #
+          # NOTE this block is a second copy of the Makefile's `dev-bootstrap` sync,
+          # which this workflow deliberately does not call (ansible owns creating the
+          # dev root and network; the workflow owns steady state). Anything added to
+          # one belongs in the other — the two drifting apart is exactly how this line
+          # came to be missing after the Makefile got it.
+          rsync -a --delete ./pkg/cfaccess/             "$DEV_ROOT/pkg/cfaccess/"
           rsync -a docker-compose.dev.yml dev-versions.env Makefile "$DEV_ROOT/"
 
       - name: Restore dev secrets
