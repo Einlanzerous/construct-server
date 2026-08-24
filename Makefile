@@ -333,11 +333,16 @@ dev-bootstrap: dev-network
 	rsync -a docker-compose.dev.yml dev-versions.env Makefile "$(DEV_ROOT)/"
 	@# rsync creates only the LAST component of a destination path, so the two
 	@# nested syncs below need their parent directories to exist first (SERV-93).
-	mkdir -p "$(DEV_ROOT)/config" "$(DEV_ROOT)/services"
+	mkdir -p "$(DEV_ROOT)/config" "$(DEV_ROOT)/services" "$(DEV_ROOT)/pkg"
 	rsync -a --delete ./db/ "$(DEV_ROOT)/db/"
 	rsync -a --delete ./scripts/ "$(DEV_ROOT)/scripts/"
 	rsync -a --delete ./config/traefik-dev/ "$(DEV_ROOT)/config/traefik-dev/"
 	rsync -a --delete ./services/cf-access-guard/ "$(DEV_ROOT)/services/cf-access-guard/"
+	@# The guard's build reads pkg/cfaccess as a named build context (SERV-131), and
+	@# DEV_COMPOSE runs with --project-directory $(DEV_ROOT), so the context path is
+	@# resolved against the dev root rather than this checkout. Without this sync it
+	@# resolves to a directory that does not exist.
+	rsync -a --delete ./pkg/cfaccess/ "$(DEV_ROOT)/pkg/cfaccess/"
 	@echo "Dev root ready at $(DEV_ROOT). Put the dev .env there, then: make dev-up"
 
 # Bring the dev stack up. Safe to re-run; recreates only what drifted.
@@ -410,7 +415,7 @@ dev-edge-down: dev-root
 # history — the dev root is an rsync target with none — and `unknown` when that fails,
 # which is the loud direction: it will not match a real commit.
 dev-build-guard: dev-root
-	@rev="$$(git -C . log -1 --format=%H -- services/cf-access-guard 2>/dev/null || true)"; \
+	@rev="$$(git -C . log -1 --format=%H -- services/cf-access-guard pkg/cfaccess 2>/dev/null || true)"; \
 	  echo "cf-access-guard source revision: $${rev:-<could not resolve>}"; \
 	  GUARD_REVISION="$${rev:-unknown}" $(DEV_COMPOSE) build cf-access-guard-dev
 

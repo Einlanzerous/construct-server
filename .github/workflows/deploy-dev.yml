@@ -50,6 +50,10 @@ on:
       # deploy.yml triggers on it too; a change to it is a change to both edges.
       - 'config/traefik-dev/**'
       - 'services/cf-access-guard/**'
+      # …and the shared verifier the guard is built from (SERV-131). Same argument
+      # as the line above: a module-only merge changes both edges' binaries, and
+      # without this dev would only pick it up on the next hourly cron.
+      - 'pkg/cfaccess/**'
       - '.github/workflows/deploy-dev.yml'
 
 # Same reasoning as deploy.yml: two runs would race on one deploy root, one rendered .env
