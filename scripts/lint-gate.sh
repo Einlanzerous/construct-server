@@ -250,7 +250,13 @@ PRUNE=(-name node_modules -o -name vendor -o -name .git -o -name dist -o -name b
 find_markers() {
   # $1 repo root, $2 marker filename. Depth 4 covers every layout in the estate
   # (argosy/mobile/argosy/pubspec.yaml is the deepest) without walking media trees.
-  find "$1" -maxdepth 4 \( "${PRUNE[@]}" \) -prune -o -name "$2" -print 2>/dev/null | sort
+  #
+  # Sorted SHALLOWEST FIRST, which covered_by_node_unit depends on: a workspace root can
+  # only suppress its members if it has already been seen when they come up. Plain `sort`
+  # is lexical, so `<repo>/apps/web/package.json` sorts before `<repo>/package.json` and
+  # the root lost to its own member. Depth first, then lexically for a stable order.
+  find "$1" -maxdepth 4 \( "${PRUNE[@]}" \) -prune -o -name "$2" -print 2>/dev/null \
+    | awk -F/ '{print NF"\t"$0}' | sort -k1,1n -k2 | cut -f2-
 }
 
 # Which package manager runs this unit's scripts? The lockfile is the authority; the
@@ -419,44 +425,67 @@ check_rust() {
 
 PLAN=""   # for --explain
 
+# Is $1 inside a directory we already selected as a Node unit?
+#
+# interlock's root script is `eslint .`, which already covers apps/* and packages/*, so
+# selecting a member as well would run eslint twice and report every finding twice. The
+# earlier version of this compared only the FIRST path component, which silently failed
+# for the exact case it was written for: a member at `apps/web` never matched a root
+# recorded as `.`. Compare real ancestry instead.
+NODE_DIRS=()
+covered_by_node_unit() {
+  local dir="$1" sel
+  for sel in ${NODE_DIRS+"${NODE_DIRS[@]}"}; do
+    [ "$dir" = "$sel" ] && continue
+    case "$dir/" in "$sel"/*) return 0 ;; esac
+  done
+  return 1
+}
+
 gather() {
   local repo="$1" explain_only="${2:-0}"
   local marker dir rel pm
 
-  for marker in $(find_markers "$repo" go.mod); do
+  # `while read` rather than `for x in $(...)`: a path with a space in it would otherwise
+  # split into two nonexistent directories.
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
     dir="$(dirname "$marker")"; rel="${dir#"$repo"/}"; [ "$dir" = "$repo" ] && rel=.
     PLAN="${PLAN}
   go     $rel  ->  gofmt -l, go vet ./..."
     [ "$explain_only" = 1 ] || check_go "$dir" "$rel"
-  done
+  done < <(find_markers "$repo" go.mod)
 
-  for marker in $(find_markers "$repo" package.json); do
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
     dir="$(dirname "$marker")"; rel="${dir#"$repo"/}"; [ "$dir" = "$repo" ] && rel=.
-    # Only a unit if it actually defines a check. "No-op cleanly when a repo has none"
-    # is the common case in this estate, not the edge case.
+    # Only a unit if it actually defines a check. "No-op cleanly when a repo has none" is
+    # the common case in this estate, not the edge case: switchyard and cta-watch define
+    # neither script and correctly come back empty.
     has_script "$dir" lint || has_script "$dir" format:check || continue
-    # Nearest ancestor wins: interlock's root `eslint .` already covers its workspace
-    # members, and running both would double every finding.
-    case "$PLAN" in *"node   ${rel%%/*}  "*) [ "$rel" != "${rel%%/*}" ] && continue ;; esac
+    covered_by_node_unit "$dir" && continue
+    NODE_DIRS+=("$dir")
     pm="$(pkg_manager_for "$dir" "$repo")"
     PLAN="${PLAN}
   node   $rel  ->  $pm run $(has_script "$dir" format:check && printf 'format:check, ')$(has_script "$dir" lint && printf 'lint')"
     [ "$explain_only" = 1 ] || check_node "$dir" "$rel" "$pm"
-  done
+  done < <(find_markers "$repo" package.json)
 
-  for marker in $(find_markers "$repo" pubspec.yaml); do
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
     dir="$(dirname "$marker")"; rel="${dir#"$repo"/}"
     PLAN="${PLAN}
   dart   $rel  ->  dart format --output=none --set-exit-if-changed"
     [ "$explain_only" = 1 ] || check_dart "$dir" "$rel"
-  done
+  done < <(find_markers "$repo" pubspec.yaml)
 
-  for marker in $(find_markers "$repo" Cargo.toml); do
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
     dir="$(dirname "$marker")"; rel="${dir#"$repo"/}"; [ "$dir" = "$repo" ] && rel=.
     PLAN="${PLAN}
   rust   $rel  ->  cargo fmt --check"
     [ "$explain_only" = 1 ] || check_rust "$dir" "$rel"
-  done
+  done < <(find_markers "$repo" Cargo.toml)
 }
 
 build_report() {

@@ -101,6 +101,37 @@ mkdir -p "$TMP/plain" && ( cd "$TMP/plain" && git init -q -b main . \
   && echo hi > README.md && git add -A && git commit -qm init )
 expect allow "$TMP/plain" "git push"
 
+# --------------------------------------------------------------------------
+# Discovery: a workspace root that lints everything must suppress its members,
+# and must stop suppressing them the moment it stops linting them.
+#
+# This has been wrong twice. First the ancestor test compared only the first path
+# component, so a member at `apps/web` never matched a root recorded as `.`. Then the
+# ordering was lexical, so `<repo>/apps/web/package.json` was visited BEFORE
+# `<repo>/package.json` and the root had not been recorded yet when its member came up.
+# Both produced doubled findings, which is the sort of thing that reads as "the linter is
+# broken" rather than "the gate is broken".
+# --------------------------------------------------------------------------
+echo "lint-gate: workspace discovery"
+WS="$TMP/ws"
+mkdir -p "$WS/apps/web" "$WS/packages/db" "$WS/node_modules"
+( cd "$WS" && git init -q -b main . && git config user.email t@example.com && git config user.name t )
+echo '{}' > "$WS/bun.lock"
+echo '{"name":"web","scripts":{"lint":"eslint ."}}' > "$WS/apps/web/package.json"
+echo '{"name":"db","scripts":{"lint":"eslint ."}}'  > "$WS/packages/db/package.json"
+
+units() { "$GATE" --explain "$WS" | grep -c '^  node' || true; }
+
+echo '{"name":"root","workspaces":["apps/*"],"scripts":{"lint":"eslint ."}}' > "$WS/package.json"
+n="$(units)"
+[ "$n" = 1 ] && ok "a linting workspace root suppresses its members (1 unit)" \
+             || bad "workspace root" "expected 1 node unit, got $n"
+
+echo '{"name":"root","workspaces":["apps/*"]}' > "$WS/package.json"
+n="$(units)"
+[ "$n" = 2 ] && ok "a root with no lint script leaves members visible (2 units)" \
+             || bad "workspace members" "expected 2 node units, got $n"
+
 echo "lint-gate: the gate answers fast enough to leave on"
 start=$(date +%s%N)
 decision "$TMP/clean" "ls" >/dev/null
