@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.25.0](https://github.com/Einlanzerous/construct-server/compare/v4.24.0...v4.25.0) (2026-08-24)
+
+
+### Features
+
+* **pr-review:** export the PR ref, the round and the pass (SERV-127) ([#152](https://github.com/Einlanzerous/construct-server/issues/152)) ([07857e9](https://github.com/Einlanzerous/construct-server/commit/07857e99dde7b8628e9cf230d293ba1f6b3aeffb))
+* **purser:** pass the CF spin-up ids through to the container (PRSR-11) ([#148](https://github.com/Einlanzerous/construct-server/issues/148)) ([b86e5fd](https://github.com/Einlanzerous/construct-server/commit/b86e5fd59602e5664b087b191da8343fd501609c))
+
 ## [4.24.0](https://github.com/Einlanzerous/construct-server/compare/v4.23.0...v4.24.0) (2026-08-23)
 
 
