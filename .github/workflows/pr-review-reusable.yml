@@ -1307,13 +1307,16 @@ jobs:
           EXEC: ${{ steps.outcome.outputs.exec }}
           STATE: ${{ steps.outcome.outputs.state }}
           TURNS: ${{ steps.outcome.outputs.turns }}
-          # Set by the action on the success path only. On the throw path — the
-          # turn-overshoot case this workflow already exists to survive — the
-          # catch in base-action/src/index.ts re-emits `execution_file` and
-          # NOT `session_id`, so this is empty on precisely the runs worth
-          # measuring. The execution file is the fallback, same as the
-          # classifier's.
-          SESSION_HINT: ${{ steps.review.outputs.session_id }}
+          # `steps.review.outputs.session_id` is deliberately NOT read. The
+          # action sets it on the success path only — the catch in
+          # base-action/src/index.ts re-emits `execution_file` and not
+          # `session_id` — so it is empty on precisely the runs worth measuring,
+          # the turn-overshoot case this workflow already exists to survive.
+          # Taking it as a primary with the execution file as a fallback would
+          # leave the interesting path running the less-exercised branch, which
+          # is the wrong way round; the execution file answers on both paths, so
+          # it is the only path. Same reasoning as the classifier reading that
+          # file rather than the step's exit code.
           PROMPT_REPO: ${{ inputs.prompt_repo }}
           PROMPT_REF: ${{ inputs.prompt_ref }}
           # Sidecars older than this are swept. Aligned to Claude Code's own
@@ -1324,8 +1327,15 @@ jobs:
           # passes are no longer observable either.
           SIDECAR_RETENTION_DAYS: "60"
         run: |
-          # NOT `set -e`. This step must not take a review down with it, so it
-          # checks and warns rather than exiting on the first surprise.
+          # `set +e` EXPLICITLY. Every other step here opens `set -euo
+          # pipefail`, and the temptation is to write `set -uo pipefail` and
+          # call errexit off — it is not. Actions runs a `run:` block as
+          # `bash -e {0}`, so errexit is already on before line one and `set`
+          # only ever adds. This step must not take a review down with it, so
+          # it warns and returns rather than exiting on the first surprise, and
+          # every guard below is written on the assumption that it reaches its
+          # own `exit 0`.
+          set +e
           set -uo pipefail
 
           warn() { echo "::warning::SERV-127 round export: $1"; }
@@ -1346,25 +1356,29 @@ jobs:
             exit 0
           fi
 
-          SESSION_ID="${SESSION_HINT:-}"
-          if [ -z "$SESSION_ID" ]; then
-            EXEC_FILE="${EXEC:-}"
-            [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
-            if [ -f "$EXEC_FILE" ]; then
-              # Every SDK message carries `session_id`; the `system`/`init` one
-              # is simply the first to arrive. Take the first non-empty value
-              # rather than naming a message type, so this keeps working if the
-              # init message is ever dropped from the execution file.
-              SESSION_ID=$(jq -r '[ .[]? | .session_id? // empty | select(. != "") ] | first // ""' \
-                             "$EXEC_FILE" 2>/dev/null) || SESSION_ID=""
-            fi
+          # Same two-step resolution the classifier uses: the step output where
+          # the action managed to set it, and the path the action computes
+          # deterministically from RUNNER_TEMP where a failed composite action
+          # surfaced no outputs at all.
+          SESSION_ID=""
+          EXEC_FILE="${EXEC:-}"
+          if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
+            EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
+          fi
+          if [ -f "$EXEC_FILE" ]; then
+            # Every SDK message carries `session_id`; the `system`/`init` one is
+            # simply the first to arrive. Take the first non-empty value rather
+            # than naming a message type, so this keeps working if the init
+            # message is ever dropped from the execution file.
+            SESSION_ID=$(jq -r '[ .[]? | .session_id? // empty | select(. != "") ] | first // ""' \
+                           "$EXEC_FILE" 2>/dev/null) || SESSION_ID=""
           fi
 
           # No session id means no transcript to annotate, which is the one
           # honest reason to record nothing: a sidecar keyed on a guess is worse
           # than an absent one, because the reader cannot tell them apart.
           if [ -z "$SESSION_ID" ]; then
-            warn "no session id from the action output or the execution file; this pass is not attributable to a transcript and was not recorded"
+            warn "no session id in $EXEC_FILE; this pass is not attributable to a transcript and was not recorded"
             exit 0
           fi
 
@@ -1409,6 +1423,13 @@ jobs:
           # passes across pushes), nor from a run listing (an `issue_comment`
           # pass runs on the default branch, so no branch filter finds it).
           #
+          # It is counted, not locked, so the duplicate concurrent review this
+          # workflow already accepts (SERV-126: a fixup pushed while the
+          # `opened` review is still running) can have both passes read the same
+          # PRIOR and write the same `pass_n`. The round is still right and the
+          # cost still sums; two passes share a rank. Not worth a lock file —
+          # the ordering authority is `recorded_at`, which is why it is written.
+          #
           # grep prefilters and jq decides. Handing jq the whole directory at
           # once is the obvious shape and is wrong twice: it reads every sidecar
           # on the host to count one round's, and ONE unparseable file aborts
@@ -1424,9 +1445,12 @@ jobs:
                       'select(.round_id == $r) | .session_id // empty' "$f" 2>/dev/null) || continue
             [ -n "$MATCH" ] || continue
             # A re-run of this same session re-writes its own file; it is this
-            # pass, not a prior one.
-            [ "$MATCH" = "$SESSION_ID" ] && continue
-            PRIOR=$((PRIOR + 1))
+            # pass, not a prior one. An `if` rather than `[ … ] && continue`:
+            # the latter is safe only because errexit exempts the left side of
+            # an `&&` list, which is not a rule worth resting a counter on.
+            if [ "$MATCH" != "$SESSION_ID" ]; then
+              PRIOR=$((PRIOR + 1))
+            fi
           done < <(find "$ROUND_DIR" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null \
                      | xargs -0 -r grep -lF -- "$ROUND_ID" 2>/dev/null)
           PASS_N=$((PRIOR + 1))

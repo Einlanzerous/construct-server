@@ -298,7 +298,10 @@ of those two carries several different PR numbers.
   from prior posted reviews (an exhausted pass posts none, and that is the pass
   most worth counting), nor from `run_attempt` (that counts re-runs of one run,
   not passes across pushes), nor from a run listing (an `issue_comment` pass runs
-  on the default branch, so no branch filter finds it).
+  on the default branch, so no branch filter finds it). It is counted, not
+  locked, so the duplicate concurrent review this workflow already accepts
+  (SERV-126) can have two passes share a rank — the round is still right and the
+  cost still sums.
 - **`prompt_sha256` is the exact revision of the procedure this pass ran.**
   `prompt_ref` alone does not answer it — callers pin at different refs and
   `main` moves, which is the drift this shared workflow exists to stop. Switchyard
@@ -324,11 +327,14 @@ It runs `if: always()`, because an **exhausted** pass is the single most
 interesting one to have measured — it is the non-converging tail the whole
 exercise exists to price — and it is exactly the pass whose Review step failed.
 
-The session id comes from the execution file, not from the action's `session_id`
-output: on the throw path the action re-emits `execution_file` and **not**
-`session_id`, so the output is empty on precisely the runs worth measuring. Same
-lesson, same place, as the classifier reading the execution file rather than the
-exit code.
+The session id comes from the execution file, and the action's `session_id`
+output is deliberately unused. The action sets that output on the success path
+only — its catch re-emits `execution_file` and **not** `session_id` — so it is
+empty on precisely the runs worth measuring. Taking it as a primary with the
+execution file as a fallback would leave the interesting path running the
+less-exercised branch; the execution file answers on both, so it is the only
+path. Same lesson, same place, as the classifier reading that file rather than
+the step's exit code.
 
 A pass with **no** resolvable session id records nothing and says so. A sidecar
 keyed on a guess is worse than an absent one, because the reader cannot tell them
