@@ -371,10 +371,12 @@ reviewer runs with `--allowedTools Bash,Read,Grep,Glob` and spawns none today.
   Measured on SERV-127 (#152): the `pull_request` pass ran the new step and the
   `@claude review` pass, ten minutes later on the same PR, did not have it.
   Consequences worth knowing before you rely on either: a workflow change cannot
-  be tested by commenting, and — because `synchronize` without `review:always` is
-  skipped once a PR has been reviewed — the label is the only way to get a second
-  `pull_request` pass over a workflow edit. It is not a gap after merge: both
-  triggers then run the same merged copy.
+  be tested by commenting, and a second `pull_request` pass over a workflow edit
+  takes either a push carrying the `review:always` label or a **reopen** —
+  the prior-review skip is gated on `synchronize` alone, so `reopened` and
+  `ready_for_review` reach the file rules with no label at all. The label on its
+  own fires nothing; the caller does not subscribe to `labeled`. It is not a gap
+  after merge: both triggers then run the same merged copy.
 - **`claude-code-action` fails runs it completed.** It throws when `num_turns`
   exceeds `max_turns` even on a run the SDK allowed to finish. The workflow reads
   the result message from the execution file and decides for itself; the action's
