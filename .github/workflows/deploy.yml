@@ -800,10 +800,18 @@ jobs:
           RD_GATE_RUN_URL: ${{ github.event.client_payload.gate_run_url }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RD_NOTE: ${{ env.DELIVERY_NOTE }}
+          # A GitHub LOGIN, not a UUID. `deployed_by` is a strict FK
+          # (`Uuid.nullable()`) that the server RESOLVES from this field against
+          # `users.github_login`; sending a login there 400s the whole POST, and
+          # report-deploy.sh treats a 400 as skip-and-warn, so the entire row —
+          # run_url, note, gate_*, everything — would vanish on a green deploy.
+          #
           # The promote's trailer when there is one, else whoever triggered this run.
           # The trailer takes precedence because on a promote-fired push `github.actor`
-          # is the PAT owner, not the promoter (SERV-130).
-          RD_DEPLOYED_BY: ${{ env.DELIVERY_ACTOR || github.actor }}
+          # is the PAT owner, not the promoter (SERV-130). Unresolvable logins are kept
+          # deliberately by the schema: "an actor was reported but nobody has linked
+          # that login" is a different fact from "no actor was reported".
+          RD_DEPLOYED_BY_LOGIN: ${{ env.DELIVERY_ACTOR || github.actor }}
         run: ./scripts/report-deploy.sh
       - name: Report everything else this deploy recreated
         if: always() && steps.reportable.outputs.plain != ''
@@ -819,7 +827,7 @@ jobs:
           RD_STATUS: ${{ steps.reportable.outputs.status }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RD_NOTE: ${{ env.DELIVERY_NOTE }}
-          RD_DEPLOYED_BY: ${{ env.DELIVERY_ACTOR || github.actor }}
+          RD_DEPLOYED_BY_LOGIN: ${{ env.DELIVERY_ACTOR || github.actor }}
         run: ./scripts/report-deploy.sh
       - name: Prune Images
         # Clean up old docker images to save disk space

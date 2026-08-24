@@ -381,11 +381,14 @@ jobs:
           RD_STATUS: ${{ steps.reportable.outputs.status }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RD_NOTE: ${{ env.DELIVERY_NOTE }}
+          # A GitHub LOGIN, not a UUID — `deployed_by` is a strict FK the server
+          # resolves FROM this field, and a login sent there 400s the whole report.
+          #
           # The promote's trailer when there is one, else whoever ran this. On a
           # workflow_dispatch convergence run `github.actor` IS the right answer —
           # someone clicked Run — and on a promote-fired push it is the PAT owner,
           # which is why the trailer takes precedence rather than the other way round.
-          RD_DEPLOYED_BY: ${{ env.DELIVERY_ACTOR || github.actor }}
+          RD_DEPLOYED_BY_LOGIN: ${{ env.DELIVERY_ACTOR || github.actor }}
         run: |
           set -euo pipefail
           if [ -z "${RD_TOKEN:-}" ]; then

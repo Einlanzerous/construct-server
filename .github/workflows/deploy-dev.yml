@@ -567,7 +567,7 @@ jobs:
           # edited the workflow file. Filing that name against a deploy they did not
           # make is worse than filing none, so absence stays absence and the ledger
           # omits the field. A `workflow_dispatch` genuinely has a person behind it.
-          RD_DEPLOYED_BY: ${{ github.event_name == 'workflow_dispatch' && github.actor || '' }}
+          RD_DEPLOYED_BY_LOGIN: ${{ github.event_name == 'workflow_dispatch' && github.actor || '' }}
         run: ./scripts/report-deploy.sh
       - name: Report everything else dev moved to
         if: always() && steps.reportable.outputs.plain != ''
@@ -583,5 +583,5 @@ jobs:
           RD_STATUS: ${{ steps.reportable.outputs.status }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # Manual dispatch only — see the step above for why a cron run reports none.
-          RD_DEPLOYED_BY: ${{ github.event_name == 'workflow_dispatch' && github.actor || '' }}
+          RD_DEPLOYED_BY_LOGIN: ${{ github.event_name == 'workflow_dispatch' && github.actor || '' }}
         run: ./scripts/report-deploy.sh
