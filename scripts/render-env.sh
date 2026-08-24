@@ -119,6 +119,38 @@ stripped="$(printf '%s\n' "$base_content" | awk -v keys="$pinned_keys" '
   }
 ')"
 
+# Say what the strip removed. The strip itself is correct and stays silent about its
+# result nowhere else: it is the reason a stale pin in PROD_ENV_FILE was harmless for
+# a week and a half AND the reason nobody noticed one was there (SERV-94). Reporting costs
+# nothing and turns "latent and invisible" into "latent and named".
+#
+# Not an error, and deliberately not fatal. The base legitimately carries these on a
+# first render after a pin moves out of a secret, and failing here would break the one
+# path — a deploy — that fixes the situation by writing the tracked value over it.
+# `check-env-ownership.sh` is what fails on the vault still claiming them.
+#
+# The marker block was cut from base_content above, so a re-render of a file this
+# script already wrote reports nothing: only pins the BASE carried in its own right
+# reach here, which is what makes this signal mean something in ansible's in-place
+# reconcile as well as in a deploy's stdin render.
+collided="$(printf '%s\n' "$base_content" | awk -v keys="$pinned_keys" '
+  BEGIN {
+    n = split(keys, k, "\n")
+    for (i = 1; i <= n; i++) if (k[i] != "") want[k[i]] = 1
+  }
+  {
+    eq = index($0, "=")
+    if (eq > 1) { key = substr($0, 1, eq - 1); if (key in want && !(key in seen)) { seen[key] = 1; print key } }
+  }
+')"
+if [ -n "$collided" ]; then
+  err "note: the base environment carried $(printf '%s\n' "$collided" | wc -l) key(s) that $(basename "$versions") owns."
+  err "      The tracked value wins; the copy below was dropped and never reached compose."
+  printf '%s\n' "$collided" | sed 's/^/        /' >&2
+  err "      An image tag is not a credential (SERV-96). If these come from Signet, the vault"
+  err "      is a second source for a value git owns — see ./scripts/check-env-ownership.sh."
+fi
+
 # The MARKER itself is a fixed sentinel — it is what the cut above searches for, so it
 # must read identically no matter which pin file produced the block. The line under it
 # names the actual source instead, because dev renders from dev-versions.env (SERV-97) and

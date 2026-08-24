@@ -360,6 +360,48 @@ jobs:
             echo "node_id=${{ github.event.pull_request.node_id }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # ── THIS STEP IS NEAR A HARD GITHUB LIMIT ────────────────────────────────
+      #
+      # A `run:` block is ONE expression, and GitHub caps an expression at 21,000
+      # characters. This one is the largest in the estate and sits close to it —
+      # `scripts/check-run-expression-size.sh` prints the current headroom.
+      #
+      # SHELL COMMENTS INSIDE THE BLOCK COUNT. Adding a paragraph of explanation
+      # below can therefore break CI, and the failure names neither your edit nor
+      # the reason: every workflow run for the file dies at load time with
+      #
+      #   Invalid workflow file ... (Line: 385, Col: 14): Exceeded max expression
+      #   length 21000
+      #
+      # pointing at the `run:` key rather than at the line you added. actionlint,
+      # PyYAML and the SchemaStore workflow schema all accept the file, so nothing
+      # local catches it. SERV-136 hit exactly this and spent three pushes
+      # bisecting a comment-only change.
+      #
+      # Prose belongs HERE, above the step, where it is a YAML comment and free.
+      # Keep the block itself to code and short pointers.
+      #
+      # ── how the release-file set is derived (SERV-136) ───────────────────────
+      #
+      # The skip is a SUBSET test: a bot-authored PR on the release branch prefix
+      # is skipped only if every file it touches is in the derived set. The set is
+      # read from `release-please-config.json` on the BASE ref, so a PR cannot
+      # widen its own skip, and EVERY failure to read it leaves the set short —
+      # which fails the subset test and reviews the PR. It never widens on error.
+      #
+      # Every entry in `packages` contributes, each prefixed by its own key,
+      # because a package's paths are relative to its directory:
+      # `pkg/cfaccess` -> `pkg/cfaccess/CHANGELOG.md`, `.` -> no prefix. Reading
+      # only `packages["."]` is what SERV-136 fixed: construct-server became the
+      # first multi-package consumer and its very next component release PR was
+      # reviewed instead of skipped, and its Gate went red on a changelog bump.
+      #
+      # Top-level `changelog-path` and `extra-files` are declared in
+      # release-please's own schema and act as defaults for every package, so they
+      # are merged in and prefixed per package rather than ignored. Not
+      # shape-lawyering: signet's config already puts per-package options at the
+      # root. Missing a root-level `extra-files` yields a short set and reproduces
+      # the argosy red exactly.
       - name: Triage — should this be reviewed, and how deeply
         id: triage
         env:
@@ -570,27 +612,26 @@ jobs:
             rm -f "$RP_ERR"
 
             if [ "$RP_FOUND" = yes ]; then
-              # Single-package layout (`packages["."]`). A multi-package config
-              # does not yield nothing — the `// "CHANGELOG.md"` default fires
-              # against the empty object and emits the root changelog anyway.
-              # Such a release PR touches packages/*/CHANGELOG.md, which this set
-              # does not contain, so the subset test fails and it gets reviewed.
+              # Every package, prefixed by its key (SERV-136). Why: above the step.
               RELEASE_FILES=$(
                 {
                   echo '.release-please-manifest.json'
-                  # Top-level `extra-files` and `changelog-path` are declared
-                  # in release-please's own config schema and act as defaults
-                  # for every package, so they are merged in rather than
-                  # ignored. Not shape-lawyering: signet's config already puts
-                  # per-package options (`release-type`, `changelog-sections`)
-                  # at the root, so the pattern is live here. Missing a
-                  # root-level `extra-files` yields a short set and reproduces
-                  # the argosy red exactly.
+                  # Root-level defaults merge in and prefix per package;
+                  # `// {".": {}}` keeps a config with no `packages` key on the
+                  # old single-root behaviour. Why: above the step.
                   jq -r '
-                    (.packages["."] // {}) as $p |
-                    ($p["changelog-path"] // .["changelog-path"] // "CHANGELOG.md"),
-                    ((($p["extra-files"] // []) + (.["extra-files"] // []))[]?
-                       | if type == "string" then . else .path end)
+                    . as $cfg
+                    | ($cfg.packages // {".": {}})
+                    | to_entries[]
+                    | .key as $dir
+                    | .value as $p
+                    | (if $dir == "." or $dir == "" then ""
+                       else ($dir | sub("/+$"; "")) + "/" end) as $prefix
+                    | ($prefix + ($p["changelog-path"] // $cfg["changelog-path"] // "CHANGELOG.md")),
+                      ((($p["extra-files"] // []) + ($cfg["extra-files"] // []))[]?
+                         | (if type == "string" then . else .path end)
+                         | select(. != null)
+                         | $prefix + .)
                   ' <<<"$RP_CONFIG" 2>/dev/null || true
                 } | sed '/^[[:space:]]*$/d' | sort -u
               )

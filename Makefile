@@ -1,6 +1,6 @@
-.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions assert-tokens deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size health-check edge-auth-check versions assert-tokens env-ownership-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
-        dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens \
+        dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve \
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall
@@ -76,6 +76,15 @@ force-recreate: deploy-root network
 	  exit 1; \
 	}
 	$(COMPOSE) up -d --no-deps --force-recreate $(svc)
+
+# How close is any workflow's largest `run:` block to GitHub's 21,000-character
+# expression cap? (SERV-136) Over it, GitHub refuses to LOAD the workflow: every run
+# dies before a job is created, named after the file path, with no log. Shell comments
+# inside the block count toward the limit and actionlint does not model it, so this is
+# the only local way to see it coming. Run it after editing any workflow.
+# Usage: make workflow-size
+workflow-size:
+	./scripts/check-run-expression-size.sh
 
 # Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
 # Usage: make drift-check            (check every service)
@@ -155,6 +164,17 @@ versions:
 # Usage: make assert-tokens
 assert-tokens:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-token-shapes.sh
+
+# Ask the vault whether it claims anything git or a deploy already owns (SERV-94): a
+# versions.env pin delivered through PROD_ENV_FILE, or a file target on a path
+# deploy.yml rewrites. Both were true of this project — the orphaned file target since
+# SERV-76 on 2026-08-08, the duplicated pins since SERV-96 on 2026-08-15 — and neither
+# showed up anywhere, because render-env.sh strips the pins and a losing writer leaves
+# no trace. Run it after touching the vault — a `signet target add-key`, an `import`, a
+# re-seeded render target — not on a schedule.
+# Usage: make env-ownership-check
+env-ownership-check:
+	@./scripts/check-env-ownership.sh
 
 # Run the delivery prober once, right now, exactly as the timer does (SERV-111). Reads
 # the same /etc/delivery-prober/prober.env the unit does, so it proves the deployed
@@ -523,6 +543,13 @@ dev-versions:
 dev-assert-tokens:
 	$(DEV_PROFILES) DEPLOY_ROOT=$(DEV_ROOT) COMPOSE_FILE=docker-compose.dev.yml COMPOSE_PROJECT=$(DEV_PROJECT) \
 	  ./scripts/assert-token-shapes.sh
+
+# The dev project's copy of the ownership check. Dev's allowlist is not empty the way
+# prod's is — `creds/dev.env` is the credential source it was seeded from and has one
+# writer, where prod has no local file it should be writing at all (SERV-94).
+# Usage: make dev-env-ownership-check
+dev-env-ownership-check:
+	@./scripts/check-env-ownership.sh --dev
 
 # Report env keys prod declares that dev does not (see the script header for why
 # dev is written out explicitly instead of using compose `extends`).
