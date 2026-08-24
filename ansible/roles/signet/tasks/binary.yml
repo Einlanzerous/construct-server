@@ -19,7 +19,7 @@
 - name: Refuse to install a Signet older than the multi-address listener
   assert:
     that:
-      - signet_version | regex_replace('^v', '')
+      - signet_version_bare
         is version(signet_min_version | regex_replace('^v', ''), '>=')
     fail_msg: >-
       signet_version={{ signet_version }} predates {{ signet_min_version }}, which
@@ -39,12 +39,29 @@
 
 - name: Decide whether an update is needed
   set_fact:
-    # `signet version` prints the tag it was built with, e.g. "v1.2.0". A
-    # missing or unreadable binary leaves rc != 0, which means install rather
+    # BOTH SIDES ARE COMPARED BARE (SERV-130). This read `signet version`'s
+    # output against the v-prefixed TAG, and the comment here used to claim the
+    # command "prints the tag it was built with, e.g. v1.2.0". SGNT-38 made that
+    # false — `signet version` now routes through the version package's Get() and
+    # prints `1.9.1` — so the comparison could never be equal again and this fact
+    # was unconditionally true. Every deploy re-downloaded, re-installed and
+    # bounced the credential daemon, including one that had nothing to do.
+    #
+    # It also cost the rollback artifact: `Keep the outgoing binary for rollback`
+    # sits inside the block this gates, so a no-op re-run overwrote .prev with a
+    # copy of the binary already installed, discarding the only version there was
+    # to go back to.
+    #
+    # The installed side is stripped too, not just the target: a binary from
+    # before SGNT-38 answers `v1.9.0`, and recognising that it is already
+    # installed is exactly what makes a rollback re-run idempotent.
+    #
+    # A missing or unreadable binary leaves rc != 0, which means install rather
     # than fail.
     signet_update_needed: >-
       {{ signet_installed_version.rc != 0
-         or (signet_installed_version.stdout | trim) != signet_version }}
+         or (signet_installed_version.stdout | trim | regex_replace('^v', ''))
+            != signet_version_bare }}
 
 - name: Note that Signet is already at the target version
   debug:
