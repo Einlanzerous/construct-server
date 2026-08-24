@@ -348,11 +348,24 @@ services:
   cf-access-guard-dev:
     build:
       context: ./services/cf-access-guard
+      # The shared Access verifier (SERV-131), exactly as prod declares it. This
+      # builds the SAME Dockerfile as prod's guard, so it needs the same named
+      # context: `COPY --from=cfaccess` with no matching stage or context is
+      # resolved by BuildKit as an IMAGE reference, and the build dies on
+      # `docker.io/library/cfaccess:latest`. `dev-build-guard` is the first thing
+      # `make dev-up` does, so getting this wrong stops the whole dev deploy, not
+      # just the edge — while the already-running guard keeps serving, because
+      # compose does not stop a profile-gated container it did not start.
+      additional_contexts:
+        cfaccess: ./pkg/cfaccess
       args:
-        # deploy-dev.yml sets this from `git log -1 -- services/cf-access-guard`, the
-        # same way deploy.yml does for prod (SERV-109). `:-unknown` and not `:-`: an
-        # empty build arg stamps an empty label, which compares equal to a container
-        # that has no label at all, so "no evidence" would silently read as "current".
+        # deploy-dev.yml sets this from
+        # `git log -1 -- services/cf-access-guard pkg/cfaccess` — BOTH paths, as prod
+        # does (SERV-109, widened by SERV-131), because a module-only change is a
+        # change to this binary with nothing under services/ to show for it.
+        # `:-unknown` and not `:-`: an empty build arg stamps an empty label, which
+        # compares equal to a container that has no label at all, so "no evidence"
+        # would silently read as "current".
         GUARD_REVISION: ${GUARD_REVISION:-unknown}
     container_name: cf-access-guard-dev
     restart: unless-stopped

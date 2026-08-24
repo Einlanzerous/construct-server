@@ -1,0 +1,26 @@
+# GitGuardian configuration.
+#
+# The one exclusion here is the shared Cloudflare Access test vectors
+# (SERV-131). It is deliberately a PATH exclusion of one directory, not a
+# detector being switched off: everything outside pkg/cfaccess/testdata/ is
+# still scanned, including every other .pem and every other JWT in the repo.
+#
+# What is in there and why it is not a secret: two throwaway RSA keys generated
+# for this fixture and never used anywhere, plus JWTs signed by them for the
+# fictional team domain `vectors.cloudflareaccess.test`. They are checked in ON
+# PURPOSE — the vectors are run by two test suites in two languages in two
+# repositories, and stable key material is what makes regeneration byte-stable,
+# which is what stops the two suites drifting apart while both stay green. That
+# is the entire point of the ticket. Publishing private keys in a test vector
+# set is standard practice for exactly this reason; RFC 7515 Appendix A does it.
+#
+# See pkg/cfaccess/testdata/README.md.
+#
+# NOTE: this file is read by ggshield (CLI and pre-commit hook). The GitGuardian
+# GitHub App scans from its own dashboard configuration and does NOT read it, so
+# incidents it raises on this path have to be triaged there once.
+version: 2
+
+secret:
+  ignored-paths:
+    - "pkg/cfaccess/testdata/**"

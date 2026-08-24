@@ -40,6 +40,18 @@
 // It reads the assertion from the Cf-Access-Jwt-Assertion header only, not from
 // the CF_Authorization cookie. Cloudflare injects the header on every proxied
 // request to an Access-protected app, so the cookie adds no reachable case.
+//
+// # Where the verification itself lives
+//
+// Not here any more. JWT parsing, the JWKS cache and every claim check moved to
+// pkg/cfaccess (SERV-131), which Lyceum and Chronicle also import — three
+// hand-rolled copies of this code had already drifted far enough apart that one
+// of them panicked on a malformed key (LYCM-122) while this one did not.
+//
+// What stays is everything the shared module deliberately refuses to know: the
+// per-host AUD map, audit mode, the forwardAuth contract with Traefik, and the
+// healthcheck. The audience is passed PER REQUEST rather than configured once,
+// so each tunneled host is held to its own Access application.
 package main
 
 import (
@@ -53,6 +65,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Einlanzerous/construct-server/pkg/cfaccess"
 )
 
 type mode string
@@ -72,7 +86,6 @@ const (
 type config struct {
 	addr       string
 	teamDomain string
-	issuer     string
 	audByHost  map[string]string
 	refresh    time.Duration
 	mode       mode
@@ -100,19 +113,37 @@ func main() {
 		os.Exit(probeSelf(cfg.addr))
 	}
 
-	keys := newJWKSCache(cfg.teamDomain, cfg.refresh, log)
-	if err := keys.refresh(); err != nil {
+	// No Audience here on purpose: the guard picks one PER REQUEST from its host
+	// map and calls VerifyAudience. A configured audience would be the wrong
+	// shape — it would be the union of every host's AUD, which is exactly the
+	// "a wiki token opens Switchyard" failure the per-host map exists to stop.
+	// Verify() on this verifier fails closed with ErrNoAudienceConfigured.
+	verifier, err := cfaccess.New(cfaccess.Config{
+		TeamDomain:      cfg.teamDomain,
+		RefreshInterval: cfg.refresh,
+		Logger:          log,
+	})
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		os.Exit(2)
+	}
+
+	ctx := context.Background()
+	if err := verifier.Refresh(ctx); err != nil {
 		// Not fatal: Cloudflare being briefly unreachable at start should not
 		// wedge the container. The cache stays empty, every request 403s, and
 		// /healthz reports unhealthy until a refresh succeeds — fail-closed and
 		// visible, rather than fail-closed and silent.
 		log.Error("initial jwks fetch failed; serving 403 until it succeeds", "err", err)
 	} else {
-		log.Info("loaded Cloudflare Access signing keys", "keys", keys.count())
+		log.Info("loaded Cloudflare Access signing keys", "keys", verifier.Health().Keys)
 	}
-	go keys.run()
+	// Started AFTER the synchronous refresh above, so a hard startup failure is
+	// visible in the logs as a startup failure rather than as the first request
+	// getting a 403.
+	go verifier.Run(ctx)
 
-	g := &guard{cfg: cfg, keys: keys, log: log}
+	g := &guard{cfg: cfg, verifier: verifier, log: log}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/verify", g.handleVerify)
@@ -123,7 +154,7 @@ func main() {
 		hosts = append(hosts, h)
 	}
 	log.Info("cf-access-guard listening",
-		"addr", cfg.addr, "mode", string(cfg.mode), "issuer", cfg.issuer, "hosts", strings.Join(hosts, ","))
+		"addr", cfg.addr, "mode", string(cfg.mode), "issuer", verifier.Issuer(), "hosts", strings.Join(hosts, ","))
 	if cfg.mode == modeAudit {
 		log.Warn("AUDIT MODE: unverified requests will be ALLOWED and only logged — this does not enforce SERV-106")
 	}
@@ -144,10 +175,13 @@ func loadConfig() (*config, error) {
 	if team == "" {
 		return nil, errors.New("CF_ACCESS_TEAM_DOMAIN is unset or empty")
 	}
-	// Accept a full URL and reduce it to the host, so pasting the value straight
+	// Reduced to a bare host by the shared module, so pasting the value straight
 	// out of the Zero Trust dashboard cannot produce an issuer of
 	// "https://https://team.cloudflareaccess.com" that mismatches every token.
-	team = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(team, "https://"), "http://"), "/")
+	team = cfaccess.NormalizeTeamDomain(team)
+	if team == "" {
+		return nil, errors.New("CF_ACCESS_TEAM_DOMAIN has no host in it")
+	}
 
 	audByHost, err := parseAudMap(os.Getenv("CF_ACCESS_AUD_MAP"))
 	if err != nil {
@@ -185,7 +219,6 @@ func loadConfig() (*config, error) {
 	return &config{
 		addr:       addr,
 		teamDomain: team,
-		issuer:     "https://" + team,
 		audByHost:  audByHost,
 		refresh:    refresh,
 		mode:       m,
@@ -223,14 +256,14 @@ func parseAudMap(raw string) (map[string]string, error) {
 }
 
 type guard struct {
-	cfg  *config
-	keys *jwksCache
-	log  *slog.Logger
+	cfg      *config
+	verifier *cfaccess.Verifier
+	log      *slog.Logger
 }
 
 func (g *guard) handleVerify(w http.ResponseWriter, r *http.Request) {
 	host := canonicalHost(r.Header.Get("X-Forwarded-Host"))
-	claims, err := g.validate(host, r.Header.Get("Cf-Access-Jwt-Assertion"))
+	claims, err := g.validate(r.Context(), host, r.Header.Get("Cf-Access-Jwt-Assertion"))
 
 	if err != nil {
 		// The reason goes to the log, never to the response. A caller learning
@@ -265,7 +298,7 @@ func (g *guard) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 // validate is the whole decision, kept separate from the HTTP plumbing so the
 // tests exercise the decision rather than a round trip.
-func (g *guard) validate(host, assertion string) (*verifiedClaims, error) {
+func (g *guard) validate(ctx context.Context, host, assertion string) (*cfaccess.Claims, error) {
 	if host == "" {
 		return nil, errors.New("no X-Forwarded-Host — /verify was not called by Traefik's forwardAuth")
 	}
@@ -279,18 +312,20 @@ func (g *guard) validate(host, assertion string) (*verifiedClaims, error) {
 	if assertion == "" {
 		return nil, errors.New("no Cf-Access-Jwt-Assertion header")
 	}
-	return verify(assertion, g.keys, g.cfg.issuer, aud, time.Now())
+	// One audience, this host's. Not the map's values — a token is only good for
+	// the application it was minted for.
+	return g.verifier.VerifyAudience(ctx, assertion, aud)
 }
 
 func (g *guard) handleHealth(w http.ResponseWriter, r *http.Request) {
-	ok, detail := g.keys.health()
+	h := g.verifier.Health()
 	status := http.StatusOK
-	if !ok {
+	if !h.OK {
 		status = http.StatusServiceUnavailable
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
-	fmt.Fprintf(w, "mode=%s hosts=%d %s\n", g.cfg.mode, len(g.cfg.audByHost), detail)
+	fmt.Fprintf(w, "mode=%s hosts=%d %s\n", g.cfg.mode, len(g.cfg.audByHost), h)
 }
 
 // canonicalHost normalises a Host/X-Forwarded-Host for map lookup: lowercased,

@@ -13,7 +13,33 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # MANIFEST mode since SERV-131, not `release-type: simple` inline. The repo
+      # releases two things now: the stack itself, and pkg/cfaccess — the shared
+      # Cloudflare Access verifier that Lyceum and Chronicle import by version.
+      #
+      # `release-type` is deliberately absent here: passing it puts the action into
+      # single-package mode and the config files below are ignored. The two packages,
+      # their tag formats and the current versions all live in release-please-config.json
+      # and .release-please-manifest.json, which the action picks up by default.
+      #
+      # Two consequences worth knowing before editing either file:
+      #
+      #   - A nested Go module MUST tag as `pkg/cfaccess/v0.1.0` — that exact form is
+      #     what `go get` resolves. release-please's default is `<component>-v0.1.0`,
+      #     which Go cannot see at all, so `tag-separator: "/"` is load-bearing rather
+      #     than cosmetic.
+      #   - A commit touching pkg/cfaccess lands in BOTH changelogs, and that is
+      #     deliberate. release-please splits commits by path for every package
+      #     EXCEPT the root: `.` receives the unsplit list (manifest.ts,
+      #     `path === ROOT_PROJECT_PATH ? commits : splitCommits[path]`), filtered
+      #     afterwards only by the `exclude-paths` key, which is not set here. So a
+      #     `feat(cfaccess): …` cuts pkg/cfaccess/v0.1.0 AND a stack minor.
+      #
+      #     Keeping it that way on purpose: the guard is rebuilt from this module on
+      #     every deploy, so a module change IS a change to the deployed stack, and
+      #     excluding it would leave `git log v4.24.0..v4.25.0` silent about guard
+      #     code that shipped. `"exclude-paths": ["pkg/cfaccess"]` on the root package
+      #     is the knob if that is ever wanted; nothing else is.
+      #
+      # `separate-pull-requests` keeps a module release from waiting on a stack release.
       - uses: googleapis/release-please-action@v4
-        with:
-          # Using 'simple' release type for generic projects without specific package managers
-          release-type: simple

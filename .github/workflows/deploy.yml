@@ -40,6 +40,10 @@ on:
       # Narrow to the one directory on purpose: services/ also holds argosy-acquisition,
       # which is not part of this stack.
       - 'services/cf-access-guard/**'
+      # …and the shared verifier it is built from (SERV-131). The guard imports
+      # pkg/cfaccess through a path replace, so a module-only change is a change to
+      # the deployed binary with nothing under services/ to show for it.
+      - 'pkg/cfaccess/**'
 
 # Two deploys running at once would race on the same deploy root, the same rendered .env
 # and the same containers. That was unlikely while a deploy only ever came from a person
@@ -148,6 +152,13 @@ jobs:
           # guard code. Seen for real on the first rehearsal.
           mkdir -p "$DEPLOY_ROOT/services"
           rsync -a --delete ./services/cf-access-guard/ "$DEPLOY_ROOT/services/cf-access-guard/"
+          # The guard's build reads pkg/cfaccess as a named build context (SERV-131),
+          # so the module is a stack file for exactly the same reason the guard's own
+          # source is. Without this the build fails on the deploy root rather than
+          # silently building something stale — the named context does not exist —
+          # but only after the rsync step has already claimed success.
+          mkdir -p "$DEPLOY_ROOT/pkg"
+          rsync -a --delete ./pkg/cfaccess/ "$DEPLOY_ROOT/pkg/cfaccess/"
           rsync -a docker-compose.yml Makefile versions.env "$DEPLOY_ROOT/"
 
       - name: Restore Secrets
@@ -318,9 +329,15 @@ jobs:
         # Runs in the CHECKOUT: the deploy root is an rsync target with no git history.
         # An empty result is not fatal and must not read as a match — the scoped path
         # below recreates the guard whenever it cannot prove the running one is current.
+        #
+        # BOTH paths, since SERV-131: the guard's behaviour now lives partly in
+        # pkg/cfaccess, so a revision taken from services/cf-access-guard alone would
+        # be unchanged by a module-only edit — and the scoped path below would then
+        # prove the running guard "current" while it ran the old verifier. That is the
+        # one failure this label exists to make impossible.
         run: |
           set -uo pipefail
-          rev="$(git log -1 --format=%H -- services/cf-access-guard || true)"
+          rev="$(git log -1 --format=%H -- services/cf-access-guard pkg/cfaccess || true)"
           echo "GUARD_REVISION=$rev" >> "$GITHUB_ENV"
           echo "cf-access-guard source revision: ${rev:-<could not resolve>}"
 
@@ -332,7 +349,8 @@ jobs:
         # authenticated is the worst possible kind of silent no-op.
         #
         # Cheap after the first run: the source is stdlib-only Go with no module
-        # downloads, so an unchanged tree is a layer-cache hit.
+        # downloads — pkg/cfaccess is imported through a path replace and arrives as a
+        # build context, not from a proxy — so an unchanged tree is a layer-cache hit.
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: docker compose build cf-access-guard
 

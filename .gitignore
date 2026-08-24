@@ -39,3 +39,7 @@ __pycache__/
 review-verdict.json
 review-body.md
 ticket-comment.md
+
+# Compiled Go binaries from a local `go build` in a service or module directory.
+# The guard is built into an image, never committed (SERV-131 nearly committed 9MB of it).
+/services/cf-access-guard/cf-access-guard
