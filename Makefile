@@ -2,7 +2,8 @@
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
-        wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve
+        wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve \
+        lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -98,6 +99,36 @@ drift-check:
 #        make health-check svc=switchyard (one service)
 health-check:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-healthy.sh $(svc)
+
+# The SERV-58 push gate: run this repo's own format/lint checks the way the pre-push hook
+# would. Useful on its own, and the fastest way to see what the gate sees.
+# Usage: make lint-gate            (check this repo)
+#        make lint-gate dir=~/projects/argosy
+#        make lint-gate explain=1  (list the units found, run nothing)
+lint-gate:
+	@./scripts/lint-gate.sh $(if $(explain),--explain,--check) $(if $(dir),$(dir),.)
+
+# Install the gate at the USER level, covering every repo on this box (SERV-58). Copies
+# the script to ~/.claude/hooks/ and registers one PreToolUse hook in
+# ~/.claude/settings.json, merging rather than replacing. Idempotent — re-run it after
+# pulling a change to lint-gate.sh.
+lint-gate-install:
+	@./scripts/install-lint-gate.sh
+
+# Is the gate installed, and does the installed copy still match this checkout? The copy
+# is deliberate (see install-lint-gate.sh), so drift is possible and this is how it
+# surfaces — the same shape as check-compose-drift.sh.
+lint-gate-status:
+	@./scripts/install-lint-gate.sh --check
+
+# Prove the gate still blocks. It fails open by design, so a gate that has quietly stopped
+# working looks identical to a clean tree; this builds a knowingly-misformatted fixture
+# repo and asserts the answer is "no".
+lint-gate-test:
+	@./scripts/check-lint-gate.sh
+
+lint-gate-uninstall:
+	@./scripts/install-lint-gate.sh --uninstall
 
 # Assert the ORIGIN rejects a spoofed Host (SERV-106), rather than merely being hard to
 # reach (SERV-107). Two halves: a config check that every router on the `internal`

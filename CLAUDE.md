@@ -27,6 +27,10 @@ anything deploys or gets versioned.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).
 - `scripts/check-compose-drift.sh` — the SERV-8 guardrail (see Invariants).
+- `scripts/lint-gate.sh` — the pre-push lint gate (SERV-58): a Claude Code hook
+  that runs a repo's own format/lint checks before `git push` and blocks on
+  failure. Installed once at the user level by `make lint-gate-install`, so it
+  covers every repo on the box. Design of record in `docs/lint-gate.md`.
 - `wiki/` — the generated estate wiki (SERV-101). A TypeScript generator plus a
   VitePress renderer; `wiki/docs/` is **generated and wiped on every run**. Design
   of record in `docs/estate-wiki.md`; see also the invariant below.
@@ -557,6 +561,20 @@ anything deploys or gets versioned.
   first.** A probe that got no usable answer deliberately does not auto-register
   one (SWY-284) — "down" and "misspelled" are indistinguishable from outside — so
   an unknown name 404s every run, which the wrapper treats as a hard failure.
+- **The pre-push lint gate fails OPEN, and must keep doing so** (SERV-58).
+  `scripts/lint-gate.sh` blocks a `git push` whose format/lint checks fail, and it sits
+  in front of every push in every repo on this box — including the runner's `$HOME`,
+  which is shared. So it blocks **only** on a check that ran to completion and reported a
+  real finding: a missing `node_modules`, a `go vet` that could not build, a tool not on
+  PATH and any internal error are reported as skips and **allow**. This looks like a bug
+  and is the design. CI is still the backstop, so a false allow costs one red run —
+  exactly what the status quo costs. A false block is unbounded, cannot be worked around
+  by the thing it is blocking, and the reflex it trains is `CONSTRUCT_LINT_GATE=0`
+  forever, which costs the whole feature. `make lint-gate-test` exists because that bias
+  makes a broken gate and a clean tree look identical.
+  It must also never **write**. `prettier --write`, `gofmt -w` and a bare `dart format`
+  rewrite the tree; a gate that edits your files mid-push, after you reviewed the diff,
+  is worse than the bug it catches. Every command it runs is a check.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.
@@ -615,6 +633,12 @@ There is no test suite — this repo is configuration, so validation is mostly
   losing writer leaves no trace. It reads target metadata only and never a value.
   Host-side, and **not a deploy gate**: while the strip is in the path the hazard is
   latent, and a red prod deploy is the wrong way to learn that a vault edit was careless.
+- `make lint-gate` runs this repo's format/lint checks the way the pre-push hook does,
+  and `make lint-gate-test` proves the hook still BLOCKS (SERV-58). The second one is the
+  one that matters: the gate fails open on purpose, so a gate that has quietly stopped
+  working is indistinguishable from a clean tree — both are green. Re-run
+  `make lint-gate-install` after pulling a change to `scripts/lint-gate.sh`; the installed
+  copy is a copy, and `make lint-gate-status` is what surfaces the drift.
 - `make probe-status` after touching the prober or its role — it shows the timer
   *and* the last oneshot run, which is the pair that matters: the failure mode is
   the service landing in `failed` while the timer keeps cheerfully firing it.
