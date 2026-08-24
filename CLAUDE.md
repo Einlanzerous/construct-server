@@ -163,9 +163,10 @@ anything deploys or gets versioned.
 - **First-party image tags are pinned, and tracked `versions.env` holds the values**
   (SERV-74, SERV-88, SERV-96). Every first-party image reads
   `${<SERVICE>_TAG:-latest}`, one variable per source repo — backend and frontend
-  ship from one release and pin together, so 10 variables cover 14 images. Services
-  with release-please versions are pinned to **major.minor** (`LYCEUM_TAG=1.10`), so
-  patch releases still flow in on a `docker compose pull` and nothing else does.
+  ship from one release and pin together, so there are fewer variables than
+  images. Services with release-please versions are pinned to **major.minor**
+  (`LYCEUM_TAG=1.10`), so patch releases still flow in on a `docker compose pull`
+  and nothing else does.
   **`versions.env` is the source of truth for which form each service uses.** This
   file states the rule and not the values, because duplicating them here is exactly
   what went stale: it claimed argosy and drydock "publish no semver" long after both
@@ -185,7 +186,7 @@ anything deploys or gets versioned.
   all resolve the same values. The pins land below a marker comment in that file and
   are **regenerated every deploy** — editing them on the host is lost without warning.
   **A service is sha-pinned only when its repo publishes no semver image**, and no
-  service is any more — all ten pins track major.minor. argosy and drydock were
+  service is any more — every pin tracks major.minor. argosy and drydock were
   the last two, and the reason was never that they had no releases — they cut them
   normally (`v0.25.1`, `v1.7.0`). Their publish workflows asked for semver tags on
   `on: push: tags`, and that trigger had **never fired once** in either repo: release
