@@ -213,6 +213,31 @@ expect deny "$TMP/dirty" 'cat > f <<EOF
 git push origin main
 EOF
 git push'
+# A redirect after the terminator word must not be eaten into it.
+expect allow "$TMP/dirty" 'cat <<EOF > out.txt
+git push origin main
+EOF'
+
+# The three ways heredoc detection broke when it was a regex pre-pass over the raw line,
+# outside the quote state it was bolted onto. Two false blocks and two silent misses.
+#
+# `<<\EOF` is bash's fourth spelling of a quoted terminator, exactly equivalent to
+# `<<'EOF'`; a terminator is also not always a bare identifier. Missing either means the
+# body gets scanned as code — a false block on a `cat`, where `--no-verify` has nowhere
+# to go.
+expect allow "$TMP/dirty" 'cat > f <<\EOF
+git push origin main
+EOF'
+expect allow "$TMP/dirty" "cat > f <<'EOF-1'
+git push origin main
+EOF-1"
+# …and the other direction, which no report can reveal: a terminator recorded from
+# something that opens no heredoc swallows every line after it, so a REAL push goes
+# unseen. `<<<` is a here-string, and a `<<` inside quotes is just text.
+expect deny "$TMP/dirty" 'grep -q foo <<< bar
+git push'
+expect deny "$TMP/dirty" 'git commit -m "docs: explain << redirects"
+git push'
 
 echo "lint-gate: the gate answers fast enough to leave on"
 start=$(date +%s%N)

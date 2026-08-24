@@ -204,12 +204,32 @@ flag and there is nowhere to put it on a `cat`. The only way through would be
 
 The cheap fix — drop `\n` as a separator — is the wrong trade, and the third row is why:
 it converts a false block into a **silent miss**, and a gate that quietly stops firing is
-the failure mode this design is arranged against. So heredoc bodies are skipped (`<<`,
-`<<-`, and quoted terminators) and the rest is split quote-aware.
+the failure mode this design is arranged against.
 
-Backslash escaping is deliberately not modelled — it does not change what a `git push`
-segment looks like in practice, and a mis-split errs toward linting when it need not
-have, which is the safe direction.
+**Heredoc detection happens inside the character pass, not as a regex over the raw
+line.** It was a pre-pass once, and sitting outside the quote state it was bolted onto it
+broke three ways at once, in both directions:
+
+| Command | Was | Why |
+|---|---|---|
+| `cat > f <<\EOF … git push … EOF` | **false block** | `\` is bash's fourth way of quoting a terminator, equivalent to `<<'EOF'` — the regex matched neither a quote nor a word char |
+| `cat > f <<'EOF-1' …` | **false block** | a terminator is not always a bare identifier |
+| `grep -q foo <<< bar` ⏎ `git push` | **silent miss** | `<<<` is a here-string and opens no heredoc |
+| `git commit -m "explain << redirects"` ⏎ `git push` | **silent miss** | the regex ran before any quote tracking |
+
+The last two are the ones worth dwelling on: a terminator recorded from something that
+never arrives swallows *every following line*, so a real `git push` after it is never
+seen. Nothing is reported, so **the test suite structurally cannot notice** — it can only
+assert on answers the gate gives.
+
+So `<<` is recognised only outside quotes, `<<<` is skipped, and `\WORD` is accepted
+alongside `WORD`, `'WORD'` and `"WORD"`.
+
+Backslash escaping is deliberately not modelled **in the separator scan** — there it does
+not change what a `git push` segment looks like, and a mis-split errs toward linting when
+it need not have, which is the safe direction. That argument does **not** extend to the
+heredoc path, which is exactly the mistake above: there a missed backslash errs toward a
+false block on a write, the worst case this document names.
 
 All six forms are in the test suite, which until this round contained **no multi-line
 command at all** — which is precisely why the heredoc case survived the first fix.

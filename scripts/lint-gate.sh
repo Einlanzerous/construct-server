@@ -185,8 +185,30 @@ deny() {
 #      is the wrong trade — it converts a false block into a SILENT MISS, and a gate that
 #      quietly stops firing is the failure this whole design is arranged against.
 #
-# So: skip heredoc bodies, then split the rest quote-aware. Backslash escaping is still
-# not modelled; a mis-split there only ever makes the gate lint when it need not have.
+# So: skip heredoc bodies, then split the rest quote-aware.
+#
+# HEREDOC DETECTION IS PART OF THE CHARACTER PASS, not a regex over the raw line. It was
+# a pre-pass once, and being outside the quote state it was bolted onto broke it three
+# ways at once — in both directions:
+#
+#   * It missed `<<\EOF`. Backslash is bash's fourth way of quoting a terminator, exactly
+#     equivalent to `<<'EOF'`, and `\` is neither a quote nor a word character, so the
+#     match failed, no terminator was recorded, and the body was scanned as code. Same
+#     for a terminator that is not a bare identifier, like `<<'EOF-1'`. Both are FALSE
+#     BLOCKS on a `cat`, the case this file already calls its worst: `--no-verify` is a
+#     `git push` flag and there is nowhere to put it on a write.
+#   * It fired on `<<<`, a here-string, which opens no heredoc at all.
+#   * It fired on `<<` inside a quoted string — `git commit -m "explain << redirects"` —
+#     because the regex ran before any quote tracking.
+#
+#     The last two are SILENT MISSES: a terminator gets recorded that never arrives, so
+#     every following line is swallowed and a real `git push` after it is never seen.
+#     By this file's own argument that is the worse direction, and it is the one the test
+#     suite structurally cannot notice, because nothing is reported.
+#
+# Note the general "backslash escaping is not modelled, and a mis-split only ever lints
+# early" argument does NOT extend here. It holds for the separator scan; on the heredoc
+# path a missed backslash errs toward a false block instead.
 #
 # Done in one awk pass rather than a bash character loop. `${s:i:1}` in a loop is
 # quadratic — measured at 597ms on an 8000-character command, against 3ms for the
@@ -198,7 +220,8 @@ split_segments() {
   while IFS= read -r seg; do
     SEGMENTS+=("$seg")
   done < <(printf '%s' "$1" | awk '
-    BEGIN { SQ = sprintf("%c", 39); DQ = sprintf("%c", 34); q = ""; term = ""; cur = "" }
+    BEGIN { SQ = sprintf("%c", 39); DQ = sprintf("%c", 34); BS = sprintf("%c", 92)
+            q = ""; term = ""; cur = "" }
     {
       # Inside a heredoc body: emit nothing until the terminator line.
       if (term != "") {
@@ -206,19 +229,40 @@ split_segments() {
         if ($0 == term || t == term) term = ""
         next
       }
-      # Does this line OPEN a heredoc? Record its terminator; the line itself is still
-      # code and is scanned normally below.
-      if (match($0, /<<-?[ \t]*("[A-Za-z_][A-Za-z0-9_]*"|'"'"'[A-Za-z_][A-Za-z0-9_]*'"'"'|[A-Za-z_][A-Za-z0-9_]*)/)) {
-        h = substr($0, RSTART, RLENGTH)
-        sub(/^<<-?[ \t]*/, "", h)
-        gsub(/["'"'"']/, "", h)
-        term = h
-      }
       n = length($0)
       for (i = 1; i <= n; i++) {
         c = substr($0, i, 1)
         if (q != "") { if (c == q) q = ""; cur = cur c; continue }
         if (c == SQ || c == DQ) { q = c; cur = cur c; continue }
+
+        # `<<` only counts as a heredoc OUTSIDE quotes, which is the whole point of
+        # deciding it here rather than up front.
+        if (c == "<" && substr($0, i + 1, 1) == "<") {
+          if (substr($0, i + 2, 1) == "<") {    # `<<<` is a here-string, not a heredoc
+            cur = cur "<<<"; i += 2; continue
+          }
+          if (term == "") {                     # first heredoc on the line wins
+            j = i + 2
+            if (substr($0, j, 1) == "-") j++    # <<-
+            while (substr($0, j, 1) == " " || substr($0, j, 1) == "\t") j++
+            qq = substr($0, j, 1); w = ""
+            if (qq == SQ || qq == DQ) {         # <<"EOF" / <<'"'"'EOF'"'"'
+              j++
+              while (j <= n && substr($0, j, 1) != qq) { w = w substr($0, j, 1); j++ }
+            } else {
+              if (qq == BS) j++                 # <<\EOF — same as quoting it
+              while (j <= n) {
+                ch = substr($0, j, 1)
+                if (ch == " " || ch == "\t" || ch == ";" || ch == "&" || ch == "|" \
+                    || ch == "<" || ch == ">") break
+                w = w ch; j++
+              }
+            }
+            if (w != "") term = w               # body starts on the NEXT line
+          }
+          cur = cur "<<"; i++; continue
+        }
+
         if (c == "&" || c == "|" || c == ";") { print cur; cur = ""; continue }
         cur = cur c
       }
