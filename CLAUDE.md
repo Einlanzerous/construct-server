@@ -276,10 +276,11 @@ anything deploys or gets versioned.
 - **Signet owns `PROD_ENV_FILE` and nothing else — the prod project has no host file
   target** (SERV-94). The vault renders one thing, the `home-server` environment secret;
   `deploy.yml` turns that into `/opt/construct-server/.env` via `render-env.sh` and is
-  the only writer of that path. Signet used to also claim it, which is two writers on
-  one file: drift stops being a state you can read and becomes a race, and
-  `signet target list` sat at `changed` for months saying so with nobody able to act on
-  it. It claimed `~/construct-server/.env` too — a third copy that stopped driving
+  the only writer of the credentials in it — ansible re-renders the *pin block* of that
+  same file in place on a cold host, which is a reconcile of git's values and not a
+  second source. Signet used to claim the path as well, and that one is a second source:
+  drift stops being a state you can read and becomes a race, and `signet target list` sat
+  at `changed` for a week and a half saying so with nobody able to act on it. It claimed `~/construct-server/.env` too — a third copy that stopped driving
   anything when SERV-76 moved the deploy root, and which reported `in sync` the whole
   time, because a render against a file nothing reads always succeeds. **A target whose
   destination has another writer, or no consumer, is worse than no target**: both report
@@ -587,7 +588,7 @@ There is no test suite — this repo is configuration, so validation is mostly
   vault *delivers* — a `signet target add-key`, an `import`, a re-seeded render target.
   It is the ownership question, not the value question `assert-tokens` asks: whether the
   vault claims a key `versions.env` owns, or writes a file something else also writes
-  (SERV-94). Both conditions held on the prod project for months and neither was visible
+  (SERV-94). Both conditions held on the prod project for a week or two and neither was visible
   from anywhere — the pins because `render-env.sh` strips them, the file target because a
   losing writer leaves no trace. It reads target metadata only and never a value.
   Host-side, and **not a deploy gate**: while the strip is in the path the hazard is

@@ -145,7 +145,7 @@ reasons, and both have already bitten the prod project:
 1. **The deploy root has a writer.** `deploy-dev.yml` regenerates that file on every
    run. A Signet file target there means two writers on one file, and drift becomes a
    race rather than a state — which is why `file:/opt/construct-server/.env` read
-   `changed` on the prod project for months before SERV-94 detached it.
+   `changed` on the prod project for the week and a half before SERV-94 detached it.
 2. **It carries the tag pins.** The deployed `.env` is `creds/dev.env` *plus* the four
    `DEV_*_TAG` values `render-env.sh` appends from tracked `dev-versions.env`. Those
    belong to git (SERV-96), and importing them makes the vault a second apparent source
