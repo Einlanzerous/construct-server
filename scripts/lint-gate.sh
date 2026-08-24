@@ -119,8 +119,23 @@ deny() {
   exit 0
 }
 
-# Any unhandled failure allows the push. See the failure-direction note above.
-trap 'allow' ERR
+# HOW FAIL-OPEN IS ACTUALLY ACHIEVED. An earlier version of this line was
+# `trap 'allow' ERR`, which does not work and is worse than nothing because it reads like
+# a safety net: bash does not inherit an ERR trap into shell functions without `set -E`,
+# and everything here runs inside one. Adding `set -E` would be actively harmful — half
+# these functions return non-zero as their normal answer (has_script, run_check), so the
+# trap would fire on the first failing check and allow the push it was about to block.
+#
+# The real guarantee is structural, and it is why `set -e` is absent:
+#
+#   * Nothing aborts. Without `set -e` a failing command just continues, so a bug in one
+#     check cannot skip the rest or exit half-decided.
+#   * FAILURES is only ever appended to by an explicit record_failure call, so a block
+#     requires a check to have run and reported. There is no path where confusion
+#     produces a denial.
+#   * Every guard (no jq, no git, not a repo, exempt push) ends in an explicit allow.
+#   * In hook mode the script never exits 2 — the only exit status Claude Code treats as
+#     blocking — so even an outright crash lets the push through.
 
 # ---------------------------------------------------------------------------
 # Is this a push we should gate at all?

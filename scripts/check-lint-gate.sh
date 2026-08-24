@@ -132,6 +132,20 @@ n="$(units)"
 [ "$n" = 2 ] && ok "a root with no lint script leaves members visible (2 units)" \
              || bad "workspace members" "expected 2 node units, got $n"
 
+# --------------------------------------------------------------------------
+# Fail-open. The gate must never block on a check it could not finish — see the
+# failure-direction note in lint-gate.sh. A slow linter is a skip, not a denial.
+# --------------------------------------------------------------------------
+echo "lint-gate: fail-open"
+SLOW="$TMP/slow"
+mkdir -p "$SLOW/node_modules"
+( cd "$SLOW" && git init -q -b main . && git config user.email t@example.com && git config user.name t )
+echo '{}' > "$SLOW/bun.lock"
+echo '{"name":"slow","scripts":{"lint":"sleep 30"}}' > "$SLOW/package.json"
+got="$(CONSTRUCT_LINT_GATE_CHECK_TIMEOUT=1 CONSTRUCT_LINT_GATE_TOTAL_TIMEOUT=20 decision "$SLOW" "git push")"
+[ "$got" = allow ] && ok "a check that times out is a skip, not a block" \
+                   || bad "timed-out check" "expected allow, got $got"
+
 echo "lint-gate: the gate answers fast enough to leave on"
 start=$(date +%s%N)
 decision "$TMP/clean" "ls" >/dev/null
