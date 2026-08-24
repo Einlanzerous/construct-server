@@ -1,0 +1,543 @@
+#!/usr/bin/env bash
+# lint-gate.sh — Run a repo's format/lint checks before `git push`, and block the push
+# if they fail (SERV-58).
+#
+# THE PROBLEM. Agent-authored PRs land with formatting errors, CI goes red, and the fix
+# costs a full round trip: a red run, a fix commit, a re-run, and a human noticing. It
+# was reported roughly twenty times across ARGY / LYCM / ITLK / SGNT in the June-July
+# window. Every one of those was knowable locally in under a second — `gofmt -l` and
+# `prettier --check` need no network, no build and no database. The round trip was pure
+# waste.
+#
+# WHAT THIS IS. A Claude Code PreToolUse hook. It reads the hook payload on stdin, and
+# when the Bash command about to run is a `git push`, it discovers what the repository is
+# written in, runs that language's *check* commands, and answers `deny` with the failing
+# output if any of them fail. The agent reads the denial and fixes the code without ever
+# having pushed. Installed once at the user level, it covers every repo on the box; see
+# install-lint-gate.sh and docs/lint-gate.md.
+#
+# THE FAILURE DIRECTION IS THE OPPOSITE OF deploy-scope.sh, DELIBERATELY. That script
+# fails closed: when it cannot answer, the deploy does the widest safe thing. This one
+# fails OPEN — every internal error, missing tool, unreadable payload or timeout ALLOWS
+# the push. The asymmetry is not an oversight, and the reasoning is worth keeping:
+#
+#   * CI is still the backstop. A false allow costs exactly what today already costs —
+#     one red run. Nothing regresses.
+#   * A false BLOCK is unbounded. This hook sits in front of every `git push` in every
+#     repo on the machine, including the self-hosted runner's $HOME. A bug that blocks
+#     wrongly cannot be worked around by the thing it is blocking, and the reflex it
+#     trains is `CONSTRUCT_LINT_GATE=0`, permanently, which costs the whole feature.
+#   * So: this only ever blocks on a check that ran to completion and reported a real
+#     finding. Anything it could not run is reported as a SKIP and does not block.
+#
+# WHAT IT DELIBERATELY DOES NOT RUN. The gate is only worth having if it is cheap enough
+# to leave on, and only credible if it never blocks on something CI would accept:
+#
+#   * `golangci-lint` — argosy's CI pins v2.12.2 and installs it per-run; the box has an
+#     unpinned copy on PATH. Different versions disagree, and the gate would block on
+#     findings CI does not have. Version skew in a blocking gate is how you teach people
+#     to bypass it.
+#   * Typecheck, build and test — slow (vue-tsc alone is tens of seconds), and they need
+#     installed dependencies and sometimes a database. This gate targets the failure that
+#     was actually reported: formatting and lint.
+#   * Anything that WRITES. `prettier --write`, `gofmt -w`, `dart format` without
+#     `--output=none` all rewrite the tree. A gate that silently edits your files after
+#     you have reviewed the diff and during a push is a worse bug than the one it fixes.
+#     Every command below is a check. The gate reports; you fix.
+#
+# USAGE
+#   lint-gate.sh                 hook mode: read the payload on stdin, emit a decision
+#   lint-gate.sh --check [dir]   run the checks now against dir (default: cwd), human output
+#   lint-gate.sh --explain [dir] list the units found and what would run, without running
+#   lint-gate.sh --version       print the gate's version stamp
+#
+# ESCAPE HATCHES
+#   CONSTRUCT_LINT_GATE=0        disable entirely
+#   git push --no-verify         honoured, on the same reasoning git honours it
+
+set -uo pipefail
+
+LINT_GATE_VERSION=1
+
+# Per-check and whole-run ceilings. The whole-run one matters more than it looks: the
+# hook blocks the agent's turn while it runs, so a pathological repo must not hang it.
+CHECK_TIMEOUT="${CONSTRUCT_LINT_GATE_CHECK_TIMEOUT:-60}"
+TOTAL_TIMEOUT="${CONSTRUCT_LINT_GATE_TOTAL_TIMEOUT:-100}"
+
+# How much failing output reaches the agent. Enough to act on, not enough to flood the
+# context window — a bare `eslint .` on a broken tree can print thousands of lines.
+MAX_REPORT_LINES="${CONSTRUCT_LINT_GATE_MAX_LINES:-60}"
+
+# ---------------------------------------------------------------------------
+# Decisions
+#
+# Hook mode speaks the PreToolUse JSON contract; --check speaks to a person. Both funnel
+# through here so there is one place where "allow" and "deny" are decided.
+# ---------------------------------------------------------------------------
+
+MODE=hook
+WATCHDOG_PID=""
+
+# The watchdog must die before we exit, and not only so it stops ticking. A background
+# child inherits the hook's stdout, and Claude Code reads that pipe to EOF — so a live
+# child holds the pipe open and the push appears to hang for the full TOTAL_TIMEOUT even
+# though the decision was made in milliseconds. Killing it here, plus the >/dev/null on
+# the subshell itself, is what keeps an allow instant.
+stop_watchdog() {
+  [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null
+  WATCHDOG_PID=""
+  return 0
+}
+
+allow() {
+  # $1: optional reason, for the log only. An allow is silent by design: this fires on
+  # every Bash call, and a gate that narrates itself is a gate you turn off.
+  stop_watchdog
+  if [ "$MODE" = check ]; then
+    [ -n "${1:-}" ] && printf '%s\n' "$1"
+    exit 0
+  fi
+  exit 0
+}
+
+deny() {
+  # $1: the report shown to the agent. jq builds the JSON so that quotes, newlines and
+  # backslashes in compiler output cannot break out of the string.
+  local report="$1"
+  stop_watchdog
+  if [ "$MODE" = check ]; then
+    printf '%s\n' "$report"
+    exit 1
+  fi
+  jq -cn --arg r "$report" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $r
+    }
+  }'
+  exit 0
+}
+
+# Any unhandled failure allows the push. See the failure-direction note above.
+trap 'allow' ERR
+
+# ---------------------------------------------------------------------------
+# Is this a push we should gate at all?
+# ---------------------------------------------------------------------------
+
+# Find the `git push` inside a command string, and hand back its own arguments.
+#
+# Two requirements pull in opposite directions and this is where they are reconciled.
+#
+# It must catch `git add -A && git commit -m x && git push`, because that compound form is
+# how an agent actually pushes. (It is also why the hook is registered on a bare `Bash`
+# matcher rather than with `if: "Bash(git push:*)"` — that filter is a prefix match, so it
+# would not match the compound form and the gate would silently never fire. Matching every
+# Bash call and bailing here costs one jq parse and a few string operations: 9ms.)
+#
+# But it must NOT match `git commit -m 'remember to git push'`. Blocking a *commit*
+# because its message mentions pushing is a baffling failure, and a gate people cannot
+# predict is a gate they switch off.
+#
+# So: split on shell separators and require `git push` in COMMAND POSITION — the start of
+# a segment, not anywhere inside one. Sets PUSH_ARGS to that push's own arguments, which
+# is what the exemption parser needs; feeding it the whole command string instead is what
+# made `git push origin v1.0.0` parse `push` as a refspec.
+PUSH_ARGS=""
+find_git_push() {
+  local norm seg
+  norm="${1//&&/$'\n'}"
+  norm="${norm//||/$'\n'}"
+  norm="${norm//;/$'\n'}"
+  norm="${norm//|/$'\n'}"
+  while IFS= read -r seg; do
+    seg="${seg#"${seg%%[![:space:]]*}"}"   # strip leading whitespace
+    case "$seg" in
+      "git push")   PUSH_ARGS=""; return 0 ;;
+      "git push "*) PUSH_ARGS="${seg#git push }"; return 0 ;;
+    esac
+  done <<< "$norm"
+  return 1
+}
+
+# Decide whether a push is exempt, and say why. Exempt pushes carry no reviewable source
+# change, so linting them is pure latency:
+#
+#   * tag pushes — release-please cuts the tag, the content was linted on the way to main
+#   * release-please branches — generated CHANGELOG/version commits, nothing hand-written
+#   * --delete — removes a remote ref, pushes no content at all
+#   * --dry-run — by definition changes nothing
+#   * --no-verify — the user said to skip verification; git honours that and so do we
+#
+# Returns 0 and echoes the reason when exempt.
+push_exemption() {
+  local repo="$1"; shift
+  local -a positional=()
+  local arg tags_only=0
+
+  # $@ here is already only the push's own arguments; positional[0] is the remote.
+  for arg in "$@"; do
+    case "$arg" in
+      --no-verify)             echo "--no-verify"; return 0 ;;
+      --dry-run|-n)            echo "--dry-run"; return 0 ;;
+      --delete|-d)             echo "--delete (removes a ref, pushes no content)"; return 0 ;;
+      --tags)                  tags_only=1 ;;
+      # --follow-tags pushes the branch AND its tags, so the branch still wants linting.
+      --follow-tags)           ;;
+      -*)                      ;;
+      *)                       positional+=("$arg") ;;
+    esac
+  done
+
+  [ "$tags_only" = 1 ] && { echo "--tags (tag push)"; return 0; }
+
+  # positional[0] is the remote; the rest are refspecs. With no refspec, git pushes the
+  # current branch, so that is what we have to resolve and judge.
+  local -a refs=()
+  if [ "${#positional[@]}" -gt 1 ]; then
+    refs=("${positional[@]:1}")
+  else
+    local head
+    head="$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    [ -n "$head" ] && refs=("$head")
+  fi
+
+  # No resolvable ref (detached HEAD, or a form we do not model) is not an exemption —
+  # it falls through and gets linted. Erring toward running the checks is safe here;
+  # erring toward skipping them is the silent pass.
+  [ "${#refs[@]}" -eq 0 ] && return 1
+
+  local ref src
+  for ref in "${refs[@]}"; do
+    # A refspec is [+]<src>[:<dst>]; only the source side names something local.
+    src="${ref%%:*}"
+    src="${src#+}"
+    case "$src" in
+      refs/tags/*) continue ;;
+      release-please--*|release-please/*) continue ;;
+      refs/heads/release-please--*|refs/heads/release-please/*) continue ;;
+    esac
+    # Ask git rather than pattern-matching version strings: a tag is whatever the repo
+    # says is a tag.
+    if git -C "$repo" rev-parse --verify --quiet "refs/tags/$src" >/dev/null 2>&1; then
+      continue
+    fi
+    # This ref is neither a tag nor a release branch, so the push carries real source.
+    return 1
+  done
+
+  echo "only tags and release-please branches"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Unit discovery
+#
+# "Language-agnostic dispatch" means a repo is not one language — argosy is Go + Vue +
+# Flutter, lyceum is Go + TS + Flutter. So we find every buildable unit and check each,
+# rather than matching the repo to a single toolchain and stopping.
+# ---------------------------------------------------------------------------
+
+# Directories that never contain source we own — or, in `.claude`'s case, contain source
+# that is emphatically someone else's. Claude Code puts nested worktrees under
+# `.claude/worktrees/`, and lyceum has one: without this prune the gate discovers a second
+# copy of the repo, lints a branch nobody is pushing, and reports findings against files
+# that are not in the diff.
+PRUNE=(-name node_modules -o -name vendor -o -name .git -o -name dist -o -name build
+       -o -name .next -o -name .nuxt -o -name target -o -name .venv -o -name .claude)
+
+find_markers() {
+  # $1 repo root, $2 marker filename. Depth 4 covers every layout in the estate
+  # (argosy/mobile/argosy/pubspec.yaml is the deepest) without walking media trees.
+  find "$1" -maxdepth 4 \( "${PRUNE[@]}" \) -prune -o -name "$2" -print 2>/dev/null | sort
+}
+
+# Which package manager runs this unit's scripts? The lockfile is the authority; the
+# estate is mostly bun with cta-watch on npm.
+pkg_manager() {
+  local dir="$1"
+  if   [ -f "$dir/bun.lockb" ] || [ -f "$dir/bun.lock" ]; then echo bun
+  elif [ -f "$dir/pnpm-lock.yaml" ];                      then echo pnpm
+  elif [ -f "$dir/yarn.lock" ];                           then echo yarn
+  elif [ -f "$dir/package-lock.json" ];                   then echo npm
+  else echo ""
+  fi
+}
+
+# Walk up to the repo root looking for a lockfile — a workspace member has none of its
+# own, the root holds it.
+pkg_manager_for() {
+  local dir="$1" repo="$2" pm
+  while :; do
+    pm="$(pkg_manager "$dir")"
+    [ -n "$pm" ] && { echo "$pm"; return; }
+    [ "$dir" = "$repo" ] && break
+    dir="$(dirname "$dir")"
+  done
+  # No lockfile anywhere: bun is the estate default and can run any package.json script.
+  command -v bun >/dev/null 2>&1 && echo bun || echo npm
+}
+
+has_script() {
+  jq -e --arg s "$2" '.scripts // {} | has($s)' "$1/package.json" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# Running a check
+#
+# Every check funnels through here so that the skip-vs-block distinction is made in one
+# place, and so that no check can run without a timeout.
+# ---------------------------------------------------------------------------
+
+FAILURES=""   # blocking findings, formatted for the report
+SKIPS=""      # things we could not run, reported but never blocking
+RAN=0
+
+record_failure() {
+  FAILURES="${FAILURES}
+── $1
+$2
+"
+}
+
+record_skip() {
+  SKIPS="${SKIPS}
+── skipped: $1 ($2)"
+}
+
+# run_check <label> <dir> <command...>
+# Exit 0 -> pass. Non-zero -> the caller decides whether the output is a finding or a
+# setup failure, because only the caller knows what its tool's setup failures look like.
+CHECK_OUT=""
+run_check() {
+  local label="$1" dir="$2"; shift 2
+  RAN=$((RAN + 1))
+  CHECK_OUT="$(cd "$dir" && timeout "$CHECK_TIMEOUT" "$@" 2>&1)"
+  local rc=$?
+  if [ "$rc" = 124 ]; then
+    record_skip "$label" "timed out after ${CHECK_TIMEOUT}s"
+    return 0
+  fi
+  return "$rc"
+}
+
+# Does this output carry real, file-anchored diagnostics? Used to tell a genuine finding
+# from a toolchain that could not start. `go vet` is the case that forces this: argosy's
+# CI runs `make ensure-embed` before vet, so on a fresh tree vet fails with a build error
+# that says nothing about code quality. Blocking on that would make the gate fire on
+# every argosy push forever.
+has_diagnostics() {
+  printf '%s' "$1" | grep -qE '^[^[:space:]]*\.(go|ts|tsx|js|jsx|vue|dart|rs):[0-9]+'
+}
+
+# ---------------------------------------------------------------------------
+# The language checks
+# ---------------------------------------------------------------------------
+
+check_go() {
+  local dir="$1" rel="$2" out files
+
+  # gofmt over git-tracked files rather than `./...`: it is exact about what is ours,
+  # and it skips testdata and generated trees that git already knows to ignore.
+  files="$(cd "$dir" && git ls-files -- '*.go' 2>/dev/null)"
+  if [ -n "$files" ]; then
+    RAN=$((RAN + 1))
+    local errs
+    errs="$(mktemp)"
+    # stdout is the list of files that need formatting; stderr is parse errors. They mean
+    # different things and must not be blended — "needs gofmt: syntax error" reads as a
+    # formatting nit and is actually broken code.
+    out="$(cd "$dir" && printf '%s\n' "$files" | timeout "$CHECK_TIMEOUT" xargs -r gofmt -l 2>"$errs")"
+    if [ -n "$out" ]; then
+      record_failure "gofmt — $rel" "$(printf '%s' "$out" | sed 's|^|  needs gofmt: |')"
+    fi
+    if [ -s "$errs" ]; then
+      record_failure "gofmt could not parse — $rel" "$(cat "$errs")"
+    fi
+    rm -f "$errs"
+  fi
+
+  if command -v go >/dev/null 2>&1; then
+    if ! run_check "go vet — $rel" "$dir" go vet ./...; then
+      if has_diagnostics "$CHECK_OUT"; then
+        record_failure "go vet — $rel" "$CHECK_OUT"
+      else
+        # Build/setup failure, not a vet finding. See has_diagnostics.
+        record_skip "go vet — $rel" "the package would not build; CI will say why"
+      fi
+    fi
+  else
+    record_skip "go vet — $rel" "go is not on PATH"
+  fi
+}
+
+check_node() {
+  local dir="$1" rel="$2" pm="$3" script out
+
+  # Without an install there is no eslint and no prettier to run. Skip, loudly: blocking
+  # here would fail every fresh checkout, which is exactly how a gate gets disabled.
+  if [ ! -d "$dir/node_modules" ]; then
+    record_skip "$rel" "node_modules is not installed"
+    return
+  fi
+
+  for script in format:check lint; do
+    has_script "$dir" "$script" || continue
+    if ! run_check "$script — $rel" "$dir" "$pm" run "$script"; then
+      record_failure "$pm run $script — $rel" "$CHECK_OUT"
+    fi
+  done
+}
+
+check_dart() {
+  local dir="$1" rel="$2"
+  if ! command -v dart >/dev/null 2>&1; then
+    record_skip "dart format — $rel" "dart is not on PATH"
+    return
+  fi
+  # --output=none is what makes this a check. Without it, dart format REWRITES the tree.
+  if ! run_check "dart format — $rel" "$dir" dart format --output=none --set-exit-if-changed .; then
+    record_failure "dart format — $rel" "$CHECK_OUT"
+  fi
+}
+
+check_rust() {
+  local dir="$1" rel="$2"
+  if ! command -v cargo >/dev/null 2>&1; then
+    record_skip "cargo fmt — $rel" "cargo is not on PATH"
+    return
+  fi
+  if ! run_check "cargo fmt — $rel" "$dir" cargo fmt --check; then
+    record_failure "cargo fmt — $rel" "$CHECK_OUT"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+PLAN=""   # for --explain
+
+gather() {
+  local repo="$1" explain_only="${2:-0}"
+  local marker dir rel pm
+
+  for marker in $(find_markers "$repo" go.mod); do
+    dir="$(dirname "$marker")"; rel="${dir#"$repo"/}"; [ "$dir" = "$repo" ] && rel=.
+    PLAN="${PLAN}
+  go     $rel  ->  gofmt -l, go vet ./..."
+    [ "$explain_only" = 1 ] || check_go "$dir" "$rel"
+  done
+
+  for marker in $(find_markers "$repo" package.json); do
+    dir="$(dirname "$marker")"; rel="${dir#"$repo"/}"; [ "$dir" = "$repo" ] && rel=.
+    # Only a unit if it actually defines a check. "No-op cleanly when a repo has none"
+    # is the common case in this estate, not the edge case.
+    has_script "$dir" lint || has_script "$dir" format:check || continue
+    # Nearest ancestor wins: interlock's root `eslint .` already covers its workspace
+    # members, and running both would double every finding.
+    case "$PLAN" in *"node   ${rel%%/*}  "*) [ "$rel" != "${rel%%/*}" ] && continue ;; esac
+    pm="$(pkg_manager_for "$dir" "$repo")"
+    PLAN="${PLAN}
+  node   $rel  ->  $pm run $(has_script "$dir" format:check && printf 'format:check, ')$(has_script "$dir" lint && printf 'lint')"
+    [ "$explain_only" = 1 ] || check_node "$dir" "$rel" "$pm"
+  done
+
+  for marker in $(find_markers "$repo" pubspec.yaml); do
+    dir="$(dirname "$marker")"; rel="${dir#"$repo"/}"
+    PLAN="${PLAN}
+  dart   $rel  ->  dart format --output=none --set-exit-if-changed"
+    [ "$explain_only" = 1 ] || check_dart "$dir" "$rel"
+  done
+
+  for marker in $(find_markers "$repo" Cargo.toml); do
+    dir="$(dirname "$marker")"; rel="${dir#"$repo"/}"; [ "$dir" = "$repo" ] && rel=.
+    PLAN="${PLAN}
+  rust   $rel  ->  cargo fmt --check"
+    [ "$explain_only" = 1 ] || check_rust "$dir" "$rel"
+  done
+}
+
+build_report() {
+  local body count
+  body="$(printf '%s' "$FAILURES" | sed '/^$/d')"
+  count="$(printf '%s\n' "$body" | grep -c '^── ' || true)"
+
+  if [ "$(printf '%s\n' "$body" | wc -l)" -gt "$MAX_REPORT_LINES" ]; then
+    body="$(printf '%s\n' "$body" | head -n "$MAX_REPORT_LINES")
+  … output truncated; run the failing command above to see the rest."
+  fi
+
+  printf '%s\n\n%s\n\n%s' \
+    "Push blocked: $count check(s) failed locally. CI would have failed on these." \
+    "$body" \
+    "Fix them and push again — this is the same lint/format CI runs, so a green gate here means no lint-only red run there. To bypass once: git push --no-verify"
+}
+
+main() {
+  [ "${CONSTRUCT_LINT_GATE:-1}" = 0 ] && allow "lint-gate: disabled via CONSTRUCT_LINT_GATE=0"
+
+  local cwd command explain=0
+  case "${1:-}" in
+    --version) echo "lint-gate.sh v$LINT_GATE_VERSION"; exit 0 ;;
+    --check)   MODE=check; cwd="${2:-$PWD}"; command="git push" ;;
+    --explain) MODE=check; explain=1; cwd="${2:-$PWD}"; command="git push" ;;
+    "")
+      command -v jq >/dev/null 2>&1 || allow
+      local payload; payload="$(cat)"
+      command="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)"
+      cwd="$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)"
+      [ -n "$cwd" ] || cwd="$PWD"
+      find_git_push "$command" || allow
+      ;;
+    *) echo "usage: lint-gate.sh [--check|--explain [dir]|--version]" >&2; exit 2 ;;
+  esac
+
+  command -v jq >/dev/null 2>&1 || allow "lint-gate: jq is not on PATH"
+  command -v git >/dev/null 2>&1 || allow "lint-gate: git is not on PATH"
+
+  local repo
+  repo="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || allow "lint-gate: not a git repository"
+  [ -n "$repo" ] || allow "lint-gate: not a git repository"
+
+  if [ "$MODE" = hook ]; then
+    local reason
+    # Unquoted on purpose: PUSH_ARGS is a flat argument string that must word-split into
+    # the push's individual arguments.
+    # shellcheck disable=SC2086
+    if reason="$(push_exemption "$repo" $PUSH_ARGS)"; then
+      allow "lint-gate: exempt ($reason)"
+    fi
+  fi
+
+  if [ "$explain" = 1 ]; then
+    gather "$repo" 1
+    [ -n "$PLAN" ] && printf 'lint-gate would run in %s:%s\n' "$repo" "$PLAN" \
+                   || printf 'lint-gate found nothing to check in %s\n' "$repo"
+    exit 0
+  fi
+
+  # The whole-run ceiling. gather() runs in this shell (it accumulates state), so the
+  # ceiling is enforced by a watchdog that kills us; the ERR trap then allows.
+  # >/dev/null 2>&1 detaches the child from our stdout; see stop_watchdog.
+  ( sleep "$TOTAL_TIMEOUT" && kill -TERM $$ 2>/dev/null ) >/dev/null 2>&1 &
+  WATCHDOG_PID=$!
+  trap 'allow' TERM
+
+  gather "$repo" 0
+  stop_watchdog
+
+  if [ -n "$(printf '%s' "$FAILURES" | tr -d '[:space:]')" ]; then
+    deny "$(build_report)"
+  fi
+
+  if [ "$MODE" = check ]; then
+    printf 'lint-gate: %d check(s) passed in %s\n' "$RAN" "$repo"
+    [ -n "$SKIPS" ] && printf '%s\n' "$SKIPS"
+    exit 0
+  fi
+  allow
+}
+
+main "$@"
