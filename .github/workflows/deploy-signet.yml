@@ -1,83 +1,203 @@
 name: Deploy Signet
 
-# Auto-deploy the Signet daemon on release (SERV-62). Signet's own release
-# workflow attaches the linux-amd64 binary + .sha256 to the GitHub Release, then
-# fires a `signet-released` repository_dispatch here with the tag in the payload
-# (SGNT-12).
+# Signet's prod version is a PIN, and this workflow is what applies it (SERV-130).
 #
-# The job runs on the self-hosted runner because the daemon lives on that host,
-# and sits behind a required reviewer so the credential daemon is never bounced
-# unreviewed.
+# It used to be the last first-party deploy path still on the pre-SERV-73 shape: a
+# release deployed itself straight to prod, with no pin, no rollback and no report to
+# the delivery ledger. `git log -p versions.env` is the estate's rollback index and
+# signet did not appear in it at all.
 #
-# The environment is `signet-prod`, not the existing `home-server`, for two
-# reasons. `home-server` is shared with deploy.yml, so a reviewer rule there
-# would also gate every docker stack deploy — a much bigger behavioural change
-# than this ticket intends. And IDEA-19 models delivery as environment × service
-# with GitHub Environments as the gate, so naming by service and environment
-# lets a future `signet-dev` sit beside this one instead of forcing a rename.
+# Now it matches every other first-party service, with one file substituted:
+#
+#   promote.yml writes versions-host.env  ->  this workflow's path trigger fires
+#   ->  ansible installs that release      ->  the run reports to the ledger
+#
+# WHY A SECOND PIN FILE rather than a line in versions.env: deploy-scope.sh maps each
+# changed pin onto compose services and REFUSES a pin no image interpolates, which its
+# caller correctly reads as "pull the whole stack". A SIGNET_VERSION in versions.env
+# would therefore make every signet promote trigger a full prod stack pull — the exact
+# SERV-109 regression, arriving through the file that guards it. versions-host.env's
+# header carries the full argument.
+#
+# A RELEASE NO LONGER DEPLOYS. `signet-released` still arrives and is still useful, but
+# it announces rather than acts — see the `announce` job. That is the pipeline's own
+# step 3 semantics: a release makes a version AVAILABLE to promote; a human with a
+# reason moves prod.
 
 on:
+  # Converge prod to whatever versions-host.env currently pins. No inputs: a version
+  # this workflow could be handed directly would be a second way for prod to move, and
+  # removing the second way is most of what SERV-130 is. Use this to re-apply the pin
+  # after a failed run, which is also how the ledger gets a fresh row.
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Signet release tag to deploy, e.g. v1.2.0"
-        required: true
-        type: string
+  push:
+    branches: ["main"]
+    paths:
+      - "versions-host.env"
+  # Announce only. Never reaches the deploy job.
   repository_dispatch:
     types: [signet-released]
 
-# The job token is handed to a subprocess (gh, via ansible); it only ever needs
-# to read releases.
+# The job token is handed to a subprocess (gh, via ansible); it only ever needs to read
+# releases. Note the ledger report below authenticates with SWITCHYARD_DEPLOY_TOKEN, a
+# repo secret, and not with this — a deploy reporter has no business holding repository
+# write.
 permissions:
   contents: read
 
-concurrency:
-  # Never let two deploys race for the same binary and unit.
-  group: deploy-signet
-  cancel-in-progress: false
-
 jobs:
+  # ── A new release exists; nobody deployed it ────────────────────────────────────
+  #
+  # Signet's release.yml has fired `signet-released` at this repo since SGNT-12, and
+  # before SERV-130 that dispatch WAS the deploy. Dropping the trigger outright would
+  # have left signet's release workflow calling into nothing — a dangling contract in
+  # another repo, silently doing nothing, which is the failure shape this epic keeps
+  # finding (SERV-125's publish trigger that had never once fired).
+  #
+  # So it keeps its meaning and loses its authority: it records that prod is now behind
+  # and says how to move it.
+  announce:
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Say what was released, and what prod is pinned to
+        env:
+          RELEASED: ${{ github.event.client_payload.tag }}
+        run: |
+          set -euo pipefail
+          pinned="$(sed -n 's/^SIGNET_VERSION=//p' versions-host.env | tr -d '[:space:]')"
+
+          {
+            printf '## Signet %s is available\n\n' "${RELEASED:-<no tag in payload>}"
+            printf '| | |\n|---|---|\n'
+            printf '| Released | `%s` |\n' "${RELEASED:-unknown}"
+            printf '| Prod is pinned to | `%s` |\n' "${pinned:-unknown}"
+            printf '\n'
+            if [ -n "${RELEASED:-}" ] && [ "$RELEASED" = "${pinned:-}" ]; then
+              printf 'Prod is already pinned to this version. Nothing to do.\n'
+            else
+              printf '**This did not deploy anything** (SERV-130). A release makes a version\n'
+              printf 'available; moving prod is a deliberate act with a reason attached.\n\n'
+              printf 'Promote it from Actions > **Promote / Rollback a Version**: service `signet`,\n'
+              printf 'version `%s`, kind `promote`. That commits the pin and this workflow\n' "${RELEASED:-vX.Y.Z}"
+              printf 'takes it from there.\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Apply the pin ──────────────────────────────────────────────────────────────
   deploy:
+    if: github.event_name != 'repository_dispatch'
     runs-on: self-hosted
+
+    # NOTE: this environment currently carries a required reviewer, which made sense
+    # when a release auto-deployed itself here — that reviewer was the only human in
+    # the path. Now promote.yml gates on `production-promote` BEFORE the pin is even
+    # committed, so an ordinary promote asks for two approvals for one decision.
+    #
+    # CLAUDE.md makes exactly this argument for `home-server`: gate the promote, not
+    # every ordinary deploy. Dropping the required reviewer here would follow it. That
+    # is a dashboard change, not a file change, so it is left deliberately undone and
+    # written down rather than assumed — this workflow is correct either way.
     environment: signet-prod
-    # cancel-in-progress is false, so a hung run would hold the concurrency
-    # group indefinitely without this.
+
+    # cancel-in-progress is false, so a hung run would hold the group indefinitely
+    # without the job timeout below. Scoped to this job so an `announce` run never
+    # queues behind a deploy waiting on its approval, which can be a long wait.
+    concurrency:
+      group: deploy-signet
+      cancel-in-progress: false
     timeout-minutes: 15
+
+    env:
+      # Must match `signet_health_addr` in ansible/roles/signet/defaults/main.yml,
+      # which is the FIRST address of the unit's comma-separated bind list. Stated in
+      # one place here rather than re-derived: the defaults compute it through Jinja
+      # from `signet_addr`, and a bash re-implementation of that would be a third
+      # spelling of the same fact. A mismatch fails as "no response" — visibly — not
+      # as a wrong version quietly reported to the ledger.
+      SIGNET_HEALTH_URL: http://127.0.0.1:4010/healthz
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Resolve the release tag
-        id: tag
-        env:
-          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
-          INPUT_TAG: ${{ inputs.tag }}
+      - name: Read the pinned version
+        id: pin
+        # The pin is the ONLY source of the version now. A workflow_dispatch carries
+        # no tag and a push carries no payload, so there is nothing else to read and
+        # no branch where an unpinned version can reach the box.
         run: |
-          TAG="${INPUT_TAG:-$DISPATCH_TAG}"
-          if [ -z "$TAG" ]; then
-            echo "No tag supplied by either trigger." >&2
-            exit 1
-          fi
-          # Refuse anything that is not a plain version tag: this value reaches
-          # a shell command, and repository_dispatch payloads are attacker-
-          # controlled by anyone who can call the API with a repo token.
-          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Refusing malformed tag: $TAG" >&2
-            exit 1
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Deploying Signet $TAG"
+          set -euo pipefail
+          # Whitespace is stripped; quotes deliberately are NOT. Nothing but this repo's
+          # own readers parse this file, so the unquoted form is the only one it needs —
+          # and letting the regex below reject `SIGNET_VERSION="v1.9.1"` by name beats
+          # quietly accepting a second spelling of the same value.
+          TAG="$(sed -n 's/^SIGNET_VERSION=//p' versions-host.env | tr -d '[:space:]')"
 
-      # The runner is a systemd service, so it never sources the user's shell
-      # profile and pip's user-install bin dir is off PATH — which is where
-      # ansible lives. deploy.yml never hit this because docker is on the system
-      # PATH; this is the first workflow here to shell out to a user-installed
-      # tool. GITHUB_PATH applies to subsequent steps, not this one.
+          if [ -z "$TAG" ]; then
+            echo "::error::SIGNET_VERSION is unset or empty in versions-host.env."
+            echo "An empty environment variable is not a value (CLAUDE.md). Refusing to"
+            echo "deploy rather than resolving it to something."
+            exit 1
+          fi
+
+          # The same guard the dispatch path used to carry. It matters less now that
+          # the value comes from a reviewed file rather than an API payload, and it is
+          # kept anyway: this string reaches a shell and `gh release download`, and a
+          # pin file is exactly the kind of thing a future workflow might write.
+          #
+          # FULL patch version required. versions.env pins major.minor and lets the
+          # registry resolve the newest patch; there is no registry here, and
+          # `gh release download v1.9` 404s.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Refusing malformed pin: $TAG"
+            echo "Expected a full release tag such as v1.9.1."
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Pinned to $TAG"
+
+      - name: Read the promote's kind and reason
+        # promote.yml does not deploy — it commits the pin and lets the trigger above
+        # fire — so this run is the only thing that can carry its trailers to the
+        # ledger. Same read as deploy.yml's, for the same reason: a reason is free text
+        # written by a human under pressure, and a subject-line regex mangles the ones
+        # containing a colon.
+        #
+        # PUSH ONLY, and that guard is load-bearing rather than tidy. On a push the head
+        # commit IS signet's promote, so its trailers describe this deploy. On a
+        # workflow_dispatch the head commit is whatever last landed on main — very
+        # plausibly a promote of some OTHER service, since those are the commits that
+        # land most often. Reading it there would file a signet convergence run under a
+        # lyceum rollback's reason, and `Delivery-Kind: rollback` would flip the row to
+        # `rolled_back` on a run that rolled nothing back.
+        #
+        # Empty on a dispatch is the correct answer anyway: nobody promoted it, so there
+        # is no reason to record and the ledger omits the note rather than inventing one.
+        if: github.event_name == 'push'
+        run: |
+          set -uo pipefail
+          kind="$(git log -1 --format='%(trailers:key=Delivery-Kind,valueonly)' | head -1 | tr -d '\r')"
+          reason="$(git log -1 --format='%(trailers:key=Delivery-Reason,valueonly)' | head -1 | tr -d '\r')"
+          echo "DELIVERY_KIND=${kind}" >> "$GITHUB_ENV"
+          # The ledger bounds `note` at 500 characters and rejects a longer one
+          # outright, so trim here: a verbose reason costs its tail, not the report.
+          echo "DELIVERY_NOTE=${reason:0:500}" >> "$GITHUB_ENV"
+          if [ -n "$kind" ]; then
+            echo "This deploy is a ${kind}: ${reason:-<no reason given>}"
+          fi
+
+      # The runner is a systemd service, so it never sources the user's shell profile
+      # and pip's user-install bin dir is off PATH — which is where ansible lives.
+      # GITHUB_PATH applies to subsequent steps, not this one.
       - name: Put user-installed tools on PATH
         run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # Fail here with a clear reason rather than as `command not found` from
-      # inside the deploy step.
+      # Fail here with a clear reason rather than as `command not found` from inside
+      # the deploy step (the SERV-62 trap, hit twice).
       - name: Check ansible is available
         run: |
           if ! command -v ansible-playbook >/dev/null; then
@@ -87,40 +207,188 @@ jobs:
           fi
           ansible-playbook --version | head -1
 
-      # ansible/inventory.ini is gitignored, and checkout runs `git clean -ffdx`,
-      # so the repo copy is never present here. Ansible treats a missing
-      # inventory as "no hosts matched" and exits 0 — the deploy would go green
-      # having done nothing, skipping the very version check that exists to
-      # catch a stale daemon. Write our own instead, outside the workspace so
-      # the next checkout cannot remove it. The runner *is* the target host.
+      # ansible/inventory.ini is gitignored, and checkout runs `git clean -ffdx`, so the
+      # repo copy is never present here. Ansible treats a missing inventory as "no hosts
+      # matched" and exits 0 — the deploy would go green having done nothing, skipping
+      # the very version check that exists to catch a stale daemon. Write our own,
+      # outside the workspace so the next checkout cannot remove it.
       - name: Write a local inventory
         run: |
           printf '[server]\nlocalhost ansible_connection=local\n' \
             > "$RUNNER_TEMP/signet-inventory.ini"
           cat "$RUNNER_TEMP/signet-inventory.ini"
 
+      # ── the movement filter's baseline ────────────────────────────────────────
+      #
+      # SERV-117's rule: a no-op is not a deploy. This workflow now fires on a plain
+      # `workflow_dispatch` convergence run as well as on a pin change, so without a
+      # baseline a re-run would append a row per invocation to an append-only table
+      # that SWY-187 renders as history.
+      #
+      # Read from /healthz rather than from `signet version`, deliberately: the
+      # question is what is SERVING, and a binary on disk that the unit has not picked
+      # up answers the wrong one. Soft-failing — signet being down before the deploy
+      # is a legitimate state and reads as "no version", which correctly counts as
+      # movement once something starts answering.
+      - name: Snapshot the version prod is serving, before
+        id: before
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          v="$(curl -fsS --max-time 5 "$SIGNET_HEALTH_URL" 2>/dev/null \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")' 2>/dev/null || true)"
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+          echo "before: ${v:-<not serving>}"
+
       # Downloads the release asset, verifies its sha256, installs it atomically,
-      # restarts the unit through the scoped sudo rule, and confirms /healthz
-      # reports the new version. Idempotent: a host already on the target
-      # version is left alone. Only builtin modules are used, so no collections
-      # are installed.
+      # restarts the unit through the scoped sudo rule, and confirms /healthz reports
+      # the new version. Idempotent: a host already on the target version is left
+      # alone, which since SERV-130 is actually true rather than merely intended.
       - name: Deploy the release
+        id: deploy
         env:
           # `gh release download` needs a token; the default job token can read
           # releases from the signet repo when it is public, and SIGNET_RELEASE_TOKEN
           # overrides it for the private case.
           GH_TOKEN: ${{ secrets.SIGNET_RELEASE_TOKEN || github.token }}
-          SIGNET_VERSION: ${{ steps.tag.outputs.tag }}
+          SIGNET_VERSION: ${{ steps.pin.outputs.tag }}
         run: |
           ansible-playbook ansible/ops/update-signet.yml \
             -i "$RUNNER_TEMP/signet-inventory.ini" \
             -e "signet_version=$SIGNET_VERSION"
 
-      # Reached only when the playbook succeeded, which means its version-aware
-      # health check already passed. Reported from the same source rather than
-      # re-probing, so the summary cannot claim more than was verified.
-      - name: Report the deployed version
-        env:
-          SIGNET_VERSION: ${{ steps.tag.outputs.tag }}
+      - name: Snapshot the version prod is serving, after
+        id: after
+        if: always()
+        continue-on-error: true
         run: |
-          echo "### Signet $SIGNET_VERSION deployed and verified serving" >> "$GITHUB_STEP_SUMMARY"
+          set -uo pipefail
+          v="$(curl -fsS --max-time 5 "$SIGNET_HEALTH_URL" 2>/dev/null \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")' 2>/dev/null || true)"
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+          echo "after: ${v:-<not serving>}"
+
+      # ── the delivery ledger ───────────────────────────────────────────────────
+      #
+      # SERV-117 wired the three call sites that actually deploy — deploy.yml,
+      # deploy-dev.yml, and promote.yml via its versions.env commit. This one was not
+      # among them, so SERV-128 gave signet an OBSERVED row with no provenance: no
+      # gate result, no actor, no run link, and no way to render `in flight` or
+      # `failed`. The 2026-08-23 failure is precisely what a `failed` row is for, and
+      # the matrix showed nothing at all.
+      #
+      # delivery-facts.sh and delivery-reportable.sh are NOT used and NOT changed:
+      # both read `docker compose config --images` and filter against the service
+      # inventory, and signet is a host binary under systemd. Its report is composed
+      # here instead. That was SERV-128's conclusion about the collectors and it holds
+      # for the producer too — a host daemon does not make the compose-shaped scripts
+      # grow a special case.
+      - name: Decide whether this deploy is reportable
+        id: reportable
+        if: always()
+        continue-on-error: true
+        env:
+          BEFORE: ${{ steps.before.outputs.version }}
+          AFTER: ${{ steps.after.outputs.version }}
+          TARGET: ${{ steps.pin.outputs.tag }}
+        run: |
+          set -uo pipefail
+
+          # Status is written first and unconditionally. A deploy that goes red in the
+          # Actions tab must not go green in the ledger.
+          status=succeeded
+          if [ "${{ steps.deploy.outcome }}" != "success" ]; then
+            status=failed
+          elif [ "${DELIVERY_KIND:-}" = "rollback" ]; then
+            # A successful rollback is not a plain success — the matrix renders it
+            # with its own alert, because prod is running deliberately-older code and
+            # the page should say so rather than showing a calm green row.
+            status=rolled_back
+          fi
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+
+          # WHICH VERSION THE ROW CARRIES depends on whether the deploy worked, and
+          # the asymmetry is deliberate.
+          #
+          # On success: what /healthz reports, never the tag that was requested. That
+          # is SERV-117's rule and it is what keeps a report honest — the daemon is
+          # the only thing that knows what is executing. Bare, because signet reports
+          # bare since SGNT-38, and the ledger compares with strict equality.
+          #
+          # On failure: the TARGET, bare. The row means "the attempt to reach this
+          # version failed". Reporting the still-serving old version instead would
+          # file `1.9.1 failed` while 1.9.1 is up and healthy — which is both wrong
+          # and the opposite of useful during an incident.
+          if [ "$status" = "failed" ]; then
+            version="$(printf '%s' "$TARGET" | sed 's/^v//')"
+          else
+            version="$(printf '%s' "$AFTER" | sed 's/^v//')"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          # THE MOVEMENT FILTER, and it applies to successes only.
+          #
+          # A failed deploy is not a no-op anyone wants hidden, and it is the one row
+          # with no substitute: the reconciler cannot observe a deploy that did not
+          # happen. A SUCCESSFUL run that changed nothing is a convergence check, not
+          # a deploy, and `deployments` is append-only.
+          if [ "$status" != "failed" ] && [ "$BEFORE" = "$AFTER" ]; then
+            echo "report=" >> "$GITHUB_OUTPUT"
+            echo "Already serving ${AFTER:-<nothing>} before this run — nothing moved, nothing to report."
+            exit 0
+          fi
+
+          if [ -z "$version" ]; then
+            echo "report=" >> "$GITHUB_OUTPUT"
+            echo "::warning::No version to report — /healthz gave nothing and there is no target to fall back on."
+            exit 0
+          fi
+
+          echo "report=1" >> "$GITHUB_OUTPUT"
+          echo "reporting signet=${version} as ${status}"
+
+      - name: Report the deploy to the delivery ledger
+        if: always() && steps.reportable.outputs.report != ''
+        # The ledger observes deploys; it does not gate them. A Switchyard that is
+        # down must never be able to fail a signet deploy — least of all during the
+        # rollback that is trying to fix it.
+        continue-on-error: true
+        env:
+          RD_URL: http://localhost:4002
+          RD_TOKEN: ${{ secrets.SWITCHYARD_DEPLOY_TOKEN }}
+          RD_ENVIRONMENT: prod
+          RD_SERVICE: signet
+          RD_VERSION: ${{ steps.reportable.outputs.version }}
+          RD_STATUS: ${{ steps.reportable.outputs.status }}
+          RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RD_NOTE: ${{ env.DELIVERY_NOTE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RD_TOKEN:-}" ]; then
+            echo "::warning::SWITCHYARD_DEPLOY_TOKEN is not set — this deploy will not reach the ledger."
+            exit 0
+          fi
+          ./scripts/report-deploy.sh
+
+      - name: Summary
+        if: always()
+        env:
+          TARGET: ${{ steps.pin.outputs.tag }}
+          BEFORE: ${{ steps.before.outputs.version }}
+          AFTER: ${{ steps.after.outputs.version }}
+          STATUS: ${{ steps.reportable.outputs.status }}
+        run: |
+          {
+            printf '## Signet %s\n\n' "${STATUS:-unknown}"
+            printf '| | |\n|---|---|\n'
+            printf '| Pinned to | `%s` |\n' "${TARGET:-unknown}"
+            printf '| Serving before | `%s` |\n' "${BEFORE:-not serving}"
+            printf '| Serving after | `%s` |\n' "${AFTER:-not serving}"
+            if [ -n "${DELIVERY_KIND:-}" ]; then
+              printf '| Kind | %s |\n' "$DELIVERY_KIND"
+              printf '\n**Reason:** %s\n' "${DELIVERY_NOTE:-<none>}"
+            fi
+            if [ "${BEFORE:-}" = "${AFTER:-}" ] && [ "${STATUS:-}" != "failed" ]; then
+              printf '\nNothing moved — this was a convergence run, and no ledger row was written.\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

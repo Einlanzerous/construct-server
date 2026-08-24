@@ -5,11 +5,23 @@ name: Promote / Rollback a Version
 # directly: one code path means one set of bugs, and rollback is the path you least want
 # to be the less-tested one — it runs when prod is already broken.
 #
-# What it actually does is edit one line of versions.env and commit it. It does not pull
+# What it actually does is edit one line of a pins file and commit it. It does not pull
 # an image or touch a container, because deploy.yml already fires on a push that changes
 # versions.env (SERV-96) and is the only thing that deploys (SERV-76). A promote that
 # recreated containers itself would be a second way for prod to change, which is exactly
 # what that ticket spent its length removing.
+#
+# TWO PINS FILES, ONE WORKFLOW (SERV-130). Every container pins in versions.env and is
+# deployed by deploy.yml. Signet is a host binary under systemd: it pins SIGNET_VERSION
+# in versions-host.env and is deployed by deploy-signet.yml, which carries the matching
+# path trigger. Everything above the file split is identical — the direction, the
+# required reason, the production-promote gate, the trailers — because "make prod run
+# this exact version" is the same operation whatever runs it.
+#
+# The split itself is forced rather than chosen: deploy-scope.sh maps each changed pin in
+# versions.env onto compose services and refuses one that no image interpolates, which
+# its caller reads as "pull the whole stack". A signet pin in versions.env would make
+# every signet promote pull and recreate the entire prod stack.
 #
 # THE RECREATE IS NOW SCOPED TO THE PINS THIS WORKFLOW MOVED — with caveats, listed below.
 # Three earlier versions of this comment got the bound wrong in both directions, so state
@@ -72,9 +84,10 @@ on:
           - lyceum
           - placard
           - purser
+          - signet
           - switchyard
       version:
-        description: "Target tag — major.minor (1.11). A sha only to roll back to a pin from before SERV-125"
+        description: "Target tag — major.minor (1.11). signet takes a FULL release tag (v1.9.1). A sha only to roll back to a pin from before SERV-125"
         required: true
         type: string
       kind:
@@ -224,15 +237,38 @@ jobs:
         # One variable per SOURCE REPO, not per image — a repo's backend and frontend ship
         # from one release, so 11 variables cover 15 images (versions.env). The service
         # names in the dropdown map onto the keys by uppercasing, cook_book included.
+        #
+        # SIGNET IS THE ONE EXCEPTION, in both the key and the file (SERV-130). It is a
+        # host binary under systemd rather than a container, so it has no image, no
+        # registry tag and no compose service — its pin is `SIGNET_VERSION` and it lives
+        # in versions-host.env.
+        #
+        # The separate file is not cosmetic. deploy-scope.sh maps every changed pin in
+        # versions.env onto compose services and REFUSES one that no image interpolates,
+        # which its caller correctly reads as "pull the whole stack" — so a SIGNET_VERSION
+        # in versions.env would make each signet promote trigger a full prod stack pull
+        # and recreate. That is the SERV-109 regression arriving through the file that
+        # guards against it. versions-host.env's header carries the argument in full.
         env:
           SERVICE: ${{ inputs.service }}
         run: |
           set -euo pipefail
-          key="$(printf '%s' "$SERVICE" | tr '[:lower:]' '[:upper:]')_TAG"
+          if [ "$SERVICE" = "signet" ]; then
+            key=SIGNET_VERSION
+            file=versions-host.env
+          else
+            key="$(printf '%s' "$SERVICE" | tr '[:lower:]' '[:upper:]')_TAG"
+            file=versions.env
+          fi
           echo "PIN_KEY=$key" >> "$GITHUB_ENV"
-          echo "Service '$SERVICE' pins via $key"
+          echo "PIN_FILE=$file" >> "$GITHUB_ENV"
+          echo "Service '$SERVICE' pins via $key in $file"
 
       - name: Log in to GitHub Container Registry
+        # Skipped for signet, which has no image: its artifact is a GitHub Release asset,
+        # so there is no manifest to read and nothing to authenticate to. The next step
+        # verifies it against the releases API instead.
+        if: inputs.service != 'signet'
         # Needed to read manifests in the next step, and it has to be the PAT rather than
         # GITHUB_TOKEN: these packages are published from the *service* repos, and a
         # repo's GITHUB_TOKEN can only read packages linked to that repo. deploy.yml
@@ -260,9 +296,116 @@ jobs:
         # valid, and deploy.yml's assertion only rejects `:latest` and empty. The deploy
         # would fail at `docker compose pull` with the bad pin already on main — worst
         # during a rollback, which runs when prod is already broken.
+        if: inputs.service != 'signet'
         env:
           VERSION: ${{ inputs.version }}
         run: ./scripts/verify-tag.sh "$PIN_KEY" "$VERSION"
+
+      - name: Verify the target release exists, with its binary
+        # Signet's half of the pre-flight above. verify-tag.sh is deliberately not
+        # taught about this: it derives its image list from docker-compose.yml, and a
+        # host binary has no entry there — it would exit 2 on "no image uses
+        # ${SIGNET_VERSION}", which is a correct refusal with a misleading reason.
+        #
+        # THE ASSET IS CHECKED, NOT JUST THE TAG, and SERV-125 is why. Both argosy and
+        # drydock cut releases normally for months while their publish workflows never
+        # once fired, so the tags existed and no artifact behind them ever did. A
+        # release-exists check would have passed every one of them. Here the same shape
+        # would commit a pin that `gh release download` then 404s on, mid-deploy, with
+        # the bad pin already on main.
+        #
+        # A FULL patch tag is required, not major.minor: versions.env lets the registry
+        # resolve the newest patch behind `1.12`, and a releases API has nothing to
+        # resolve. Checked explicitly so `v1.9` fails here saying so, rather than as a
+        # download 404 later.
+        if: inputs.service == 'signet'
+        env:
+          GH_TOKEN: ${{ secrets.SIGNET_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: '$VERSION' is not a full signet release tag."
+            echo "Expected vMAJOR.MINOR.PATCH, e.g. v1.9.1."
+            echo
+            echo "Unlike the container pins, signet cannot take major.minor: there is no"
+            echo "registry to resolve the newest patch, and 'gh release download v1.9'"
+            echo "has nothing to match. Nothing was committed."
+            exit 1
+          fi
+
+          # Mirrors signet_asset in ansible/roles/signet/defaults/main.yml, which builds
+          # it from the BARE version — the release assets are named without the prefix.
+          bare="${VERSION#v}"
+          asset="signet-${bare}-linux-amd64"
+
+          # ── the multi-address bind floor ──────────────────────────────────────
+          #
+          # REFUSED HERE, not warned about, and not left to the deploy. The unit binds
+          # "127.0.0.1:4010,172.17.0.1:4010" and anything before v1.4.1 (SGNT-17) reads
+          # that whole comma string as one address, fails to bind, and — the unit being
+          # Restart=always — burns its start limit in about 25 seconds and lands in
+          # `failed`. It does not degrade to loopback-only. It takes the credential
+          # daemon down completely.
+          #
+          # ansible/roles/signet/tasks/binary.yml asserts the same floor, so this is
+          # belt and braces on purpose: that assert fires AFTER the pin is committed to
+          # main, which is the state verify-tag.sh exists to prevent for the container
+          # services — a rollback that fails to install, leaving prod broken with a bad
+          # pin now on main and someone mid-incident reading an ansible traceback.
+          #
+          # SERV-130 item 4: this hazard used to live only in a failure message nobody
+          # read until it was already too late. A rollback is initiated HERE.
+          floor=1.4.1
+          lowest="$(printf '%s\n%s\n' "$bare" "$floor" | sort -V | head -1)"
+          if [ "$bare" != "$floor" ] && [ "$lowest" = "$bare" ]; then
+            echo "Error: $VERSION predates v${floor}, which introduced multi-address SIGNET_ADDR (SGNT-17)."
+            echo
+            echo "The unit binds two addresses. An older binary cannot parse that and will"
+            echo "fail to bind AT ALL — including on loopback — then burn its restart limit"
+            echo "in ~25s and land in 'failed'. That is worse than whatever you are rolling"
+            echo "back from, and it takes every container's credential path with it."
+            echo
+            echo "To go back this far, pin signet_addr to a single host:port first. That is"
+            echo "an ansible change, so it cannot ride along with a pin commit and this"
+            echo "workflow will not pretend otherwise."
+            echo
+            echo "Nothing was committed."
+            exit 1
+          fi
+
+          if ! assets="$(gh release view "$VERSION" --repo Einlanzerous/signet \
+                          --json assets --jq '.assets[].name' 2>&1)"; then
+            echo "Error: no signet release tagged '$VERSION'."
+            echo
+            echo "$assets"
+            echo
+            echo "Releases available:"
+            gh release list --repo Einlanzerous/signet --limit 10 || true
+            echo
+            echo "Nothing was committed."
+            exit 1
+          fi
+
+          missing=
+          for want in "$asset" "${asset}.sha256"; do
+            printf '%s\n' "$assets" | grep -qx -- "$want" || missing="${missing} ${want}"
+          done
+
+          if [ -n "$missing" ]; then
+            echo "Error: release $VERSION exists but is missing:${missing}"
+            echo
+            echo "Assets it does carry:"
+            printf '%s\n' "$assets" | sed 's/^/  - /'
+            echo
+            echo "The deploy downloads the binary AND verifies its checksum, so both are"
+            echo "required. A tag with no artifact behind it is the SERV-125 shape — it"
+            echo "would commit the pin and 404 mid-deploy. Nothing was committed."
+            exit 1
+          fi
+
+          echo "Release $VERSION carries $asset and its checksum."
 
       - name: Warn about migrations
         if: inputs.kind == 'rollback'
@@ -300,7 +443,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          out="$(./scripts/set-version.sh "$PIN_KEY" "$VERSION" versions.env)"
+          out="$(./scripts/set-version.sh "$PIN_KEY" "$VERSION" "$PIN_FILE")"
           echo "$out"
           case "$out" in
             *"already"*) echo "NOOP=1" >> "$GITHUB_ENV" ;;
@@ -334,7 +477,13 @@ jobs:
             subject="chore(deploy): promote ${SERVICE} to ${VERSION} (SERV-78)"
           fi
 
-          git add versions.env
+          # ONE FILE, and only ever one — see the header. deploy-scope.sh matches a
+          # promote by an exact-equality check on the whole changed-file list, so a
+          # second file here does not fail: it silently drops the deploy back to a
+          # whole-stack pull and un-fixes SERV-109. The signet path has the same
+          # constraint for the opposite reason — versions-host.env must be alone so
+          # deploy-signet.yml's trigger is the only one that fires.
+          git add "$PIN_FILE"
 
           # The final -m block holds git TRAILERS, and that is the point (SERV-117).
           # This workflow does not deploy — it commits versions.env and lets deploy.yml's
@@ -396,13 +545,20 @@ jobs:
             else
               printf '## %s: %s -> %s\n\n' "${KIND}" "$SERVICE" "$VERSION"
               printf '| | |\n|---|---|\n'
-              printf '| Service | `%s` (`%s`) |\n' "$SERVICE" "$PIN_KEY"
+              printf '| Service | `%s` (`%s` in `%s`) |\n' "$SERVICE" "$PIN_KEY" "$PIN_FILE"
               printf '| Version | `%s` |\n' "$VERSION"
               printf '| Requested by | %s |\n' "$ACTOR"
               printf '| Commit | `%s` |\n' "${COMMIT_SHA:-unknown}"
               printf '\n**Reason:** %s\n\n' "$REASON"
-              printf 'The commit is on `main`; **Deploy to Construct** takes it from here and\n'
-              printf 'ends with `scripts/assert-healthy.sh`, so a version that breaks the stack\n'
-              printf 'fails that run rather than going quietly green (SERV-102).\n'
+              if [ "$SERVICE" = "signet" ]; then
+                printf 'The commit is on `main`; **Deploy Signet** takes it from here. Its\n'
+                printf 'playbook verifies the daemon is actually serving the new version before\n'
+                printf 'the run goes green, so a binary that installs and does not come up fails\n'
+                printf 'that run (SERV-130).\n'
+              else
+                printf 'The commit is on `main`; **Deploy to Construct** takes it from here and\n'
+                printf 'ends with `scripts/assert-healthy.sh`, so a version that breaks the stack\n'
+                printf 'fails that run rather than going quietly green (SERV-102).\n'
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"

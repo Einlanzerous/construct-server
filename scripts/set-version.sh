@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# set-version.sh — Repoint one first-party image pin in versions.env
+# set-version.sh — Repoint one first-party version pin
+#
+# Two files use it, and it does not need to know which: versions.env for the container
+# images, and versions-host.env for signet, the one first-party service that is a host
+# binary rather than a container (SERV-130). Both are KEY=VALUE and both are tracked, so
+# the write is the same; what differs is which workflow fires on the resulting commit.
+# Pass the file as $3.
 #
 # The single write behind promote and rollback (SERV-78, SERV-79). Both are the same
 # operation — "make prod run this exact version" — so both come through here; the only

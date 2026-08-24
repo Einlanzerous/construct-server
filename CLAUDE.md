@@ -200,6 +200,26 @@ anything deploys or gets versioned.
   that inert. Note that **a floating tag is not a floating container**: the image string
   never changes, so compose sees no drift and `up -d` alone moves nothing however far main
   has gone. Dev advances only on a `pull`, which is what `deploy-dev.yml` does hourly.
+  **Signet pins in `versions-host.env`, and the separate file is forced rather than
+  chosen** (SERV-130). It is the one first-party service that is a host binary under
+  systemd, so it has no image, no registry tag and no compose service.
+  `deploy-scope.sh` maps every changed pin in `versions.env` onto compose services and
+  **refuses** one that no image interpolates — and its caller correctly reads any refusal
+  as "pull the whole stack", so a `SIGNET_VERSION` in `versions.env` would make each
+  signet promote pull and recreate the whole prod stack. That is the SERV-109 regression
+  arriving through the file that guards it, and the fix is a second file rather than an
+  exception in the script: its safety rests on *every* failure meaning pull-everything,
+  and an exception would silently swallow the real cases too — a pin later typo'd, or one
+  whose service leaves compose, both map to zero services as well. Two further
+  differences follow from there, and neither is a style choice: the value is a **full
+  release tag with its `v`** (`v1.9.1`) because `gh release download v1.9` has no
+  registry to resolve a patch against, and `promote.yml` verifies it against the
+  **releases API including the asset**, because `verify-tag.sh` reads manifests and a
+  tag with nothing built behind it is the SERV-125 shape. Everything that *compares*
+  versions strips the `v`: signet reports bare since SGNT-38 and the ledger compares
+  with strict equality. `deploy-signet.yml` carries the path trigger, so `deploy.yml`
+  never fires on it. **A signet release no longer deploys itself** — `signet-released`
+  announces that a version is available and nothing more.
   **Third-party images are pinned by digest** (SERV-105), in the form `repo:tag@sha256:…`
   inline in `docker-compose.yml` — the tag is provenance, the digest is the pin. Before it,
   `docker compose pull` moved every floating tag, and the first real rollback recreated

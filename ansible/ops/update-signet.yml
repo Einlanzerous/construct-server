@@ -7,6 +7,13 @@
 # .github/workflows/deploy-signet.yml on the self-hosted runner (SERV-62), and
 # safe to run by hand for the same effect.
 #
+# THE VERSION IS A PIN, not a choice this playbook makes (SERV-130). Since signet
+# joined promote/rollback, `SIGNET_VERSION` in versions-host.env is what prod runs;
+# deploy-signet.yml reads it from there and passes it in below. Running this by hand
+# with a different -e still works and is still the right tool for a break-glass fix —
+# but it moves prod away from the pin, and the next deploy moves it back. Repoint the
+# pin as well, or the fix is temporary in a way nothing will tell you about.
+#
 # Deliberately NOT site.yml --tags signet: that play loads secrets.sops.yml and
 # hard-fails when they are unavailable, and the age key is intentionally absent
 # from the server. This playbook needs no secrets — it updates a binary — so it
@@ -134,19 +141,47 @@
             msg: "Signet {{ signet_health.json.version }} is serving on {{ signet_health_addr }}."
 
       rescue:
-        - name: Explain how to get back to the previous binary
+        # THE ROLLBACK IS THE PIN, and this message says so first (SERV-130 item 4).
+        #
+        # It used to advertise `mv signet.prev signet` as the primary recovery, which
+        # was wrong twice over. SERV-79's argument is that rollback is the path you
+        # least want to be the less-tested one, because it runs when prod is already
+        # broken — and a hand-typed mv that appears only in a failure message is the
+        # least-exercised recovery path there is, on the credential daemon, discovered
+        # at the moment it is needed. Worse, at the time it was written the advice was
+        # actively harmful: the health check compared a v-prefixed tag against a bare
+        # /healthz, so it failed the GOOD version and the binary it told you to restore
+        # was the one that would pass.
+        #
+        # Now signet promotes and rolls back through the same workflow as every other
+        # first-party service, so the recovery is a version change with a reason
+        # attached and a ledger row — the same code path that got prod here, run
+        # backwards. `.prev` stays as break-glass for the case that path cannot serve:
+        # GitHub unreachable, or a daemon that has to come back right now.
+        - name: Explain how to get back to the previous version
           ansible.builtin.fail:
             msg: >-
               {{ signet_version_bare }} was installed but the daemon is not
               serving it (last seen: {{ signet_health.json.version
               | default('no response') | regex_replace('^v', '') }}).
-              The previous binary was kept — roll back with:
-              mv {{ signet_binary }}.prev {{ signet_binary }} &&
-              sudo systemctl restart signet.
-              Check what .prev actually is first: the unit binds
-              "{{ signet_addr }}", and anything older than {{ signet_min_version }}
-              cannot parse a multi-address bind — it will fail to start entirely,
-              loopback included, rather than degrading. Pin signet_addr to a
-              single host:port before rolling back that far.
-              If the unit will not bind, check for a stale `signet serve`
+
+              TO ROLL BACK: run Actions > "Promote / Rollback a Version" with
+              service=signet, kind=rollback, and the previous version.
+              `git log -p versions-host.env` is the history of what was pinned
+              when. That path is gated, records a reason, verifies the release
+              exists before committing, and files a row in the delivery ledger —
+              and it refuses anything below {{ signet_min_version }} outright,
+              because the unit binds "{{ signet_addr }}" and an older binary
+              cannot parse a multi-address bind: it fails to start entirely,
+              loopback included, rather than degrading.
+
+              BREAK GLASS, if that path is unavailable and the daemon must come
+              back now: mv {{ signet_binary }}.prev {{ signet_binary }} &&
+              sudo systemctl restart signet. Check what .prev actually is first
+              ({{ signet_binary }}.prev version) — it is the binary this run
+              displaced, which is not necessarily the one you want, and nothing
+              enforces the {{ signet_min_version }} floor on this route. Then
+              repoint the pin to match, or the next deploy will undo it.
+
+              If the unit will not bind at all, check for a stale `signet serve`
               already holding {{ signet_health_addr }}.
