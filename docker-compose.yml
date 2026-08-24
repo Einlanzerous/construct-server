@@ -834,6 +834,18 @@ services:
       # Gates POST /api/services/{slug}/upload and staged reads. Blank =>
       # uploads disabled; marks and the front page still serve.
       - PLACARD_UPLOAD_TOKEN=${PLACARD_UPLOAD_TOKEN:-}
+      # Edge self-check (PCAD-10): every check pass also fetches the front
+      # page and one mirror mark THROUGH this public hostname, redirects not
+      # followed — so an Access gate landing on the hostname (it happened on
+      # day one, invisible to everyone signed in) records as failing checks
+      # and raises a front-page alert instead of needing a manual curl.
+      - PLACARD_PUBLIC_BASE_URL=https://placard.zerogravity.industries
+      # 15m, not placard's 6h default, because the edge check above rides this
+      # tick: the day-one gate lasted ~30 minutes, and a detection window
+      # coarser than the incident it exists to catch isn't detection. The
+      # canonical jsDelivr checks come along — 18 small GETs every 15 minutes
+      # is noise to a CDN.
+      - PLACARD_CHECK_INTERVAL=15m
     networks:
       - construct_net
     depends_on:
