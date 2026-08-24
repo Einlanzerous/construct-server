@@ -33,7 +33,30 @@ import (
 	"time"
 )
 
-var update = flag.Bool("update", false, "regenerate testdata/vectors.json")
+var (
+	update = flag.Bool("update", false, "regenerate testdata/vectors.json")
+	// Rotating the key material is a SEPARATE, louder flag than regenerating the
+	// vectors. Without the split, `rm testdata/keys/*.pem` followed by an ordinary
+	// `-update` silently mints an entirely new vector set — every token changes,
+	// the diff is unreadable, and Switchyard's pinned copy no longer matches
+	// anything. That is the cross-repo contract breaking quietly, which is the one
+	// failure mode this whole fixture exists to prevent.
+	regenKeys = flag.Bool("regenerate-keys", false,
+		"MINT NEW test RSA keys if they are absent; invalidates every checked-in vector and every consumer's pinned copy")
+)
+
+// keyNote is prepended to a generated PEM so the disclaimer is visible at the
+// point any reader — or any secret scanner's UI — lands on the match.
+var keyNote = map[string]string{
+	"good-2048": "TEST FIXTURE — NOT A SECRET. Generated for the shared Cloudflare Access test\n" +
+		"vectors (SERV-131) and used for nothing else. It signs tokens for the fictional\n" +
+		"team domain vectors.cloudflareaccess.test. Checked in deliberately so vector\n" +
+		"regeneration is byte-stable; see ../README.md. Never use this key for anything.\n",
+	"weak-1024": "TEST FIXTURE — NOT A SECRET. A deliberately UNDERSIZED 1024-bit key, so the\n" +
+		"`weak-modulus` vector can carry a token genuinely signed by one and prove the\n" +
+		"2048-bit floor rejects it rather than a signature mismatch doing the work.\n" +
+		"Generated for SERV-131, used for nothing else; see ../README.md.\n",
+}
 
 const (
 	vectorTeamDomain = "vectors.cloudflareaccess.test"
@@ -85,8 +108,12 @@ type expectedClaims struct {
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// loadOrCreateKey keeps the RSA material stable across regenerations. Checked in
-// as PEM so a new machine produces identical vectors.
+// loadOrCreateKey keeps the RSA material stable across regenerations. The keys
+// are checked in as PEM so any machine produces identical vectors — see
+// testdata/README.md for why that is the point rather than a convenience.
+//
+// pem.Decode skips leading non-PEM text, which is what lets each file carry its
+// "not a secret" disclaimer above the BEGIN line.
 func loadOrCreateKey(t *testing.T, name string, bits int) *rsa.PrivateKey {
 	t.Helper()
 	path := filepath.Join("testdata", "keys", name+".pem")
@@ -101,8 +128,15 @@ func loadOrCreateKey(t *testing.T, name string, bits int) *rsa.PrivateKey {
 		}
 		return k
 	}
-	if !*update {
-		t.Fatalf("%s is missing; run: go test ./... -run TestUpdateVectors -update", path)
+
+	// Deliberately NOT reachable from -update alone. Minting a key here rewrites
+	// every vector, and every consumer pinning this file would silently stop
+	// matching it.
+	if !*regenKeys {
+		t.Fatalf("%s is missing.\n"+
+			"It is checked in, so the fix is almost certainly to restore it (git checkout -- %s),\n"+
+			"NOT to mint a new one: that rewrites every vector and breaks every pinned consumer copy.\n"+
+			"If you really mean to rotate the fixture key material, pass -regenerate-keys.", path, path)
 	}
 	k, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
@@ -111,10 +145,13 @@ func loadOrCreateKey(t *testing.T, name string, bits int) *rsa.PrivateKey {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})
+	out := append([]byte(keyNote[name]),
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})...)
 	if err := os.WriteFile(path, out, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("MINTED a new %d-bit key at %s — every vector below is now new, and every "+
+		"consumer's pinned copy of vectors.json must be refreshed", bits, path)
 	return k
 }
 

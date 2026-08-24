@@ -167,7 +167,15 @@ cd pkg/cfaccess && go test ./... -run TestUpdateVectors -update
 
 The RSA keys are checked in under `testdata/keys/`, and RSASSA-PKCS1-v1_5 signing
 is deterministic, so regeneration is byte-stable: a diff means the vectors really
-changed. The vectors are checked in rather than generated per-suite precisely
+changed. Minting new keys needs a separate `-regenerate-keys` flag — an ordinary
+`-update` refuses rather than silently rewriting every token and leaving every
+pinned consumer copy matching nothing.
+
+Those keys are **not secrets** (throwaway, fictional team domain, published on
+purpose — the same reason RFC 7515 Appendix A publishes private keys), so
+`.gitguardian.yaml` excludes that one directory and each file carries the
+disclaimer above its `BEGIN` line. See
+[`pkg/cfaccess/testdata/README.md`](../pkg/cfaccess/testdata/README.md). The vectors are checked in rather than generated per-suite precisely
 because two suites in two languages in two repositories regenerating their own
 would let both stay green while drifting apart — the failure this ticket exists
 to stop.
