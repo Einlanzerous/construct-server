@@ -149,7 +149,12 @@ deny() {
 # how an agent actually pushes. (It is also why the hook is registered on a bare `Bash`
 # matcher rather than with `if: "Bash(git push:*)"` — that filter is a prefix match, so it
 # would not match the compound form and the gate would silently never fire. Matching every
-# Bash call and bailing here costs one jq parse and a few string operations: 9ms.)
+# Bash call and bailing here costs one jq parse and one substring test: ~9ms, and flat in
+# the length of the command — an 8000-character non-push measures the same as `ls`,
+# because the substring test in find_git_push runs before anything else. Only a command
+# that actually contains "git push" pays for the segment scan, and that is ~14ms at 8000
+# characters. An earlier revision did the scan as a bash character loop, which is
+# quadratic: 618ms on that same input. Keep the cheap test first.)
 #
 # But it must NOT match `git commit -m 'remember to git push'`. Blocking a *commit*
 # because its message mentions pushing is a baffling failure, and a gate people cannot
@@ -159,47 +164,77 @@ deny() {
 # a segment, not anywhere inside one. Sets PUSH_ARGS to that push's own arguments, which
 # is what the exemption parser needs; feeding it the whole command string instead is what
 # made `git push origin v1.0.0` parse `push` as a refspec.
-# Split on shell separators, but only ones OUTSIDE quotes.
+# Split into segments a command could START at: on `&&`, `||`, `;` and newline, but only
+# outside quotes, and never inside a heredoc body.
 #
-# A blind split treats the separator in `git commit -m "wip; git push later"` as a real
-# one, which puts `git push later` in command position and blocks the *commit*. The
-# quote-blind version got the frequently-tested form right (`-m 'remember to git push'`,
-# no separator) while still failing the moment a message contained a `;` or `&&`.
+# Three cases have to hold at once, and each of the first two was a real bug:
 #
-# One character-at-a-time pass tracking quote state is enough. Backslash escaping is not
-# modelled: it does not change what a `git push` segment looks like in practice, and the
-# failure direction of a mis-split is that the gate lints when it did not need to.
+#   1. `git commit -m "wip; git push later"` must NOT match. A blind split treats that
+#      `;` as real, puts `git push later` in command position, and blocks the *commit*.
+#   2. `cat > deploy.md <<EOF … git push origin main … EOF` must NOT match. A heredoc body
+#      is not shell-quoted, so quote tracking alone does not save you — every line of it
+#      looks like command position. This one is worse than (1): the command being blocked
+#      is a file WRITE, and the advertised escape hatch cannot be applied, because
+#      `--no-verify` is a `git push` flag and there is nowhere to put it on a `cat`.
+#      Documenting a push (writing this repo's own docs from a heredoc) would trip it.
+#   3. A plain multi-line script MUST still match:
+#          git add -A
+#          git commit -m x
+#          git push
+#      This is why newline stays a separator. Dropping it is the cheap fix for (2) and it
+#      is the wrong trade — it converts a false block into a SILENT MISS, and a gate that
+#      quietly stops firing is the failure this whole design is arranged against.
+#
+# So: skip heredoc bodies, then split the rest quote-aware. Backslash escaping is still
+# not modelled; a mis-split there only ever makes the gate lint when it need not have.
+#
+# Done in one awk pass rather than a bash character loop. `${s:i:1}` in a loop is
+# quadratic — measured at 597ms on an 8000-character command, against 3ms for the
+# substitution it replaced — and long commands are exactly the heredocs case (2) is about.
+# awk is a single linear pass in C and keeps this in the sub-millisecond range.
 split_segments() {
-  local s="$1" i c n q="" cur=""
   SEGMENTS=()
-  n=${#s}
-  for (( i = 0; i < n; i++ )); do
-    c="${s:i:1}"
-    if [ -n "$q" ]; then
-      # Inside quotes: only the matching quote ends them; separators are just text.
-      [ "$c" = "$q" ] && q=""
-      cur+="$c"
-      continue
-    fi
-    case "$c" in
-      "'"|'"') q="$c"; cur+="$c" ;;
-      '&'|'|'|';'|$'\n')
-        SEGMENTS+=("$cur"); cur="" ;;
-      *) cur+="$c" ;;
-    esac
-  done
-  SEGMENTS+=("$cur")
+  local seg
+  while IFS= read -r seg; do
+    SEGMENTS+=("$seg")
+  done < <(printf '%s' "$1" | awk '
+    BEGIN { SQ = sprintf("%c", 39); DQ = sprintf("%c", 34); q = ""; term = ""; cur = "" }
+    {
+      # Inside a heredoc body: emit nothing until the terminator line.
+      if (term != "") {
+        t = $0; sub(/^[ \t]+/, "", t)          # <<- allows an indented terminator
+        if ($0 == term || t == term) term = ""
+        next
+      }
+      # Does this line OPEN a heredoc? Record its terminator; the line itself is still
+      # code and is scanned normally below.
+      if (match($0, /<<-?[ \t]*("[A-Za-z_][A-Za-z0-9_]*"|'"'"'[A-Za-z_][A-Za-z0-9_]*'"'"'|[A-Za-z_][A-Za-z0-9_]*)/)) {
+        h = substr($0, RSTART, RLENGTH)
+        sub(/^<<-?[ \t]*/, "", h)
+        gsub(/["'"'"']/, "", h)
+        term = h
+      }
+      n = length($0)
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1)
+        if (q != "") { if (c == q) q = ""; cur = cur c; continue }
+        if (c == SQ || c == DQ) { q = c; cur = cur c; continue }
+        if (c == "&" || c == "|" || c == ";") { print cur; cur = ""; continue }
+        cur = cur c
+      }
+      print cur; cur = ""                       # end of line is itself a separator
+    }
+  ')
 }
 
 PUSH_ARGS=""
 find_git_push() {
   local seg
-  # A pathological command is not worth a character loop; fall back to "assume it is a
-  # push" so the gate errs toward running the checks rather than toward silence.
-  if [ "${#1}" -gt 8192 ]; then
-    case "$1" in *"git push"*) PUSH_ARGS=""; return 0 ;; esac
-    return 1
-  fi
+  # The overwhelmingly common case is a Bash call with no push in it at all. Answer that
+  # without spawning awk: this is what keeps the bare `Bash` matcher cheap enough to
+  # leave on, and it is a plain substring test, not a command-position one, so it can
+  # only ever send work to the real scan below.
+  case "$1" in *"git push"*) ;; *) return 1 ;; esac
   split_segments "$1"
   for seg in ${SEGMENTS+"${SEGMENTS[@]}"}; do
     seg="${seg#"${seg%%[![:space:]]*}"}"   # strip leading whitespace

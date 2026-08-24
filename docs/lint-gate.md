@@ -186,14 +186,45 @@ on it matched anywhere in the string, which meant
 `git commit -m 'remember to git push'` blocked a *commit*. A gate people cannot predict
 is a gate they switch off.
 
-Command position is decided by splitting on `&&`, `||`, `;` and newline **outside
-quotes**, via a single character pass that tracks quote state. Splitting blind is not
-enough and the difference is easy to miss: it gets the separator-free message above right
-while still blocking the commit for `git commit -m "wip; git push later"`, because the
-`;` inside the message opens a segment that starts with `git push`. Both forms are in the
-test suite. Backslash escaping is deliberately not modelled — it does not change what a
-`git push` segment looks like in practice, and a mis-split errs toward linting when it
-did not need to, which is the safe direction.
+Command position is decided by splitting on `&&`, `||`, `;` and newline **outside quotes
+and outside heredoc bodies**. Three cases have to hold at once, and each of the first two
+was a real bug caught in review:
+
+| Command | Must | Why it is not obvious |
+|---|---|---|
+| `git commit -m "wip; git push later"` | allow | A blind split treats that `;` as real and blocks the **commit** |
+| `cat > deploy.md <<EOF … git push … EOF` | allow | A heredoc body is **not shell-quoted**, so quote tracking alone does not save it |
+| `git add -A`⏎`git commit -m x`⏎`git push` | deny | So newline must stay a separator |
+
+The heredoc case is the worse of the two failures, and not only because it is easy to hit
+— writing this very document from a heredoc trips it. The command being blocked is a file
+**write**, and the advertised escape hatch does not apply: `--no-verify` is a `git push`
+flag and there is nowhere to put it on a `cat`. The only way through would be
+`CONSTRUCT_LINT_GATE=0`, which is the reflex the whole fail-open design exists to avoid.
+
+The cheap fix — drop `\n` as a separator — is the wrong trade, and the third row is why:
+it converts a false block into a **silent miss**, and a gate that quietly stops firing is
+the failure mode this design is arranged against. So heredoc bodies are skipped (`<<`,
+`<<-`, and quoted terminators) and the rest is split quote-aware.
+
+Backslash escaping is deliberately not modelled — it does not change what a `git push`
+segment looks like in practice, and a mis-split errs toward linting when it need not
+have, which is the safe direction.
+
+All six forms are in the test suite, which until this round contained **no multi-line
+command at all** — which is precisely why the heredoc case survived the first fix.
+
+### Latency
+
+The bare `Bash` matcher means this runs on every Bash tool call, so the cost of *not*
+being a push is the number that matters. It is **~9ms and flat in command length**: a
+plain substring test for `git push` runs before anything else, so an 8000-character
+non-push measures the same as `ls`. Only a command that does contain `git push` pays for
+the segment scan, at ~14ms on that same input.
+
+That scan is one `awk` pass. It was briefly a bash character loop, which is quadratic —
+**618ms** on an 8000-character command, and long commands are exactly the heredocs above.
+The suite has a loose upper bound on it to catch a reintroduction.
 
 **The installer copies the script; it does not point at the checkout.** Registering
 `~/construct-server/scripts/lint-gate.sh` would keep the gate current on every `git
@@ -211,12 +242,21 @@ The cost of copying is drift, so the copy is stamped with the source's content h
 ## Verifying
 
 `make lint-gate-test` builds fixture repos in a temp directory — one knowingly
-misformatted, one clean, one with no checks configured — and asserts the gate's answer
-for each, including every exemption above. It never touches the estate's repos.
+misformatted, one clean, one with no checks configured, one a workspace — and asserts the
+gate's answer for each. It never touches the estate's repos. It covers every exemption
+above, both directions of workspace discovery, the multi-line and heredoc forms, the
+fail-open paths (`gofmt` off `PATH`, a check that outruns its timeout), and a loose upper
+bound on scan latency.
 
 This exists because the gate **fails open**: a gate that has quietly stopped working
 looks exactly like a clean tree. Both are green. The test is the difference between the
 two.
+
+**Run it in the environment you doubt, not just a working one.** Every finding in this
+document's history was caught that way, and one of them the suite already covered and
+would have caught the whole time: the unguarded `gofmt` reports 22 passed / 1 failed the
+moment you run it with `~/go/bin` off `PATH`, and it had simply never been run like that.
+`PATH=/usr/bin:/bin make lint-gate-test` is a cheap habit.
 
 ## Turning it off
 

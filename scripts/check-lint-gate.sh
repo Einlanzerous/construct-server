@@ -20,9 +20,18 @@ trap 'rm -rf "$TMP"' EXIT
 
 PASS=0
 FAIL=0
+SKIP=0
 
 ok()   { printf '  \033[32mok\033[0m   %s\n' "$1"; PASS=$((PASS + 1)); }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$1"; printf '       %s\n' "$2"; FAIL=$((FAIL + 1)); }
+skip() { printf '  \033[33m--\033[0m   skipped: %s (%s)\n' "$1" "$2"; SKIP=$((SKIP + 1)); }
+
+# Every fixture here is a Go repo, so a *finding* can only be produced when gofmt exists.
+# Without it the gate correctly allows everything, and asserting "deny" would report the
+# fail-open behaviour as a failure. Degrade to skips instead, so this suite stays
+# meaningful in exactly the environment the gofmt bug was found in — see the note in
+# docs/lint-gate.md about running it with PATH stripped.
+HAVE_GOFMT=1; command -v gofmt >/dev/null 2>&1 || HAVE_GOFMT=0
 
 # decision <repo> <command> -> prints "deny" or "allow"
 decision() {
@@ -36,6 +45,10 @@ decision() {
 
 expect() {
   local want="$1" repo="$2" cmd="$3" got
+  if [ "$want" = deny ] && [ "$HAVE_GOFMT" = 0 ]; then
+    skip "deny <- $cmd" "no gofmt, so no finding is possible"
+    return
+  fi
   got="$(decision "$repo" "$cmd")"
   if [ "$got" = "$want" ]; then ok "$want  <- $cmd"
   else bad "$cmd" "expected $want, got $got"; fi
@@ -169,6 +182,38 @@ got="$(CONSTRUCT_LINT_GATE_CHECK_TIMEOUT=1 CONSTRUCT_LINT_GATE_TOTAL_TIMEOUT=20 
 [ "$got" = allow ] && ok "a check that times out is a skip, not a block" \
                    || bad "timed-out check" "expected allow, got $got"
 
+# --------------------------------------------------------------------------
+# Multi-line commands. Every case above is a single line, which is exactly why the
+# heredoc bug survived the round-one command-position fix.
+# --------------------------------------------------------------------------
+echo "lint-gate: multi-line commands"
+
+# A heredoc body is NOT shell-quoted, so quote tracking alone does not save this: every
+# line of it looks like command position. The command being gated is a file WRITE, and
+# `--no-verify` cannot be applied to a `cat`, so a false block here has no escape hatch
+# short of disabling the gate outright.
+expect allow "$TMP/dirty" 'cat > docs/deploy.md <<EOF
+Then run:
+git push origin main
+EOF'
+expect allow "$TMP/dirty" "cat > f <<'SH'
+git push origin main
+SH"
+expect allow "$TMP/dirty" 'cat > f <<-EOF
+	git push origin main
+	EOF'
+# …but newline MUST stay a separator, or a plain multi-line script silently stops being
+# gated. Dropping `\n` is the cheap fix for the heredoc case and it trades a false block
+# for a silent miss, which is the worse of the two by this design's own argument.
+expect deny "$TMP/dirty" 'git add -A
+git commit -m x
+git push'
+# The terminator must close the heredoc, so a real push after one is still found.
+expect deny "$TMP/dirty" 'cat > f <<EOF
+git push origin main
+EOF
+git push'
+
 echo "lint-gate: the gate answers fast enough to leave on"
 start=$(date +%s%N)
 decision "$TMP/clean" "ls" >/dev/null
@@ -176,5 +221,24 @@ elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
 if [ "$elapsed" -lt 1000 ]; then ok "non-push bail took ${elapsed}ms"
 else bad "non-push bail" "took ${elapsed}ms, expected well under 1000ms"; fi
 
-printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+# A long command must not be quadratic. The bash character loop this replaced took 618ms
+# on this input; the substring bail plus one awk pass is ~14ms. The threshold is loose on
+# purpose — this is a guard against reintroducing quadratic scanning, not a benchmark.
+big="$(head -c 8000 /dev/zero | tr '\0' 'y')"
+start=$(date +%s%N)
+decision "$TMP/clean" "cat > f <<EOF
+$big
+git push origin main
+EOF" >/dev/null
+elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
+if [ "$elapsed" -lt 250 ]; then ok "8000-char heredoc scanned in ${elapsed}ms"
+else bad "large-command scan" "took ${elapsed}ms; expected <250ms (quadratic scan back?)"; fi
+
+if [ "$SKIP" -gt 0 ]; then
+  printf '\n%d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
+  printf 'Skips are the fail-open paths: with no gofmt on PATH nothing can produce a\n'
+  printf 'finding, so the gate allows and the deny assertions cannot be made.\n'
+else
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+fi
 [ "$FAIL" -eq 0 ]
