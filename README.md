@@ -30,10 +30,14 @@ The following services are currently active:
 -   **[PostgreSQL 16](https://www.postgresql.org/)**: Shared instance providing isolated databases for application services. Each service gets its own database and user — see [Architecture](#-database-architecture) below.
 
 ### 📋 Task Management & Automation
--   **[Switchyard](https://github.com/Einlanzerous/switchyard)**: Self-hosted, API-first ticketing / project management system (Hono + Bun + Drizzle on the server, Vue 3 on the client) backed by its own `switchyard` database. Task hub for the **Imperium-Loop** automated development pipeline; replaced Vikunja in May 2026.
--   **[n8n](https://n8n.io)**: Workflow automation engine (codename *Vox-Command*). Hosts the Cogitation Engine and Vox-Dictate workflows that drive Imperium-Loop.
--   **[Servo-Signal](https://github.com/Einlanzerous/imperium-loop)**: Local MCP tool server (Go) that gives n8n and Claude access to git, filesystem, patching, ephemeral Docker execution, and two agentic loops (planning + greenfield). Source lives in `~/imperium-loop`.
--   **[Autosavant](https://github.com/Einlanzerous/imperium-loop/tree/main/autosavant-bot)**: Discord bot that owns the human-in-the-loop approval checkpoints (plan review, greenfield guidance). Posts an embed to a task thread, watches for replies, and resumes the paused n8n execution.
+-   **[Switchyard](https://github.com/Einlanzerous/switchyard)**: Self-hosted, API-first ticketing / project management system (Hono + Bun + Drizzle on the server, Vue 3 on the client) backed by its own `switchyard` database. Task hub for the estate; replaced Vikunja in May 2026.
+
+> **Imperium-Loop is decommissioned (SERV-82, August 2026).** The `n8n` (*Vox-Command*),
+> `servo-signal` and `autosavant-bot` containers are gone, along with the `~/imperium-loop`
+> checkout and its Discord/webhook plumbing. PR review runs as a Claude Code job on the
+> self-hosted runner instead (SERV-59). The pipeline's own history lives in the archived
+> **LOOP** project in Switchyard (SWY-222); its `PRINCIPLES.md` was salvaged here first
+> (SERV-83) and is the file in this repo's root.
 
 ### 🔧 Application Services
 -   **[cook_book](services/cook_book/)**: TypeScript/Prisma recipe service with its own `cook_book` database.
@@ -70,7 +74,7 @@ Items that have shipped live in the [Current Stack](#-current-stack) above. This
 -   [ ] **Authentik**: Self-hosted identity as the single source of truth, replacing Cloudflare Access's built-in email-OTP IdP. Authored and gated behind the `identity` compose profile — not started by a plain `docker compose up -d`. See [docs/zerogravity-edge.md](docs/zerogravity-edge.md).
 -   [ ] **Direct/Argosy path**: A DNS-only record → WAN 443 → Traefik's `public` entrypoint, so media bypasses the tunnel. Blocked by CGNAT; needs a relay.
 
-Previously on the roadmap, now in active use: Copyparty, Switchyard (which replaced Vikunja, which itself replaced the earlier Plane plan), n8n, the full Imperium-Loop pipeline, and **Lyceum** (which supersedes the earlier Panox plan for book library management).
+Previously on the roadmap, now in active use: Copyparty, Switchyard (which replaced Vikunja, which itself replaced the earlier Plane plan), and **Lyceum** (which supersedes the earlier Panox plan for book library management).
 
 ## 🛠️ Setup & Installation
 
@@ -81,9 +85,9 @@ Previously on the roadmap, now in active use: Copyparty, Switchyard (which repla
     ```
 
 2.  **Configure Environment Variables:**
-    Copy the example file and update it with your secrets. Core vars: Datadog API Key, Postgres/Switchyard/n8n passwords. Imperium-Loop pipeline also needs `ANTHROPIC_API_KEY`, `GITHUB_PAT`, `SWITCHYARD_DB_PASSWORD`, `SWITCHYARD_BOOTSTRAP_TOKEN`, `DISCORD_BOT_TOKEN`/`DISCORD_CHANNEL_ID`/`DISCORD_PLANNING_WEBHOOK_URL`, and `N8N_API_KEY`. The public edge needs `CLOUDFLARE_TUNNEL_TOKEN` (and `CF_DNS_API_TOKEN` once the direct path is unblocked); Purser's connectors need `PURSER_SWITCHYARD_TOKEN`, `PURSER_CF_*` and `PURSER_LYCEUM_OWNER_TOKEN`.
+    Copy the example file and update it with your secrets. Core vars: Datadog API Key, Postgres and per-service DB passwords, `GITHUB_USER`/`GITHUB_PAT`, `SWITCHYARD_DB_PASSWORD` and `SWITCHYARD_BOOTSTRAP_TOKEN`. The public edge needs `CLOUDFLARE_TUNNEL_TOKEN` (and `CF_DNS_API_TOKEN` once the direct path is unblocked); Purser's connectors need `PURSER_SWITCHYARD_TOKEN`, `PURSER_CF_*` and `PURSER_LYCEUM_OWNER_TOKEN`.
 
-    > **Deploys don't read this file.** CI writes `.env` on the server from the **`PROD_ENV_FILE`** secret on the `home-server` environment. A var added here but not there will vanish on the next deploy — update both (`gh secret set PROD_ENV_FILE --env home-server < .env`).
+    > **Deploys don't read this file.** CI writes `.env` on the server from the **`PROD_ENV_FILE`** secret on the `home-server` environment — which is **rendered by Signet, not set by hand**. A `gh secret set` on it appears to work and is reverted by the next `signet sync`; change the value in the vault and sync. See [CLAUDE.md](CLAUDE.md).
     ```bash
     cp .env.example .env
     nano .env
@@ -127,14 +131,13 @@ A single PostgreSQL 16 instance provides logically isolated databases for applic
 | amber | `amber` | `amber_user` | In-process embedded migrator (`internal/store/migrate.go`) at boot; append-only, each file's sha256 recorded |
 | placard | `placard` | `placard_user` | In-process embedded migrator (`internal/store`) at boot; `placard_test` provisioned alongside for CI/dev |
 | authentik | `authentik` | `authentik_user` | Django migrations on boot (`identity` profile — authored, not deployed) |
-| n8n | `n8n` | `n8n_user` | n8n auto-migrates on startup |
 | drydock | `drydock` | `drydock_user` | In-process migrator (`daemon/src/state/migrations/*.sql`), checksummed and **lazy** — nothing connects at boot, so an unreachable database can't stop a daemon holding live agent PTYs |
 
 - Databases and users are created by `db/init-db.sh` — on first volume initialization via the Postgres entrypoint, and again on every deploy, which pipes the same script into the running container (`.github/workflows/deploy.yml`). It is idempotent, and skips any role whose `<SERVICE>_DB_PASSWORD` is empty rather than blanking it.
 - `drydock_user` is the exception: it was provisioned directly against the running cluster and has no `ensure_db` line yet, because adding one changes the `postgres` service spec and therefore bounces every service that depends on it. That lands as its own deliberate change (SERV-72).
 - Each service owns its own migrations and runs them independently at startup — no init-container needed.
 - Postgres runs on the `construct_net` bridge network and additionally publishes `127.0.0.1:5432` — loopback only, never the LAN. That published port is what lets host-resident services (Drydock's daemon) use the cluster without being containers.
-- Ollama is dual-homed (default + `construct_net`) so services like n8n and Servo-Signal can reach it by container name. Open WebUI, Uptime Kuma, Copyparty, Datadog, Dozzle, and Aperture remain on the default network for now — migration is incremental.
+- Ollama is dual-homed (default + `construct_net`) so `construct_net` services can reach it by container name. Open WebUI, Uptime Kuma, Copyparty, Datadog, Dozzle, and Aperture remain on the default network for now — migration is incremental.
 
 > **TODO — Uptime Kuma monitoring:** Add Uptime Kuma to `construct_net` so it can monitor services internally (e.g. `http://cook_book:4001`, `http://switchyard:4002`), then add HTTP monitors via the Kuma UI. Currently deferred because Kuma also monitors AI stack services that aren't on `construct_net` yet.
 

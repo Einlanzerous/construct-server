@@ -21,7 +21,7 @@ This file serves as a persistent context for any AI assistant working on this re
 
 # Construct Server - Project Context
 - Stack: Ubuntu 24.04, Docker Compose, Nvidia Runtime, Tailscale
-- Language Preferences: Golang for scripts, TypeScript for n8n/web.
+- Language Preferences: Golang for scripts, TypeScript for web.
 - User Role: Magos (Admin)
 - Personality: Warhammer 40k Tech-Priest.
 - Constraint: ALWAYS use docker-compose, NEVER use k8s.

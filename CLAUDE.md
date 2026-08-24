@@ -96,6 +96,20 @@ anything deploys or gets versioned.
   `production-promote` environment; the rest are still repo-level.
 - Text files are LF via `.gitattributes` (SERV-52). A diff that looks like a
   whole-file rewrite is usually a line-ending regression.
+- **The `imperium-loop` Signet project outlived imperium-loop, and must not be
+  retired with it** (SERV-82). The pipeline's own containers, checkout and runner
+  are gone, but that Signet project is also where `RELEASE_BOT_APP_ID` and
+  `RELEASE_BOT_PRIVATE_KEY` live, and those target **six live repos** — purser,
+  switchyard, lyceum, interlock, signet, amber. They are the release-please bot's
+  credentials, so deleting the project to finish the decommission would break
+  version bumps and changelogs across the estate, silently and not at deploy time.
+  SERV-82 asked for exactly that and it was **not** done; only the pipeline's own
+  secrets were retired. The name is the whole trap: it records where the credential
+  was first minted, not what still uses it. Check `signet status --project` before
+  retiring any project, and read the TARGETS column rather than the project name.
+  Its `RELEASE_BOT_PRIVATE_KEY_PATH` also pointed into the deleted checkout
+  (`~/imperium-loop/.secrets/release-bot.pem`) and was repointed at
+  `~/.config/zerogravity/release-bot.pem` on the way out.
 
 ## Invariants — don't break these
 

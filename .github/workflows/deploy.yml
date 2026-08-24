@@ -275,7 +275,7 @@ jobs:
         # with compose by construction.
         #
         # Scoped to ghcr.io/einlanzerous deliberately: several third-party images
-        # (dozzle, cloudflared, n8n, semaphore) sit on `:latest` legitimately, and an
+        # (dozzle, cloudflared, semaphore) sit on `:latest` legitimately, and an
         # unscoped check would fail every deploy on them.
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: |
