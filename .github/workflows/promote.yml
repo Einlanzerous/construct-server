@@ -357,7 +357,32 @@ jobs:
           #
           # SERV-130 item 4: this hazard used to live only in a failure message nobody
           # read until it was already too late. A rollback is initiated HERE.
-          floor=1.4.1
+          #
+          # THE FLOOR IS READ, NOT COPIED. Hardcoding `1.4.1` here would be a second
+          # spelling of `signet_min_version`, and the failure mode of them drifting is
+          # the one this step exists to prevent: raise the floor in ansible only, and
+          # this check keeps accepting the version, commits the pin to main, and lets
+          # binary.yml refuse it AFTER the bad pin is on main — during a rollback.
+          # CLAUDE.md tolerates one such copy (assert-token-shapes.sh vs switchyard's
+          # API_TOKEN_RE_SOURCE) and names the ticket that removes it; there is no
+          # reason to add a second when the value is one grep away in this checkout.
+          #
+          # Fails CLOSED: an unreadable floor refuses the promote rather than skipping
+          # the check, because "the guard could not run" and "the guard passed" must
+          # not look the same from here.
+          defaults=ansible/roles/signet/defaults/main.yml
+          floor="$(sed -n 's/^signet_min_version:[[:space:]]*["'"'"']\{0,1\}v\{0,1\}\([0-9][0-9.]*\)["'"'"']\{0,1\}[[:space:]]*$/\1/p' "$defaults")"
+          if [ -z "$floor" ]; then
+            echo "Error: could not read signet_min_version from $defaults."
+            echo
+            echo "That value is the floor below which a signet binary cannot parse the"
+            echo "unit's multi-address bind and fails to start entirely. Refusing to"
+            echo "promote without it rather than skipping the check — if the line moved"
+            echo "or changed shape, fix this read. Nothing was committed."
+            exit 1
+          fi
+          echo "Minimum installable version, from $defaults: v${floor}"
+
           lowest="$(printf '%s\n%s\n' "$bare" "$floor" | sort -V | head -1)"
           if [ "$bare" != "$floor" ] && [ "$lowest" = "$bare" ]; then
             echo "Error: $VERSION predates v${floor}, which introduced multi-address SIGNET_ADDR (SGNT-17)."
@@ -499,12 +524,21 @@ jobs:
           # block. Two -m blocks are two paragraphs, and `Delivery-Kind` in the
           # second-to-last one is invisible to `%(trailers:key=...)` — it reads as an
           # ordinary line of prose and deploy.yml finds nothing.
+          # `Delivery-Actor` is the third trailer and it is not decoration: it is the
+          # ONLY way the promoter's identity reaches the ledger. The deploy is fired by
+          # a push authored by PROMOTE_PUSH_TOKEN's owner, so `github.actor` and
+          # `github.triggering_actor` in the deploying run are the PAT owner rather
+          # than whoever asked for the promote. `Requested by ${ACTOR}` above is prose
+          # in the commit body and `%(trailers:key=...)` cannot reach it — git parses
+          # only the LAST paragraph as trailers, which is also why all three live in
+          # one -m rather than three.
           git commit \
             -m "$subject" \
             -m "Requested by ${ACTOR} via the ${KIND} workflow." \
             -m "Reason: ${REASON}" \
             -m "Delivery-Kind: ${KIND}
-          Delivery-Reason: ${REASON}"
+          Delivery-Reason: ${REASON}
+          Delivery-Actor: ${ACTOR}"
 
           # main IS protected — by the `Proect Main` ruleset, not classic branch
           # protection, which is why `branches/main/protection` returns 404 and makes it

@@ -182,12 +182,19 @@ jobs:
           set -uo pipefail
           kind="$(git log -1 --format='%(trailers:key=Delivery-Kind,valueonly)' | head -1 | tr -d '\r')"
           reason="$(git log -1 --format='%(trailers:key=Delivery-Reason,valueonly)' | head -1 | tr -d '\r')"
+          # WHO PROMOTED, which no context variable in this run can answer. The push
+          # that triggered it is authored by PROMOTE_PUSH_TOKEN's owner, so
+          # `github.actor` and `github.triggering_actor` are both the PAT owner rather
+          # than the person who asked. promote.yml writes it as a trailer for exactly
+          # this reason.
+          actor="$(git log -1 --format='%(trailers:key=Delivery-Actor,valueonly)' | head -1 | tr -d '\r')"
           echo "DELIVERY_KIND=${kind}" >> "$GITHUB_ENV"
+          echo "DELIVERY_ACTOR=${actor}" >> "$GITHUB_ENV"
           # The ledger bounds `note` at 500 characters and rejects a longer one
           # outright, so trim here: a verbose reason costs its tail, not the report.
           echo "DELIVERY_NOTE=${reason:0:500}" >> "$GITHUB_ENV"
           if [ -n "$kind" ]; then
-            echo "This deploy is a ${kind}: ${reason:-<no reason given>}"
+            echo "This deploy is a ${kind} by ${actor:-<unknown>}: ${reason:-<no reason given>}"
           fi
 
       # The runner is a systemd service, so it never sources the user's shell profile
@@ -235,8 +242,14 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
+          # jq, not python3: report-deploy.sh runs later in this same job and requires
+          # jq, so it already has to work. Both snapshots swallow every failure to
+          # empty by design, and the movement filter reads BEFORE = AFTER as "nothing
+          # moved" — so an absent parser would make a real deploy go green having
+          # written no ledger row at all. That is a silent gap, not a red run, and it
+          # is not worth risking on a second interpreter when one is already required.
           v="$(curl -fsS --max-time 5 "$SIGNET_HEALTH_URL" 2>/dev/null \
-                | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")' 2>/dev/null || true)"
+                | jq -r '.version // ""' 2>/dev/null || true)"
           echo "version=${v}" >> "$GITHUB_OUTPUT"
           echo "before: ${v:-<not serving>}"
 
@@ -263,8 +276,14 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
+          # jq, not python3: report-deploy.sh runs later in this same job and requires
+          # jq, so it already has to work. Both snapshots swallow every failure to
+          # empty by design, and the movement filter reads BEFORE = AFTER as "nothing
+          # moved" — so an absent parser would make a real deploy go green having
+          # written no ledger row at all. That is a silent gap, not a red run, and it
+          # is not worth risking on a second interpreter when one is already required.
           v="$(curl -fsS --max-time 5 "$SIGNET_HEALTH_URL" 2>/dev/null \
-                | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")' 2>/dev/null || true)"
+                | jq -r '.version // ""' 2>/dev/null || true)"
           echo "version=${v}" >> "$GITHUB_OUTPUT"
           echo "after: ${v:-<not serving>}"
 
@@ -362,6 +381,11 @@ jobs:
           RD_STATUS: ${{ steps.reportable.outputs.status }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RD_NOTE: ${{ env.DELIVERY_NOTE }}
+          # The promote's trailer when there is one, else whoever ran this. On a
+          # workflow_dispatch convergence run `github.actor` IS the right answer —
+          # someone clicked Run — and on a promote-fired push it is the PAT owner,
+          # which is why the trailer takes precedence rather than the other way round.
+          RD_DEPLOYED_BY: ${{ env.DELIVERY_ACTOR || github.actor }}
         run: |
           set -euo pipefail
           if [ -z "${RD_TOKEN:-}" ]; then

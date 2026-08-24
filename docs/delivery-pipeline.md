@@ -339,6 +339,18 @@ that actually deploy — `deploy.yml`, `deploy-dev.yml`, and `promote.yml` by wa
 commit `deploy.yml` fires on — and **SERV-130** added the fourth, `deploy-signet.yml`.
 The commit remains the durable record either way (`git log -p versions.env`).*
 
+*Three git trailers carry a promote's intent to whichever run deploys it, because
+`promote.yml` deliberately does not deploy: `Delivery-Kind`, `Delivery-Reason` and —
+since SERV-130 — `Delivery-Actor`. The last one is not redundant with `github.actor`.
+The push that fires the deploy is authored by `PROMOTE_PUSH_TOKEN`'s owner, so both
+`github.actor` and `github.triggering_actor` in the deploying run name the PAT rather
+than the person who asked, and a rollback row with no actor is missing the one field an
+incident review wants from it. All three live in a single `-m` block: git parses only
+the last paragraph as trailers, so a second block would make them invisible to
+`%(trailers:key=…)`. Dev reports an actor only for a `workflow_dispatch` — its other
+triggers are a cron and `repository_dispatch`, and on a scheduled run `github.actor` is
+whoever last edited the workflow file, which is worse than recording nobody.*
+
 ### Signet takes the same path, out of a second pins file
 
 *Closed by **SERV-130**. Until then signet was the one first-party service still on the

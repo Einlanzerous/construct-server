@@ -412,6 +412,14 @@ jobs:
           set -uo pipefail
           kind="$(git log -1 --format='%(trailers:key=Delivery-Kind,valueonly)' | head -1 | tr -d '\r')"
           reason="$(git log -1 --format='%(trailers:key=Delivery-Reason,valueonly)' | head -1 | tr -d '\r')"
+          # WHO PROMOTED (SERV-130). No context variable in this run can answer it: a
+          # promote's push is authored by PROMOTE_PUSH_TOKEN's owner, so `github.actor`
+          # and `github.triggering_actor` are the PAT owner rather than the person who
+          # asked for it. promote.yml writes `Delivery-Actor` as a trailer for exactly
+          # this reason. Empty on an ordinary merge, where `github.actor` — the person
+          # who merged — is the honest answer and is used as the fallback below.
+          actor="$(git log -1 --format='%(trailers:key=Delivery-Actor,valueonly)' | head -1 | tr -d '\r')"
+          echo "DELIVERY_ACTOR=${actor}" >> "$GITHUB_ENV"
           echo "DELIVERY_KIND=${kind}" >> "$GITHUB_ENV"
           # The ledger bounds `note` at 500 characters and the API rejects a longer
           # one outright. Trim here so a verbose reason costs its tail rather than
@@ -792,6 +800,10 @@ jobs:
           RD_GATE_RUN_URL: ${{ github.event.client_payload.gate_run_url }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RD_NOTE: ${{ env.DELIVERY_NOTE }}
+          # The promote's trailer when there is one, else whoever triggered this run.
+          # The trailer takes precedence because on a promote-fired push `github.actor`
+          # is the PAT owner, not the promoter (SERV-130).
+          RD_DEPLOYED_BY: ${{ env.DELIVERY_ACTOR || github.actor }}
         run: ./scripts/report-deploy.sh
       - name: Report everything else this deploy recreated
         if: always() && steps.reportable.outputs.plain != ''
@@ -807,6 +819,7 @@ jobs:
           RD_STATUS: ${{ steps.reportable.outputs.status }}
           RD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RD_NOTE: ${{ env.DELIVERY_NOTE }}
+          RD_DEPLOYED_BY: ${{ env.DELIVERY_ACTOR || github.actor }}
         run: ./scripts/report-deploy.sh
       - name: Prune Images
         # Clean up old docker images to save disk space
