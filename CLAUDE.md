@@ -510,6 +510,13 @@ There is no test suite — this repo is configuration, so validation is mostly
 "does the thing it configures still come up".
 
 - `ansible-lint` runs in CI on `ansible/**`; run it locally before pushing.
+- `make workflow-size` after editing any GitHub workflow (SERV-136). A `run:` block
+  is ONE expression and GitHub caps an expression at 21,000 characters — over it,
+  the workflow does not load at all: every run fails before a job exists, named
+  after the file path, with no log, and the error points at the `run:` key rather
+  than at your edit. **Shell comments inside the block count**, so a comment-only
+  change can break CI, and `actionlint` accepts the file either way. Prose belongs
+  in a YAML comment *above* the step, which is free.
 - `docker compose config` catches compose syntax and interpolation errors.
 - The two Go modules are the only real test suites here. After touching either,
   `docker build --build-context cfaccess=./pkg/cfaccess --target test -f
