@@ -31,6 +31,10 @@ anything deploys or gets versioned.
   VitePress renderer; `wiki/docs/` is **generated and wiped on every run**. Design
   of record in `docs/estate-wiki.md`; see also the invariant below.
 - `services/` — first-party service source that hasn't graduated to its own repo.
+- `pkg/cfaccess/` — the **estate's** Cloudflare Access JWT verifier (SERV-131), a
+  nested Go module imported by cf-access-guard, Lyceum and Chronicle. Decision of
+  record in `docs/cf-access-verifier.md`; see the invariant below before writing
+  another one.
 - `agent/rules/`, `bakeoff/` — local-model rules and the model bakeoff harness.
 - `PRINCIPLES.md` — **cross-repo** estate defaults (languages, stack, release
   types, code quality). Unlike this file, it is not about this repo; it holds the
@@ -383,12 +387,34 @@ anything deploys or gets versioned.
   `make edge-auth-check`. The guard is the one first-party image **built on the box**
   rather than pinned (stdlib-only Go, no deps), so `deploy.yml` builds it explicitly —
   `up -d` alone would keep running a stale image without complaint. Its image carries
-  `org.opencontainers.image.revision`, stamped from `git log -1 -- services/cf-access-guard`
-  at build time (SERV-109). That label is the guard's **only** identity: it has no pin, and
+  `org.opencontainers.image.revision`, stamped at build time from
+  `git log -1 -- services/cf-access-guard pkg/cfaccess` (SERV-109, widened by SERV-131 —
+  the guard's behaviour is partly in the shared module now, so a revision taken from the
+  service directory alone would call a stale guard current after a module-only change). That label is the guard's **only** identity: it has no pin, and
   its image ID is useless for comparison because BuildKit re-exports the config on every
   build, so a full cache hit still yields a new ID. Recreating on an ID difference would
   bounce the auth path on every deploy; recreating on a revision difference bounces it
   exactly when the source moved.
+- **There is ONE Cloudflare Access verifier, and it is `pkg/cfaccess`** (SERV-131).
+  Do not hand-roll a second one, and do not copy this one into a service. There
+  were three Go copies, written by copying, and they drifted: Lyceum's lacked the
+  `len(e) > 8` exponent bound, so a JWKS key with a nine-byte exponent sliced a
+  fixed buffer at index `-1` and **panicked the process** — remote input, security
+  path, no `recover` (LYCM-122). Nobody was wrong at any point, which is the
+  problem: the copy was correct when it was made. Chronicle was green only because
+  a review caught it mid-flight. Consumers `go get` it by tag —
+  `pkg/cfaccess/v0.1.0`, and the `tag-separator: "/"` in
+  `release-please-config.json` is what makes that form resolvable at all, not a
+  cosmetic choice. **cf-access-guard is the one exception**, tracking HEAD through
+  a path `replace`, which is also what keeps its build hermetic; it therefore
+  reaches the guard's Docker build as a **named build context**, never by widening
+  the context to the deploy root — that root holds the rendered `.env`.
+  Switchyard stays on `jose` deliberately: replacing a maintained library with
+  estate code is the wrong direction, and the cross-language check is
+  `pkg/cfaccess/testdata/vectors.json`, shared vectors that **both** suites run.
+  A `class: protocol` vector must hold in any conforming verifier; `keypolicy`
+  ones are estate hardening a general JWT library need not enforce, and a
+  legitimate difference is recorded in `expectBy` rather than skipped.
 - **The wiki is generated, and its generator must never read a resolved
   environment** (SERV-101). `wiki/docs/` is wiped and rewritten on every run, so a
   hand-written page there is deleted without warning — anything a person wants to
@@ -465,6 +491,12 @@ There is no test suite — this repo is configuration, so validation is mostly
 
 - `ansible-lint` runs in CI on `ansible/**`; run it locally before pushing.
 - `docker compose config` catches compose syntax and interpolation errors.
+- The two Go modules are the only real test suites here. After touching either,
+  `docker build --build-context cfaccess=./pkg/cfaccess --target test -f
+  services/cf-access-guard/Dockerfile services/cf-access-guard` runs **both**
+  through the pinned toolchain — the same thing CI does, so there is still exactly
+  one compiler pin in the repo. `cd pkg/cfaccess && go test ./...` is the fast
+  local loop; regenerate the shared vectors with `-run TestUpdateVectors -update`.
 - `./scripts/check-compose-drift.sh [service]` after any mount or env change.
 - `make health-check` (or `./scripts/assert-healthy.sh [service]`) to ask whether
   the stack actually works, which `docker compose ps` does not answer — it fails

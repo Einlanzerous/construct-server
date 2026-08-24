@@ -1,11 +1,12 @@
 name: cf-access-guard tests
 
 # The guard decides whether requests to every tunneled app are authenticated
-# (SERV-106), and guard_test.go's bypass table — alg=none, HS256 algorithm
+# (SERV-106). The bypass table it used to own — alg=none, HS256 algorithm
 # confusion, cross-application audience, expired, no exp at all, tampered payload,
-# unknown kid — is the only real test suite in this repo. Until this workflow
-# existed, nothing ran it: the tests could rot silently and the first symptom would
-# have been at the edge.
+# unknown kid — now lives in pkg/cfaccess as shared vectors that Switchyard's
+# TypeScript suite runs too (SERV-131), and this job runs BOTH modules. Until this
+# workflow existed, nothing ran any of it: the tests could rot silently and the
+# first symptom would have been at the edge.
 #
 # Runs through the service's own Dockerfile (`--target test`) rather than with
 # `setup-go`, so there is exactly ONE toolchain pin in the repo. CI cannot end up on
@@ -17,10 +18,15 @@ on:
   push:
     paths:
       - 'services/cf-access-guard/**'
+      # The guard is built from the shared verifier, so a module-only change is a
+      # change to this binary. Omitting it would let pkg/cfaccess merge untested by
+      # the job that actually compiles it into something deployed.
+      - 'pkg/cfaccess/**'
       - '.github/workflows/cf-access-guard.yml'
   pull_request:
     paths:
       - 'services/cf-access-guard/**'
+      - 'pkg/cfaccess/**'
       - '.github/workflows/cf-access-guard.yml'
 
 jobs:
@@ -35,5 +41,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: gofmt, go vet, go test
-        # The build fails on the first of the three that fails, and names which.
-        run: docker build --target test services/cf-access-guard
+        # The build fails on the first check that fails, and names which. The test
+        # stage runs the guard's suite AND pkg/cfaccess's, including the shared
+        # vectors — see the Dockerfile.
+        #
+        # --build-context: the guard imports pkg/cfaccess through a path replace, and
+        # a named context is how that reaches the build without making the repo root
+        # (and, on the box, the deploy root's rendered .env) a docker build context.
+        run: |
+          docker build \
+            --build-context cfaccess=./pkg/cfaccess \
+            --target test \
+            -f services/cf-access-guard/Dockerfile \
+            services/cf-access-guard

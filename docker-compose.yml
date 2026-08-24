@@ -1215,6 +1215,13 @@ services:
   cf-access-guard:
     build:
       context: ./services/cf-access-guard
+      # The shared Access verifier (SERV-131), as a NAMED context rather than by
+      # widening the build context to the deploy root. The deploy root holds the
+      # rendered .env, and making it a docker build context would put every
+      # credential in the stack one .dockerignore mistake away from an image
+      # layer. deploy.yml rsyncs this directory alongside the service's own.
+      additional_contexts:
+        cfaccess: ./pkg/cfaccess
       args:
         # deploy.yml sets this from `git log -1 -- services/cf-access-guard`; see the
         # Dockerfile for why the image needs a source identity at all (SERV-109).

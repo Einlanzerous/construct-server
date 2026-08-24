@@ -1,6 +1,22 @@
 package main
 
+// What is left here after SERV-131 is the guard's OWN decisions: the per-host
+// AUD map, the forwardAuth contract with Traefik, audit mode, and the config
+// that refuses to start permissive.
+//
+// The verification itself — the alg:none / HMAC-replay / expired / unknown-kid
+// bypass table, the JWKS cache, the fail-closed key handling — moved to
+// pkg/cfaccess and is tested there, against shared vectors that Switchyard's
+// TypeScript suite runs too. Restating any of it here would recreate in the test
+// suite exactly the duplication the ticket removed from the source.
+//
+// The one thing that MUST be tested here and cannot be tested there: that a
+// token minted for one tunneled application does not open another. That is the
+// whole of what this service adds on top of the module.
+
 import (
+	"bytes"
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -15,322 +31,195 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Einlanzerous/construct-server/pkg/cfaccess"
 )
 
 const (
-	testIssuer = "https://zero-gravity-industries.cloudflareaccess.com"
-	testAud    = "d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de"
-	testKid    = "kid-under-test"
+	testTeam       = "zero-gravity-industries.cloudflareaccess.com"
+	testIssuer     = "https://" + testTeam
+	switchyardHost = "switchyard.zerogravity.industries"
+	wikiHost       = "wiki.zerogravity.industries"
+	switchyardAud  = "d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de"
+	wikiAud        = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	testKid        = "kid-under-test"
 )
 
-var testKey = mustKey()
-
-func mustKey() *rsa.PrivateKey {
+var testKey = func() *rsa.PrivateKey {
 	k, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		panic(err)
 	}
 	return k
-}
-
-// staticKeys is the key lookup the signature tests run against, so they exercise
-// verify() without a JWKS endpoint in the way.
-type staticKeys map[string]*rsa.PublicKey
-
-func (s staticKeys) key(kid string) (*rsa.PublicKey, error) {
-	if pub, ok := s[kid]; ok {
-		return pub, nil
-	}
-	return nil, fmt.Errorf("unknown kid")
-}
+}()
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// signToken builds a JWT from raw maps rather than a typed struct on purpose:
-// the interesting tests are the malformed ones, and a struct would make several
-// of them unrepresentable.
-func signToken(t *testing.T, key *rsa.PrivateKey, header, claims map[string]any) string {
+func signToken(t *testing.T, aud string) string {
 	t.Helper()
-	h, err := json.Marshal(header)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := json.Marshal(claims)
+	now := time.Now()
+	h, _ := json.Marshal(map[string]any{"alg": "RS256", "kid": testKid, "typ": "JWT"})
+	c, err := json.Marshal(map[string]any{
+		"iss": testIssuer, "aud": []string{aud},
+		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nbf": now.Unix(),
+		"sub": "abc123", "email": "operator@example.com",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	signing := b64(h) + "." + b64(c)
-	digest := sha256.Sum256([]byte(signing))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	d := sha256.Sum256([]byte(signing))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, testKey, crypto.SHA256, d[:])
 	if err != nil {
 		t.Fatal(err)
 	}
 	return signing + "." + b64(sig)
 }
 
-func validHeader() map[string]any {
-	return map[string]any{"alg": "RS256", "kid": testKid, "typ": "JWT"}
-}
-
-func validClaims(now time.Time) map[string]any {
-	return map[string]any{
-		"iss":   testIssuer,
-		"aud":   []string{testAud},
-		"exp":   now.Add(time.Hour).Unix(),
-		"iat":   now.Unix(),
-		"nbf":   now.Unix(),
-		"sub":   "abc123",
-		"email": "operator@example.com",
-	}
-}
-
-func TestVerifyAcceptsAGenuineToken(t *testing.T) {
-	now := time.Now()
-	keys := staticKeys{testKid: &testKey.PublicKey}
-	tok := signToken(t, testKey, validHeader(), validClaims(now))
-
-	claims, err := verify(tok, keys, testIssuer, testAud, now)
+// certsClient stands in for Cloudflare's /cdn-cgi/access/certs.
+//
+// Injected as an http.Client rather than by pointing the verifier at a test URL:
+// pkg/cfaccess deliberately keeps the endpoint unexported, because "verified by
+// Cloudflare Access" is not something a deployment should be able to reconfigure.
+// A Transport is the seam that costs the production API nothing.
+func certsClient(t *testing.T, serve bool) *http.Client {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"keys": []map[string]any{{
+		"kid": testKid, "kty": "RSA", "alg": "RS256", "use": "sig",
+		"n": b64(testKey.PublicKey.N.Bytes()),
+		"e": b64(big.NewInt(int64(testKey.PublicKey.E)).Bytes()),
+	}}})
 	if err != nil {
-		t.Fatalf("a genuine token was rejected: %v", err)
+		t.Fatal(err)
 	}
-	if claims.Email != "operator@example.com" {
-		t.Fatalf("email = %q, want operator@example.com", claims.Email)
-	}
+	return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if !serve {
+			return nil, fmt.Errorf("certs endpoint is unreachable")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Request:    r,
+		}, nil
+	})}
 }
 
-// A single-string `aud` is legal per RFC 7519 and would be a silent outage if
-// Cloudflare ever emitted one.
-func TestVerifyAcceptsAScalarAudience(t *testing.T) {
-	now := time.Now()
-	claims := validClaims(now)
-	claims["aud"] = testAud
-	tok := signToken(t, testKey, validHeader(), claims)
+type roundTripFunc func(*http.Request) (*http.Response, error)
 
-	if _, err := verify(tok, staticKeys{testKid: &testKey.PublicKey}, testIssuer, testAud, now); err != nil {
-		t.Fatalf("scalar aud was rejected: %v", err)
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func testGuard(t *testing.T, m mode, withKeys bool) *guard {
+	t.Helper()
+	g := &guard{
+		cfg: &config{
+			teamDomain: testTeam,
+			audByHost: map[string]string{
+				switchyardHost: switchyardAud,
+				wikiHost:       wikiAud,
+			},
+			mode: m,
+		},
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-}
-
-// The table below is the substance of this service. Each case is a way a request
-// can arrive without a legitimate Access assertion; every one of them must be an
-// error, because the caller turns any error into a 403 and nothing else does.
-func TestVerifyRejects(t *testing.T) {
-	now := time.Now()
-	otherKey := mustKey()
-
-	cases := []struct {
-		name  string
-		token func() string
-	}{
-		{
-			name: "a token for another application's audience",
-			token: func() string {
-				c := validClaims(now)
-				c["aud"] = []string{"a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2"}
-				return signToken(t, testKey, validHeader(), c)
-			},
-		},
-		{
-			name: "a token from another team domain",
-			token: func() string {
-				c := validClaims(now)
-				c["iss"] = "https://someone-else.cloudflareaccess.com"
-				return signToken(t, testKey, validHeader(), c)
-			},
-		},
-		{
-			name: "an expired token",
-			token: func() string {
-				c := validClaims(now)
-				c["exp"] = now.Add(-2 * time.Hour).Unix()
-				return signToken(t, testKey, validHeader(), c)
-			},
-		},
-		{
-			name: "a token with no exp at all",
-			token: func() string {
-				c := validClaims(now)
-				delete(c, "exp")
-				return signToken(t, testKey, validHeader(), c)
-			},
-		},
-		{
-			name: "a token that is not valid yet",
-			token: func() string {
-				c := validClaims(now)
-				c["nbf"] = now.Add(time.Hour).Unix()
-				return signToken(t, testKey, validHeader(), c)
-			},
-		},
-		{
-			name: "a token issued in the future",
-			token: func() string {
-				c := validClaims(now)
-				c["iat"] = now.Add(time.Hour).Unix()
-				return signToken(t, testKey, validHeader(), c)
-			},
-		},
-		{
-			name: "a token signed by a key we do not trust",
-			token: func() string {
-				return signToken(t, otherKey, validHeader(), validClaims(now))
-			},
-		},
-		{
-			name: "a token naming a kid we have never seen",
-			token: func() string {
-				h := validHeader()
-				h["kid"] = "rotated-away"
-				return signToken(t, testKey, h, validClaims(now))
-			},
-		},
-		{
-			name: "a token with no kid to select a key with",
-			token: func() string {
-				h := validHeader()
-				delete(h, "kid")
-				return signToken(t, testKey, h, validClaims(now))
-			},
-		},
-		{
-			// The classic: strip the signature and claim there never was one.
-			name: "an unsigned token claiming alg=none",
-			token: func() string {
-				h, _ := json.Marshal(map[string]any{"alg": "none", "kid": testKid})
-				c, _ := json.Marshal(validClaims(now))
-				return b64(h) + "." + b64(c) + "."
-			},
-		},
-		{
-			// The other classic: algorithm confusion. A verifier that dispatches
-			// on the header's alg would treat the PUBLIC key as an HMAC secret.
-			name: "a token claiming HS256 to force symmetric verification",
-			token: func() string {
-				h := validHeader()
-				h["alg"] = "HS256"
-				return signToken(t, testKey, h, validClaims(now))
-			},
-		},
-		{
-			name: "a token whose payload was edited after signing",
-			token: func() string {
-				parts := splitThree(signToken(t, testKey, validHeader(), validClaims(now)))
-				forged, _ := json.Marshal(map[string]any{
-					"iss": testIssuer, "aud": []string{testAud},
-					"exp": now.Add(time.Hour).Unix(), "email": "attacker@example.com",
-				})
-				return parts[0] + "." + b64(forged) + "." + parts[2]
-			},
-		},
-		{
-			name:  "something that is not a JWT at all",
-			token: func() string { return "not-a-token" },
-		},
-		{
-			name:  "an empty string",
-			token: func() string { return "" },
-		},
-		{
-			name: "a token with base64 padding, which RFC 7515 forbids",
-			token: func() string {
-				h, _ := json.Marshal(validHeader())
-				c, _ := json.Marshal(validClaims(now))
-				return base64.URLEncoding.EncodeToString(h) + "." + base64.URLEncoding.EncodeToString(c) + ".AAAA"
-			},
-		},
+	// withKeys=false gives a certs endpoint that always fails: the verifier holds
+	// no keys, which is the state a guard is in before its first successful
+	// refresh and the one it must fail closed from.
+	v, err := cfaccess.New(cfaccess.Config{
+		TeamDomain: testTeam,
+		HTTPClient: certsClient(t, withKeys),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	keys := staticKeys{testKid: &testKey.PublicKey}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := verify(tc.token(), keys, testIssuer, testAud, now)
-			if err == nil {
-				t.Fatal("accepted — this is a bypass")
-			}
-			// Logged so `go test -v` shows WHY each case was refused. A table of
-			// rejections all failing for the same shallow reason ("not a JWT")
-			// would pass while testing almost nothing.
-			t.Logf("rejected: %v", err)
-		})
-	}
-}
-
-func splitThree(tok string) [3]string {
-	var out [3]string
-	i, start := 0, 0
-	for j := 0; j < len(tok) && i < 3; j++ {
-		if tok[j] == '.' {
-			out[i] = tok[start:j]
-			i++
-			start = j + 1
+	if withKeys {
+		if err := v.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if i < 3 {
-		out[i] = tok[start:]
-	}
-	return out
+	g.verifier = v
+	return g
 }
 
-// A token that is minutes past expiry must fail even though a small leeway
-// exists — the leeway is for clock skew, not for grace.
-func TestVerifyLeewayIsNarrow(t *testing.T) {
-	now := time.Now()
-	keys := staticKeys{testKid: &testKey.PublicKey}
+// The reason this service exists in the shape it does. Every Access application
+// on the team domain is signed by the SAME key, so a token for the wiki is a
+// perfectly valid Cloudflare assertion — and must still not open Switchyard.
+// Nothing in pkg/cfaccess can test this: the per-host map is deliberately the
+// guard's, and this is what having it buys.
+func TestATokenIsOnlyGoodForItsOwnHost(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	ctx := context.Background()
 
-	c := validClaims(now)
-	c["exp"] = now.Add(-30 * time.Second).Unix()
-	if _, err := verify(signToken(t, testKey, validHeader(), c), keys, testIssuer, testAud, now); err != nil {
-		t.Fatalf("a token 30s past expiry should still pass within the %s leeway: %v", leeway, err)
+	if _, err := g.validate(ctx, switchyardHost, signToken(t, switchyardAud)); err != nil {
+		t.Fatalf("a genuine Switchyard token was refused at Switchyard: %v", err)
+	}
+	if _, err := g.validate(ctx, wikiHost, signToken(t, wikiAud)); err != nil {
+		t.Fatalf("a genuine wiki token was refused at the wiki: %v", err)
 	}
 
-	c["exp"] = now.Add(-5 * time.Minute).Unix()
-	if _, err := verify(signToken(t, testKey, validHeader(), c), keys, testIssuer, testAud, now); err == nil {
-		t.Fatal("a token 5 minutes past expiry was accepted")
+	// The bypass. Both tokens are real, both are signed by the team's live key,
+	// and both are for hosts this guard serves.
+	if _, err := g.validate(ctx, switchyardHost, signToken(t, wikiAud)); err == nil {
+		t.Fatal("a wiki token opened Switchyard — this is the SERV-106 bypass")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// The guard's own decisions: host mapping and the missing-header case, which
-// never reach verify() at all.
-// ---------------------------------------------------------------------------
-
-func testGuard(t *testing.T, m mode) *guard {
-	t.Helper()
-	return &guard{
-		cfg: &config{
-			issuer:    testIssuer,
-			audByHost: map[string]string{"switchyard.zerogravity.industries": testAud},
-			mode:      m,
-		},
-		keys: nil, // set by callers that get as far as signature checking
-		log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	if _, err := g.validate(ctx, wikiHost, signToken(t, switchyardAud)); err == nil {
+		t.Fatal("a Switchyard token opened the wiki")
 	}
 }
 
 func TestValidateRejectsBeforeItEverLooksAtAToken(t *testing.T) {
-	g := testGuard(t, modeEnforce)
-	tok := signToken(t, testKey, validHeader(), validClaims(time.Now()))
+	g := testGuard(t, modeEnforce, true)
+	tok := signToken(t, switchyardAud)
 
 	cases := []struct{ name, host, assertion string }{
 		{"no forwarded host, i.e. /verify called directly", "", tok},
-		{"a host with no AUD registered for it", "wiki.zerogravity.industries", tok},
-		{"a mapped host but no assertion header", "switchyard.zerogravity.industries", ""},
+		{"a host with no AUD registered for it", "grafana.zerogravity.industries", tok},
+		{"a mapped host but no assertion header", switchyardHost, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := g.validate(canonicalHost(tc.host), tc.assertion); err == nil {
+			if _, err := g.validate(context.Background(), canonicalHost(tc.host), tc.assertion); err == nil {
 				t.Fatal("accepted — this is a bypass")
 			}
 		})
+	}
+}
+
+// A guard that has never reached Cloudflare must refuse everything rather than
+// wave traffic through, and must say so through /healthz — the signal
+// assert-healthy.sh reads.
+func TestAGuardWithNoKeysFailsClosedAndReportsIt(t *testing.T) {
+	g := testGuard(t, modeEnforce, false)
+
+	if _, err := g.validate(context.Background(), switchyardHost, signToken(t, switchyardAud)); err == nil {
+		t.Fatal("a guard holding no signing keys authorised a request")
+	}
+
+	rec := httptest.NewRecorder()
+	g.handleHealth(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/healthz = %d, want 503 — a probe that cannot fail hides the failure", rec.Code)
+	}
+	if body := rec.Body.String(); body == "" {
+		t.Fatal("/healthz returned an empty body, so an operator learns nothing from it")
+	}
+}
+
+func TestHealthzIs200WhenKeysAreLoaded(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	rec := httptest.NewRecorder()
+	g.handleHealth(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/healthz = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestCanonicalHost(t *testing.T) {
 	cases := map[string]string{
-		"switchyard.zerogravity.industries":     "switchyard.zerogravity.industries",
-		"Switchyard.ZeroGravity.Industries":     "switchyard.zerogravity.industries",
-		"switchyard.zerogravity.industries:443": "switchyard.zerogravity.industries",
-		"  switchyard.zerogravity.industries ":  "switchyard.zerogravity.industries",
+		switchyardHost:                          switchyardHost,
+		"Switchyard.ZeroGravity.Industries":     switchyardHost,
+		"switchyard.zerogravity.industries:443": switchyardHost,
+		"  switchyard.zerogravity.industries ":  switchyardHost,
 		"":                                      "",
 	}
 	for in, want := range cases {
@@ -366,9 +255,9 @@ func TestAuditModeAllowsButEnforceDenies(t *testing.T) {
 		want int
 	}{{modeEnforce, http.StatusForbidden}, {modeAudit, http.StatusOK}} {
 		t.Run(string(tc.m), func(t *testing.T) {
-			g := testGuard(t, tc.m)
+			g := testGuard(t, tc.m, true)
 			req := httptest.NewRequest(http.MethodGet, "/verify", nil)
-			req.Header.Set("X-Forwarded-Host", "switchyard.zerogravity.industries")
+			req.Header.Set("X-Forwarded-Host", switchyardHost)
 			rec := httptest.NewRecorder()
 
 			g.handleVerify(rec, req) // no assertion header at all
@@ -380,117 +269,54 @@ func TestAuditModeAllowsButEnforceDenies(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// The JWKS cache, against a fake certs endpoint. This is the seam where a real
-// deployment fails first — a key set that parses wrong is indistinguishable from
-// a bad signature at the point of use.
-// ---------------------------------------------------------------------------
+// loadConfig refuses to start rather than starting permissive. An empty
+// environment variable is not a value (CLAUDE.md).
+func TestLoadConfigRefusesAnUnusableEnvironment(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"no team domain", map[string]string{"CF_ACCESS_AUD_MAP": "a.example=aud"}},
+		{"a team domain that is only a scheme", map[string]string{
+			"CF_ACCESS_TEAM_DOMAIN": "https://", "CF_ACCESS_AUD_MAP": "a.example=aud"}},
+		{"no aud map", map[string]string{"CF_ACCESS_TEAM_DOMAIN": testTeam}},
+		{"an unparseable refresh interval", map[string]string{
+			"CF_ACCESS_TEAM_DOMAIN": testTeam, "CF_ACCESS_AUD_MAP": "a.example=aud",
+			"CF_ACCESS_JWKS_REFRESH": "soon"}},
+		{"a refresh interval below the floor", map[string]string{
+			"CF_ACCESS_TEAM_DOMAIN": testTeam, "CF_ACCESS_AUD_MAP": "a.example=aud",
+			"CF_ACCESS_JWKS_REFRESH": "1s"}},
+		{"a mode that is neither enforce nor audit", map[string]string{
+			"CF_ACCESS_TEAM_DOMAIN": testTeam, "CF_ACCESS_AUD_MAP": "a.example=aud",
+			"CF_ACCESS_GUARD_MODE": "enfroce"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			if _, err := loadConfig(); err == nil {
+				t.Fatal("accepted — the guard would have started on this")
+			}
+		})
+	}
+}
 
-func jwksBody(t *testing.T, pub *rsa.PublicKey, kid string) []byte {
-	t.Helper()
-	body, err := json.Marshal(map[string]any{"keys": []map[string]any{{
-		"kid": kid, "kty": "RSA", "alg": "RS256", "use": "sig",
-		"n": b64(pub.N.Bytes()),
-		"e": b64(big.NewInt(int64(pub.E)).Bytes()),
-	}}})
+func TestLoadConfigNormalisesADashboardPaste(t *testing.T) {
+	t.Setenv("CF_ACCESS_TEAM_DOMAIN", "https://"+testTeam+"/")
+	t.Setenv("CF_ACCESS_AUD_MAP", switchyardHost+"="+switchyardAud)
+	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return body
-}
-
-func TestJWKSCacheFetchesAndVerifies(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(jwksBody(t, &testKey.PublicKey, testKid))
-	}))
-	defer srv.Close()
-
-	c := newJWKSCache("ignored", time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	c.url = srv.URL
-	if err := c.refresh(); err != nil {
-		t.Fatalf("refresh: %v", err)
+	if cfg.teamDomain != testTeam {
+		t.Fatalf("teamDomain = %q, want %q", cfg.teamDomain, testTeam)
 	}
-
-	// The round trip that matters: a key reconstructed from n/e must verify a
-	// signature made by the private half.
-	tok := signToken(t, testKey, validHeader(), validClaims(time.Now()))
-	if _, err := verify(tok, c, testIssuer, testAud, time.Now()); err != nil {
-		t.Fatalf("token did not verify against the fetched key: %v", err)
+	v, err := cfaccess.New(cfaccess.Config{TeamDomain: cfg.teamDomain})
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestJWKSCacheFailsClosedAndVisibly(t *testing.T) {
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	t.Run("an empty cache authorises nothing and reports unhealthy", func(t *testing.T) {
-		c := newJWKSCache("ignored", time.Hour, log)
-		if _, err := c.key(testKid); err == nil {
-			t.Fatal("an empty cache returned a key")
-		}
-		if ok, _ := c.health(); ok {
-			t.Fatal("an empty cache reported healthy — the probe cannot fail")
-		}
-	})
-
-	t.Run("a failing endpoint keeps the keys it already had", func(t *testing.T) {
-		fail := false
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if fail {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			w.Write(jwksBody(t, &testKey.PublicKey, testKid))
-		}))
-		defer srv.Close()
-
-		c := newJWKSCache("ignored", time.Hour, log)
-		c.url = srv.URL
-		if err := c.refresh(); err != nil {
-			t.Fatal(err)
-		}
-		fail = true
-		if err := c.refresh(); err == nil {
-			t.Fatal("a 500 from the certs endpoint was reported as success")
-		}
-		if c.count() != 1 {
-			t.Fatal("a failed refresh discarded a working key set — a Cloudflare blip would black out the estate")
-		}
-	})
-
-	t.Run("stale keys report unhealthy", func(t *testing.T) {
-		c := newJWKSCache("ignored", time.Minute, log)
-		c.keys = map[string]*rsa.PublicKey{testKid: &testKey.PublicKey}
-		c.lastOK = time.Now().Add(-time.Hour)
-		if ok, detail := c.health(); ok {
-			t.Fatalf("an hour-stale key set reported healthy: %s", detail)
-		}
-	})
-
-	t.Run("a response with no usable keys is a failure, not an empty success", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			io.WriteString(w, `{"keys":[]}`)
-		}))
-		defer srv.Close()
-		c := newJWKSCache("ignored", time.Hour, log)
-		c.url = srv.URL
-		if err := c.refresh(); err == nil {
-			t.Fatal("an empty key set was accepted")
-		}
-	})
-
-	t.Run("an undersized modulus is refused", func(t *testing.T) {
-		small, err := rsa.GenerateKey(rand.Reader, 1024)
-		if err != nil {
-			t.Fatal(err)
-		}
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write(jwksBody(t, &small.PublicKey, testKid))
-		}))
-		defer srv.Close()
-		c := newJWKSCache("ignored", time.Hour, log)
-		c.url = srv.URL
-		if err := c.refresh(); err == nil {
-			t.Fatal("a 1024-bit signing key was accepted")
-		}
-	})
+	if v.Issuer() != testIssuer {
+		t.Fatalf("issuer = %q, want %q", v.Issuer(), testIssuer)
+	}
 }

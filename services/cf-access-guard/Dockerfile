@@ -13,11 +13,28 @@
 # deploy — so without the pin the compiler behind the estate's auth gate can change
 # with no diff anywhere. The tag is provenance, the digest is the pin.
 FROM golang:1.25-alpine@sha256:1e0126852075c9c60731c8ba49088448b91f63e2aed97ca9d1a9791622a05946 AS build
-WORKDIR /src
+# The repo layout is mirrored inside the image — the guard at
+# services/cf-access-guard, the module at pkg/cfaccess — so the `../../pkg/cfaccess`
+# replace in go.mod resolves to the same place here as in a checkout. Flattening it
+# would work only by accident of how `..` resolves above /src.
+WORKDIR /src/services/cf-access-guard
 
-# No go.sum and nothing to download: the guard is stdlib-only, which is what
-# makes this build hermetic. Anything that adds a dependency also adds a network
-# fetch to every deploy — reconsider it rather than adding one quietly.
+# Still no go.sum and still nothing to download. The guard now imports
+# pkg/cfaccess (SERV-131), but through a path `replace` in its go.mod, and the
+# module is itself stdlib-only — so the build stays HERMETIC, which is the
+# property the paragraph below has always been about. A `require` on the
+# published tag instead would put proxy.golang.org between every deploy and the
+# service that decides whether requests to the estate are authenticated.
+#
+# pkg/cfaccess arrives as a named build context rather than by widening this
+# build's context to the repo root. The deploy root holds the rendered .env, and
+# making that a docker build context — even with a .dockerignore in front of it —
+# is one editing mistake away from shipping every credential in the stack into an
+# image layer. A second context is bounded by construction.
+#
+# Anything that adds a real dependency also adds a network fetch to every deploy;
+# reconsider it rather than adding one quietly.
+COPY --from=cfaccess . /src/pkg/cfaccess
 COPY go.mod ./
 COPY *.go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cf-access-guard .
@@ -28,10 +45,15 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cf-access-guard .
 # in the repo — CI cannot drift onto a different compiler than the one that builds the
 # deployed binary. Nothing downstream depends on this stage, so an ordinary build (and
 # therefore every deploy) skips it.
+# Tests cover BOTH modules: the guard's own, and the shared verifier's — including
+# the vectors Switchyard's TypeScript suite runs against jose. Running them here
+# rather than only in the module's own job is what stops a guard change and a
+# module change from being green separately and broken together.
 FROM build AS test
-RUN test -z "$(gofmt -l .)" || { echo "not gofmt-clean:"; gofmt -l .; exit 1; }
+RUN test -z "$(gofmt -l . ../../pkg/cfaccess)" || { echo "not gofmt-clean:"; gofmt -l . ../../pkg/cfaccess; exit 1; }
 RUN go vet ./...
 RUN go test ./...
+RUN cd ../../pkg/cfaccess && go vet ./... && go test ./...
 
 # FROM scratch: nothing in the image but the binary and a CA bundle. There is no
 # shell to exec into and no package manager, which is the right posture for a

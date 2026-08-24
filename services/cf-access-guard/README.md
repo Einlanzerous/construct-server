@@ -65,15 +65,46 @@ routers went fail-closed at once. It is not a steady state:
   "expired" from "unknown host" is a probing oracle; the operator gets all three in
   the container log.
 
+## Where the verification lives
+
+Not in this directory. JWT parsing, the JWKS cache and every claim check are in
+[`pkg/cfaccess`](../../pkg/cfaccess), the estate's one Cloudflare Access verifier
+(SERV-131) — Lyceum and Chronicle import the same module. Three hand-rolled
+copies of this code had already drifted far enough apart that one of them
+panicked on a malformed key (LYCM-122) while this one did not.
+
+What stays here is what the module deliberately refuses to know: the per-host AUD
+map, audit mode, the forwardAuth contract with Traefik, and the healthcheck. The
+audience is passed **per request** rather than configured once, so every tunneled
+host is held to its own Access application — a wiki token is a perfectly valid
+Cloudflare assertion and must still not open Switchyard.
+
+The guard is the only consumer that tracks the module at HEAD, through a path
+`replace`, which is what keeps this build hermetic: no `go.sum`, no proxy fetch on
+any deploy. `pkg/cfaccess` therefore arrives as a **named build context**, so a
+build here is:
+
+```bash
+docker build --build-context cfaccess=../../pkg/cfaccess \
+  --target test -f Dockerfile .
+```
+
+Reasoning in full: [`docs/cf-access-verifier.md`](../../docs/cf-access-verifier.md).
+
 ## Working on it
 
 ```bash
-go test ./...                  # the bypass table is the point — read it first
+go test ./...                  # this service's own decisions
+(cd ../../pkg/cfaccess && go test ./...)   # the verification, incl. shared vectors
 gofmt -l . && go vet ./...
 make edge-auth-check           # assert the LIVE stack rejects a spoofed Host
 ```
 
-The tests sign their own tokens with a throwaway RSA key, so they need no network
-and no Cloudflare. `TestVerifyRejects` is the security surface: every entry is a
-way a request can arrive without a legitimate assertion, and each must be an
-error, because the caller turns any error into a 403 and nothing else does.
+The tests sign their own tokens with a throwaway RSA key and serve their own JWKS
+through an injected `Transport`, so they need no network and no Cloudflare.
+
+`TestATokenIsOnlyGoodForItsOwnHost` is this service's security surface — the one
+property the shared module cannot test, because the per-host map is deliberately
+the guard's. The bypass table it used to own (alg=none, HMAC replay, expired,
+unknown kid, tampered payload) is now shared vectors in `pkg/cfaccess`, run by
+this repo's Go tests **and** by Switchyard's TypeScript suite against `jose`.
