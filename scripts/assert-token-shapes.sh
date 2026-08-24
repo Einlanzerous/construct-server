@@ -90,13 +90,15 @@ cd "$DEPLOY_ROOT"
 #
 #   BOOTSTRAP_TOKEN                   switchyard's own boot credential
 #   *SWITCHYARD_TOKEN                 SWITCHYARD_TOKEN, PURSER_SWITCHYARD_TOKEN
-#   *SWITCHYARD_TOKEN_*               SWITCHYARD_TOKEN_N8N_VOX_DICTATE — one per
-#                                     consumer, minted separately (.env.example:84)
+#   *SWITCHYARD_TOKEN_*               one per consumer, minted separately
 #
-# That third line is a review catch, not foresight: the trailing `_N8N_VOX_DICTATE`
-# defeats a suffix match, so n8n's per-workflow token went unchecked while the summary
-# line reported full coverage. Anything of that form is a switchyard API token by
-# construction, so match the infix rather than enumerating consumers.
+# That third line is a review catch, not foresight: it was added for
+# SWITCHYARD_TOKEN_N8N_VOX_DICTATE, whose trailing `_N8N_VOX_DICTATE` defeats a suffix
+# match, so n8n's per-workflow token went unchecked while the summary line reported full
+# coverage. That consumer is gone with imperium-loop (SERV-82) and the form currently
+# matches nothing — **keep it anyway**. Anything of that shape is a switchyard API token
+# by construction, and the bug it caught was the check silently covering less than it
+# claimed; deleting the form because today's stack has no example restores exactly that.
 #
 # What must NOT be dragged in, and why the matching is this fussy rather than a grep for
 # SWITCHYARD: AUTHENTIK_BOOTSTRAP_TOKEN is a different product's credential with a

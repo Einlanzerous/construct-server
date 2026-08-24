@@ -15,8 +15,9 @@ each section names.
 construct-server slice is **SERV-73** (children SERV-74…81, and since SERV-108, 128,
 130). Where a ticket and this document disagree, the ticket is newer.
 
-**Superseded since writing.** imperium-loop is being wound down (SERV-82), so the
-Servo-Signal rows in *Shape* and **sequencing step 3 are dropped, not deferred**. The
+**Superseded since writing.** imperium-loop was wound down in August 2026 (SERV-82,
+SWY-222) and its containers no longer exist, so the Servo-Signal rows in *Shape* and
+**sequencing step 3 are dropped, not deferred**. The
 verifier instead runs as a Claude Code job on the self-hosted runner, following
 `.github/workflows/pr-review.yml` (SERV-80) — which takes the security item off the
 critical path entirely. Reconciler tier B (SWY-194) was scoped around that same agent

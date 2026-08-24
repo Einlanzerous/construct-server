@@ -12,25 +12,12 @@ services:
     size: s
 
   # Automation
-  - name: "n8n"
-    type: http
-    url: "http://host.docker.internal:5678"
-    href: "http://imperial-construct:5678"
-    category: "Automation"
-    size: s
   - name: "Semaphore UI"
     type: http
     url: "http://host.docker.internal:3002"
     href: "http://imperial-construct:3002"
     category: "Automation"
     size: s
-  - name: "Servo-Signal"
-    type: http
-    url: "http://host.docker.internal:8090/mcp"
-    href: "http://imperial-construct:8090"
-    category: "Automation"
-    size: s
-    check_connection_only: true
 
   # Applications
   - name: "cook_book"

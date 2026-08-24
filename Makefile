@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check health-check edge-auth-check versions assert-tokens env-ownership-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size health-check edge-auth-check versions assert-tokens env-ownership-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
@@ -75,6 +75,15 @@ force-recreate: deploy-root network
 	  exit 1; \
 	}
 	$(COMPOSE) up -d --no-deps --force-recreate $(svc)
+
+# How close is any workflow's largest `run:` block to GitHub's 21,000-character
+# expression cap? (SERV-136) Over it, GitHub refuses to LOAD the workflow: every run
+# dies before a job is created, named after the file path, with no log. Shell comments
+# inside the block count toward the limit and actionlint does not model it, so this is
+# the only local way to see it coming. Run it after editing any workflow.
+# Usage: make workflow-size
+workflow-size:
+	./scripts/check-run-expression-size.sh
 
 # Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
 # Usage: make drift-check            (check every service)
