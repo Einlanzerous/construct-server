@@ -363,6 +363,18 @@ reviewer runs with `--allowedTools Bash,Read,Grep,Glob` and spawns none today.
   previous run's checkout is still there — and fails on a fresh one.
 - **`jq`'s `//` fires on `false`, not just `null`.** `.is_error // true` turns a
   successful run into a malfunction. The classifier tests `has("is_error")`.
+- **`@claude review` runs the workflow from the DEFAULT BRANCH, not from the
+  PR.** GitHub resolves an `issue_comment` workflow against the default branch,
+  so a comment-triggered run has `headBranch: main` and executes `main`'s copy of
+  this file — even in this repo, which calls it as `./` precisely so a change is
+  exercised by its own PR. Only the `pull_request` trigger reads the PR's copy.
+  Measured on SERV-127 (#152): the `pull_request` pass ran the new step and the
+  `@claude review` pass, ten minutes later on the same PR, did not have it.
+  Consequences worth knowing before you rely on either: a workflow change cannot
+  be tested by commenting, and — because `synchronize` without `review:always` is
+  skipped once a PR has been reviewed — the label is the only way to get a second
+  `pull_request` pass over a workflow edit. It is not a gap after merge: both
+  triggers then run the same merged copy.
 - **`claude-code-action` fails runs it completed.** It throws when `num_turns`
   exceeds `max_turns` even on a run the SDK allowed to finish. The workflow reads
   the result message from the execution file and decides for itself; the action's

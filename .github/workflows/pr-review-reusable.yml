@@ -1356,10 +1356,11 @@ jobs:
             exit 0
           fi
 
-          # Same two-step resolution the classifier uses: the step output where
-          # the action managed to set it, and the path the action computes
-          # deterministically from RUNNER_TEMP where a failed composite action
-          # surfaced no outputs at all.
+          # `EXEC` is the classifier's already-resolved path, so this repeats
+          # its fallback rather than trusting it: `if: always()` means this step
+          # runs on paths where the classifier itself did not, and an empty
+          # `EXEC` there would otherwise read as "no execution file" on a run
+          # that wrote one.
           SESSION_ID=""
           EXEC_FILE="${EXEC:-}"
           if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
