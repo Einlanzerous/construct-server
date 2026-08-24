@@ -394,15 +394,29 @@ check_go() {
 }
 
 check_node() {
-  local dir="$1" rel="$2" pm="$3" script out
+  local dir="$1" rel="$2" pm="$3" script
+
+  # The package manager is chosen from the lockfile, which says what the repo WANTS, not
+  # what this box has. A pnpm or yarn lockfile on a machine with neither installed would
+  # otherwise exit 127 and block the push on "command not found" — a false block, and
+  # against the rule that we only ever block on a check that actually ran.
+  if ! command -v "$pm" >/dev/null 2>&1; then
+    record_skip "node — $rel" "$pm is not on PATH"
+    return
+  fi
 
   # Without an install there is no eslint and no prettier to run. Skip, loudly: blocking
   # here would fail every fresh checkout, which is exactly how a gate gets disabled.
   if [ ! -d "$dir/node_modules" ]; then
-    record_skip "$rel" "node_modules is not installed"
+    record_skip "node — $rel" "node_modules is not installed"
     return
   fi
 
+  # Note there is deliberately no has_diagnostics filter here, unlike go vet. Prettier
+  # reports a formatting failure as `[warn] src/foo.ts`, which carries no file:line — so
+  # filtering on that shape would skip the single most common finding this gate exists to
+  # catch. The trade is that a genuinely broken lint setup blocks; the report shows the
+  # error verbatim, so it is diagnosable rather than mysterious.
   for script in format:check lint; do
     has_script "$dir" "$script" || continue
     if ! run_check "$script — $rel" "$dir" "$pm" run "$script"; then

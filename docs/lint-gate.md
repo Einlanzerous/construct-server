@@ -116,6 +116,12 @@ Anything it could not run is reported as a skip and does not block. Concretely:
   them apart rather than blocking on both.
 - `dart` or `cargo` not on `PATH` → skip. Neither is installed on this box today, so the
   Flutter units are discovered and skipped, visibly.
+- The **package manager** not on `PATH` → skip. The lockfile says what the repo *wants*,
+  not what the machine has, so a `pnpm-lock.yaml` on a box without pnpm would otherwise
+  exit 127 and block on "command not found". This is not hypothetical on the runner:
+  CLAUDE.md's own invariant is that it runs as a systemd service with a bare system
+  `PATH` and cannot see anything under `$HOME` — **`bun` included**. Every Node check
+  skips there, which is correct; the runner is not where pushes are authored.
 
 ## Exemptions
 
