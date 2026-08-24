@@ -28,6 +28,13 @@ Install it with `make lint-gate-install`. That is the whole per-repo setup: ther
 none. User-level installation was the ticket's requirement and is the reason this is
 worth doing at all — a mechanism that needs eleven repos to opt in gets nine of them.
 
+**A session that was already running when you installed it will not have the gate.**
+Claude Code picks up settings changes on its own, but a session started before the hook
+existed may need `/hooks` opened once, or a restart. This is worth knowing because the
+symptom is indistinguishable from the gate being broken: your push simply succeeds.
+`make lint-gate-status` answers whether it is *installed*; only a new session answers
+whether it is *live*.
+
 | Command | What it does |
 |---|---|
 | `make lint-gate` | Run the checks against this repo, as the hook would |
