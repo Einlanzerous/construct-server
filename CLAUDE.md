@@ -284,9 +284,9 @@ anything deploys or gets versioned.
   time, because a render against a file nothing reads always succeeds. **A target whose
   destination has another writer, or no consumer, is worse than no target**: both report
   a state that means nothing, and the second one reports it in green.
-  **The vault must never deliver a key `versions.env` owns.** It delivered all ten for
-  three months (SERV-96 moved the pins to git on 2026-08-14; the vault kept its copies),
-  and eight of them had gone stale by the time anyone looked. Nothing broke, for one
+  **The vault must never deliver a key `versions.env` owns.** It delivered all ten from
+  2026-08-15, when SERV-96 moved the pins to git and the vault kept its copies, until
+  SERV-94 detached them — and eight had gone stale in that time. Nothing broke, for one
   reason: `render-env.sh` strips every key the versions file defines from the base
   before appending the tracked pins, so git won every time. That is a mitigation sitting
   in one script, not a property — take `render-env.sh` out of the path, or let the vault

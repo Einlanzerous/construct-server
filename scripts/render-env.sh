@@ -121,7 +121,7 @@ stripped="$(printf '%s\n' "$base_content" | awk -v keys="$pinned_keys" '
 
 # Say what the strip removed. The strip itself is correct and stays silent about its
 # result nowhere else: it is the reason a stale pin in PROD_ENV_FILE was harmless for
-# three months AND the reason nobody noticed one was there (SERV-94). Reporting costs
+# a week and a half AND the reason nobody noticed one was there (SERV-94). Reporting costs
 # nothing and turns "latent and invisible" into "latent and named".
 #
 # Not an error, and deliberately not fatal. The base legitimately carries these on a

@@ -127,7 +127,8 @@ assert-tokens:
 
 # Ask the vault whether it claims anything git or a deploy already owns (SERV-94): a
 # versions.env pin delivered through PROD_ENV_FILE, or a file target on a path
-# deploy.yml rewrites. Both were true of this project for three months and neither
+# deploy.yml rewrites. Both were true of this project — the orphaned file target since
+# SERV-76 on 2026-08-08, the duplicated pins since SERV-96 on 2026-08-15 — and neither
 # showed up anywhere, because render-env.sh strips the pins and a losing writer leaves
 # no trace. Run it after touching the vault — a `signet target add-key`, an `import`, a
 # re-seeded render target — not on a schedule.

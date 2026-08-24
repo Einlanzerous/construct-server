@@ -10,7 +10,7 @@
 # render-env.sh merges the two into the deployed .env. That merge STRIPS every key the
 # versions file defines before appending the tracked pins, so git wins and a stale copy
 # in the vault changes nothing. The stripping is what made the drift SERV-94 found
-# survivable — and it is also what kept it invisible for three months.
+# survivable — and it is also what kept it invisible until someone went looking.
 #
 # This asks the vault directly, so the answer does not depend on render-env.sh still
 # sitting in the path. Two questions, both about ownership rather than about values:
@@ -28,11 +28,14 @@
 #      rather than a state — which is exactly how `file:/opt/construct-server/.env`
 #      came to sit at `changed` indefinitely.
 #
-# Allowed file targets are an ALLOWLIST, not a pattern, for the same reason the edge
-# exemptions are (SERV-106): a rule that admits a shape admits the next thing of that
-# shape too. Prod's list is EMPTY — Signet owns PROD_ENV_FILE and nothing else, which
-# is the design question SERV-94 settled. Dev keeps exactly one, `creds/dev.env`, which
-# is the readable credential source and has no second writer.
+# File targets are judged by the property that matters — does this path have a second
+# writer — rather than against a list of literal paths this script rebuilds. Prod is
+# allowed NONE: Signet owns PROD_ENV_FILE and nothing else, which is the design question
+# SERV-94 settled. Dev is allowed exactly one shape, a `creds/dev.env`, its readable
+# credential source. Anything under a deploy root is refused outright, in either tier.
+# See the note above check 2 for why the path is not reconstructed from the caller's
+# location — the short version is that a checkout is one of several on this host and the
+# registered target is one, so deriving it made the answer depend on where you stood.
 #
 # It reads only target metadata — key NAMES, destinations, states. It never calls
 # `signet reveal` and never prints a value.
@@ -58,15 +61,11 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 
 err() { printf '%s\n' "$*" >&2; }
 
-# A Signet file target is registered at ONE absolute path on the host, so the allowlist
-# has to name that path and not "wherever this script happens to live". Those differ:
-# run from a git worktree or a second clone, a REPO_ROOT-relative allowlist rejects the
-# real target and reports a violation that is not there. The main working tree is the
-# first row of `git worktree list`, which is the same answer from every worktree of the
-# same repo. Override for a checkout somewhere else entirely.
-MAIN_WORKTREE="$(git -C "$REPO_ROOT" worktree list 2>/dev/null | awk 'NR == 1 { print $1 }')"
-[ -n "$MAIN_WORKTREE" ] || MAIN_WORKTREE="$REPO_ROOT"
-DEV_CREDS_FILE="${DEV_CREDS_FILE:-$MAIN_WORKTREE/creds/dev.env}"
+# The deploy roots, which are the paths that HAVE another writer: deploy.yml and
+# deploy-dev.yml regenerate `$root/.env` on every run. Same override convention as the
+# Makefile, so a non-standard host answers the same question about its own layout.
+DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/construct-server}"
+DEV_ROOT="${DEV_ROOT:-/opt/construct-server-dev}"
 
 DEV=0
 case "${1:-}" in
@@ -79,16 +78,10 @@ if [ "$DEV" -eq 1 ]; then
   PROJECT="construct-server-dev"
   VERSIONS="$REPO_ROOT/dev-versions.env"
   RENDER_SECRET="DEV_ENV_FILE"
-  # The credential source dev is seeded from and reads back. deploy-dev.yml writes
-  # /opt/construct-server-dev/.env, never this, so it has one writer.
-  ALLOWED_FILE_TARGETS="$DEV_CREDS_FILE"
 else
   PROJECT="construct-server"
   VERSIONS="$REPO_ROOT/versions.env"
   RENDER_SECRET="PROD_ENV_FILE"
-  # Empty on purpose. Prod's credentials were imported once and the vault has been
-  # the source ever since; there is no local file it should be writing. See SERV-94.
-  ALLOWED_FILE_TARGETS=""
 fi
 
 command -v signet >/dev/null 2>&1 || {
@@ -120,19 +113,24 @@ fail=0
 versioned_keys="$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*' "$VERSIONS" || true)"
 [ -n "$versioned_keys" ] || { err "ERROR: $VERSIONS defines no keys — refusing to report an all-clear"; exit 2; }
 
-claimed=""
-while IFS= read -r key; do
-  [ -n "$key" ] || continue
-  # The row for this project's secret, if the vault holds one at all. A key that is
-  # absent from the vault is the correct state and produces no row.
-  row="$(printf '%s\n' "$status" | awk -v p="$PROJECT" -v k="$key" '$1 == p && $2 == k { print; exit }')"
-  [ -n "$row" ] || continue
-  # Held but delivered nowhere is dead weight, not a hazard — it is reported with the
-  # other orphans below. What fails the check is the vault DELIVERING it.
-  case "$row" in
-    *"gh-render:"*"$RENDER_SECRET"*) claimed="$claimed$key"$'\n' ;;
-  esac
-done <<< "$versioned_keys"
+# One pass over the status table rather than a lookup per key. The earlier shape —
+# `printf … | awk '… { print; exit }'` inside a loop — was a SIGPIPE race: awk left after
+# the first match while printf still had tens of KB to write, and under `pipefail` the
+# 141 that follows took `set -e` with it. The script then died mid-check with no output
+# at all, which is the one failure this check must not have: it reads identically to
+# never having run. A here-string is a temp file, so an early exit has nothing to signal
+# — and doing the whole thing in one pass means there is no early exit to begin with.
+#
+# A key absent from the vault is the correct state and matches nothing. A key the vault
+# HOLDS but delivers nowhere is dead weight rather than a hazard, and is reported with
+# the other orphans below; what fails here is the vault DELIVERING it.
+claimed="$(awk -v p="$PROJECT" -v dest="$RENDER_SECRET" -v keys="$versioned_keys" '
+  BEGIN {
+    n = split(keys, k, "\n")
+    for (i = 1; i <= n; i++) if (k[i] != "") want[k[i]] = 1
+  }
+  $1 == p && ($2 in want) && index($0, "gh-render:") && index($0, dest) { print $2 }
+' <<< "$status")"
 
 if [ -n "$claimed" ]; then
   err "FAIL: the $PROJECT render of $RENDER_SECRET delivers keys that $(basename "$VERSIONS") owns:"
@@ -154,36 +152,57 @@ fi
 # Scans for the KIND column rather than a fixed field index: a project-wide row reads
 # `construct-server (89 keys)  file  /path`, a per-secret row `construct-server/NAME
 # gh-actions  …`, so the path's position is not the same on every line.
-file_targets="$(printf '%s\n' "$targets" | awk '{
+file_targets="$(awk '{
   for (i = 1; i < NF; i++) if ($i == "file" && substr($(i+1), 1, 1) == "/") { print $(i+1); break }
-}')"
+}' <<< "$targets")"
 
+# What is allowed is a SHAPE OF OWNERSHIP, not a path this script reconstructs. An
+# earlier version derived the expected path from where the script was invoked, and that
+# is wrong in a way worth recording: a Signet file target is registered once, at one
+# absolute path on the host, while a checkout is one of several — this box has the
+# canonical one, the runner's `_work` copy, and any number of worktrees. Deriving the
+# allowlist from the caller's location made the answer depend on which of those you
+# stood in, and the wrong answer was the dangerous direction: it called dev's one
+# legitimate target a violation and told the reader to `signet target rm` it. Detaching
+# that target is close to unrecoverable, because it is what `--seed-from` reads.
+#
+# So the rule is expressed as the property actually being asserted — no second writer:
+#
+#   * A path under either deploy root is refused outright. Those are the paths that
+#     have another writer; deploy.yml and deploy-dev.yml rewrite `$root/.env` every run.
+#   * Prod may have NO file target at all. Signet owns PROD_ENV_FILE and nothing else.
+#   * Dev may have exactly one, and only a `creds/dev.env` — its readable credential
+#     source. Which clone that lives in is not the question and cannot be, since any of
+#     them may be the registered one; that no deploy writes it is the question.
 unexpected=""
 while IFS= read -r path; do
   [ -n "$path" ] || continue
-  allowed=0
-  while IFS= read -r ok; do
-    [ -n "$ok" ] || continue
-    [ "$path" = "$ok" ] && allowed=1
-  done <<< "$ALLOWED_FILE_TARGETS"
-  [ "$allowed" -eq 1 ] || unexpected="$unexpected$path"$'\n'
+  reason=""
+  case "$path" in
+    "$DEPLOY_ROOT"/*|"$DEV_ROOT"/*) reason="a deploy rewrites this path on every run" ;;
+    */creds/dev.env) [ "$DEV" -eq 1 ] || reason="dev's credential source, on the prod project" ;;
+    *) reason="not a credential source this project is allowed to write" ;;
+  esac
+  [ -z "$reason" ] || unexpected="$unexpected$path — $reason"$'\n'
 done <<< "$file_targets"
 
 if [ -n "$unexpected" ]; then
-  err "FAIL: project $PROJECT renders to file targets that are not on its allowlist:"
+  err "FAIL: project $PROJECT has file target(s) with another writer, or no consumer:"
   printf '%s' "$unexpected" | sed 's/^/  /' >&2
   err ""
   if [ "$DEV" -eq 1 ]; then
-    err "Dev's one allowed file target is creds/dev.env, the credential source it was"
-    err "seeded from. /opt/construct-server-dev/.env is written by deploy-dev.yml."
+    err "Dev's one allowed file target is a creds/dev.env — the credential source it was"
+    err "seeded from, which deploy-dev.yml never writes. $DEV_ROOT/.env it does."
   else
     err "Prod has no allowed file target: Signet owns $RENDER_SECRET and nothing else"
-    err "(SERV-94). /opt/construct-server/.env is written by deploy.yml on every deploy,"
-    err "and the checkout copy at ~/construct-server/.env stopped driving anything when"
-    err "SERV-76 moved the deploy root."
+    err "(SERV-94). $DEPLOY_ROOT/.env is written by deploy.yml on every deploy, and the"
+    err "checkout copy at ~/construct-server/.env stopped driving anything when SERV-76"
+    err "moved the deploy root."
   fi
   err ""
-  err "Detach it:  signet target rm --project $PROJECT --path <path>"
+  err "Confirm with \`signet target list --project $PROJECT\` before detaching anything —"
+  err "a rendered target seeded from a file target cannot be re-seeded once it is gone."
+  err "Detach:  signet target rm --project $PROJECT --path <path>"
   fail=1
 fi
 
@@ -193,7 +212,7 @@ fi
 # of problem as a target with no consumer. It is reported rather than failed because
 # signet has no way to delete a secret today (SGNT-39) — so this cannot be driven to
 # empty, and a check that can never pass is a check people learn to skip.
-orphans="$(printf '%s\n' "$status" | awk -v p="$PROJECT" '$1 == p && $NF == "-" { print $2 }')"
+orphans="$(awk -v p="$PROJECT" '$1 == p && $NF == "-" { print $2 }' <<< "$status")"
 if [ -n "$orphans" ]; then
   printf 'note: %d secret(s) in %s have no target and reach nothing:\n' \
     "$(printf '%s\n' "$orphans" | wc -l)" "$PROJECT"
