@@ -93,10 +93,15 @@ Two details in that config are load-bearing:
 
 Two consequences to expect rather than be surprised by:
 
-- Commits are assigned to the **deepest** matching package path, so a commit
-  touching `pkg/cfaccess` lands in that module's changelog and no longer in the
-  root's. That is standard monorepo behaviour, but it does mean the stack's
-  release notes stop mentioning verifier changes.
+- A commit touching `pkg/cfaccess` lands in **both** changelogs, and cuts both a
+  module release and a stack version bump. release-please splits commits by path
+  for every package *except* the root — `.` gets the unsplit list, filtered
+  afterwards only by an `exclude-paths` key this config does not set. That is
+  kept deliberately: the guard is rebuilt from this module on every deploy, so a
+  module change genuinely is a change to the deployed stack, and excluding it
+  would leave the stack's release notes silent about guard code that shipped.
+  `"exclude-paths": ["pkg/cfaccess"]` on the root package is the knob if the
+  other behaviour is ever wanted.
 - `pkg/cfaccess` starts at `0.0.0` in the manifest, so the first release-please
   run after this merges cuts **`pkg/cfaccess/v0.1.0`** with a changelog of its
   own. Downstream repos cannot pin until that release PR is merged. Bootstrapping

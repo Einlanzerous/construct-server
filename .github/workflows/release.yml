@@ -28,10 +28,18 @@ jobs:
       #     what `go get` resolves. release-please's default is `<component>-v0.1.0`,
       #     which Go cannot see at all, so `tag-separator: "/"` is load-bearing rather
       #     than cosmetic.
-      #   - Commits are assigned to the DEEPEST matching package path, so a commit
-      #     touching pkg/cfaccess lands in that module's changelog and not the root's.
-      #     That is the standard monorepo behaviour and the reason the root release
-      #     notes will stop mentioning verifier changes.
+      #   - A commit touching pkg/cfaccess lands in BOTH changelogs, and that is
+      #     deliberate. release-please splits commits by path for every package
+      #     EXCEPT the root: `.` receives the unsplit list (manifest.ts,
+      #     `path === ROOT_PROJECT_PATH ? commits : splitCommits[path]`), filtered
+      #     afterwards only by the `exclude-paths` key, which is not set here. So a
+      #     `feat(cfaccess): …` cuts pkg/cfaccess/v0.1.0 AND a stack minor.
+      #
+      #     Keeping it that way on purpose: the guard is rebuilt from this module on
+      #     every deploy, so a module change IS a change to the deployed stack, and
+      #     excluding it would leave `git log v4.24.0..v4.25.0` silent about guard
+      #     code that shipped. `"exclude-paths": ["pkg/cfaccess"]` on the root package
+      #     is the knob if that is ever wanted; nothing else is.
       #
       # `separate-pull-requests` keeps a module release from waiting on a stack release.
       - uses: googleapis/release-please-action@v4
