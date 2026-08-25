@@ -1,8 +1,8 @@
 # Traefik dynamic configuration — Zero Gravity Industries hybrid edge (SERV-20)
 #
 # Explicit allowlist. Only the routers below are served. On the public entrypoint,
-# anything that is not Argosy or the Lyceum direct path (SERV-60) is refused by
-# `public-catchall`. The tunneled routers exist ONLY on the internal entrypoint, so
+# anything that is not Argosy, the Lyceum direct path (SERV-60) or the Chronicle
+# direct path (CHRN-16) is refused by `public-catchall`. The tunneled routers exist ONLY on the internal entrypoint, so
 # the open WAN port physically cannot reach them — that is the "no tunnel bypass via
 # the open port" guarantee.
 
@@ -75,6 +75,20 @@ http:
         average: 5
         burst: 15
 
+    # Same shape and same numbers for Chronicle's credential endpoints (CHRN-16).
+    # Applied ONLY via chronicle-public-auth below, scoped to /auth/*, so invite
+    # redemption and the Cloudflare SSO exchange are throttled while memo UPLOAD
+    # traffic is not — CHRN-20 is resumable upload of recordings of arbitrary
+    # length, and a 5 req/s bucket across a chunked 40-minute upload would throttle
+    # ingest rather than an attacker. Sits on top of Chronicle's own in-process
+    # limiter, which exists for a different threat: the container is reachable on
+    # construct_net by every other service without passing Traefik, so this one
+    # does nothing for that path and that one does nothing about WAN volume.
+    chronicle-login-ratelimit:
+      rateLimit:
+        average: 5
+        burst: 15
+
     # Origin-side validation of Cf-Access-Jwt-Assertion (SERV-106). Every router on
     # the `internal` entrypoint carries this, and scripts/check-edge-auth.sh fails if
     # one does not — a tunneled router that forgets it is unauthenticated, and that is
@@ -122,7 +136,9 @@ http:
             - "127.0.0.1/32"
 
   routers:
-    # ---------------- PUBLIC entrypoint: Argosy ONLY ----------------
+    # ---------------- PUBLIC entrypoint: direct routers ----------------
+    # Argosy, Lyceum's direct path (SERV-60) and Chronicle's (CHRN-16). Anything else
+    # on this entrypoint is refused by public-catchall.
     argosy:
       entryPoints:
         - public
@@ -199,9 +215,80 @@ http:
             sans:
               - "*.zerogravity.industries"
 
-    # Lowest-priority deny-all. Any Host/SNI on :public that is not Argosy or the
-    # Lyceum direct host is refused (403). Defense-in-depth: the tunneled routers
-    # below do not exist on this entrypoint at all, so there is nothing to bypass to.
+    # ---------------- PUBLIC entrypoint: Chronicle direct path (CHRN-16) ----------------
+    # Same backend as the tunneled `chronicle` router below; this host simply is not
+    # SSO-gated, so the Android app and MCP fall back to a redeemed invite. Safe on the
+    # WAN entrypoint because Chronicle enforces its own per-device session on every
+    # route outside /healthz and /readyz (CHRN-71) — the "authenticates with something
+    # Cloudflare Access cannot express" bar this entrypoint sets. strip-cf-access means
+    # a spoofed Cf-Access-* here authenticates nobody, and Chronicle verifies the
+    # assertion against the JWKS itself rather than trusting the header, so a dropped
+    # middleware cannot forge an identity either.
+    chronicle-public:
+      entryPoints:
+        - public
+      rule: "Host(`chronicle-direct.zerogravity.industries`)"
+      service: chronicle
+      middlewares:
+        - crowdsec-bouncer
+        - strip-cf-access
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "zerogravity.industries"
+            sans:
+              - "*.zerogravity.industries"
+
+    # Same backend, /auth/* throttled. Higher priority than chronicle-public so invite
+    # redemption and SSO exchange are limited at the edge; upload and read traffic
+    # falls through unthrottled. Mirrors argosy-auth and lyceum-public-auth.
+    chronicle-public-auth:
+      entryPoints:
+        - public
+      rule: "Host(`chronicle-direct.zerogravity.industries`) && PathPrefix(`/auth/`)"
+      priority: 1000
+      service: chronicle
+      middlewares:
+        - crowdsec-bouncer
+        - strip-cf-access
+        - chronicle-login-ratelimit
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "zerogravity.industries"
+            sans:
+              - "*.zerogravity.industries"
+
+    # /admin is NOT served on the WAN host. CHRN-16 requires "/admin requires Access",
+    # and a Host-only rule would have served POST /admin/users/{id}/invite — which
+    # mints a live credential — on the open 443 behind only requireOwner and outside
+    # the /auth/ limiter. Highest priority so it beats both routers above, pointed at
+    # the same blackhole + deny-all pair public-catchall uses so the answer is 403
+    # rather than a route to a backend that would have served it.
+    #
+    # Lyceum serves its whole surface on both hosts; the difference is that
+    # Chronicle's ticket states this property, so serving /admin here would be an
+    # unstated departure from it. The owner administers accounts through Access;
+    # nothing the app or MCP does needs /admin.
+    chronicle-public-admin:
+      entryPoints:
+        - public
+      rule: "Host(`chronicle-direct.zerogravity.industries`) && PathPrefix(`/admin`)"
+      priority: 2000
+      service: blackhole
+      middlewares:
+        - deny-all
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "zerogravity.industries"
+            sans:
+              - "*.zerogravity.industries"
+
+    # Lowest-priority deny-all. Any Host/SNI on :public that is not Argosy, the Lyceum
+    # direct host or the Chronicle direct host is refused (403). Defense-in-depth: the
+    # tunneled routers below do not exist on this entrypoint at all, so there is
+    # nothing to bypass to.
     public-catchall:
       entryPoints:
         - public
@@ -222,6 +309,19 @@ http:
         - internal
       rule: "Host(`switchyard.zerogravity.industries`)"
       service: switchyard
+      middlewares:
+        - cf-access-jwt
+
+    # Chronicle's browser half (CHRN-16). Access-gated like every router here; the
+    # browser arrives already signed in and POSTs /auth/sso/cloudflare to exchange the
+    # assertion for the same kind of per-device session the direct host issues. Its
+    # AUD is in cf-access-guard's CF_ACCESS_AUD_MAP and in the service's own
+    # CHRONICLE_CF_ACCESS_AUD; check-edge-auth.sh asserts the two agree.
+    chronicle:
+      entryPoints:
+        - internal
+      rule: "Host(`chronicle.zerogravity.industries`)"
+      service: chronicle
       middlewares:
         - cf-access-jwt
       # No TLS: internal is plain HTTP (Cloudflare terminates TLS at the edge and
@@ -372,6 +472,11 @@ http:
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.
+    chronicle:
+      loadBalancer:
+        servers:
+          - url: "http://chronicle:4009"
+
     blackhole:
       loadBalancer:
         servers:

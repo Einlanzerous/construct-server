@@ -2,8 +2,9 @@
 #
 # Split entrypoints are the security keystone (plan-of-record, non-negotiable):
 #   * public   — the WAN-forwarded 443. Serves ONLY the explicitly-listed direct
-#                routers (Argosy, and Lyceum's direct path per SERV-60) plus a
-#                lowest-priority deny-all catch-all. Nothing tunneled lives here.
+#                routers (Argosy, Lyceum's direct path per SERV-60, and
+#                Chronicle's per CHRN-16) plus a lowest-priority deny-all
+#                catch-all. Nothing tunneled lives here.
 #   * internal — Docker-network-only (NOT published to the host). cloudflared
 #                dials this; it carries the tunneled apps (switchyard, lyceum…).
 #                Every router on it validates the Cloudflare Access JWT at the
@@ -43,8 +44,8 @@ api:
 
 entryPoints:
   # WAN-facing 443 (router port-forward, or fronted by the Phase 3 relay while the
-  # line is behind CGNAT — see SERV-15). Direct routers only (Argosy + Lyceum's
-  # direct path, SERV-60); everything else is denied.
+  # line is behind CGNAT — see SERV-15). Direct routers only (Argosy, Lyceum's
+  # direct path SERV-60, Chronicle's CHRN-16); everything else is denied.
   public:
     address: ":8443"
     http:
