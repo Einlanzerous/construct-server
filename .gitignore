@@ -43,3 +43,15 @@ ticket-comment.md
 # Compiled Go binaries from a local `go build` in a service or module directory.
 # The guard is built into an image, never committed (SERV-131 nearly committed 9MB of it).
 /services/cf-access-guard/cf-access-guard
+
+# Claude Code's per-checkout state. Neither path belongs in git, and the worktree
+# one is the dangerous half: Claude Code puts NESTED WORKTREES under
+# .claude/worktrees/<slug>/, so a `git add -A` would commit a full second checkout
+# of this repo whose contents are changing under the index as another session
+# works. scripts/lint-gate.sh already prunes that directory from the other side
+# (SERV-58) for the same reason — otherwise the gate lints a branch nobody is
+# pushing. Narrow on purpose rather than a blanket `.claude/`: a project-level
+# config there (shared agents, hooks, settings.json) may want tracking later, and
+# a blanket ignore would swallow it silently (SERV-145).
+.claude/settings.local.json
+.claude/worktrees/
