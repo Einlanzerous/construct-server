@@ -651,6 +651,98 @@ services:
       retries: 3
       start_period: 15s
 
+  # --- CHRONICLE (voice-note ingestion → notes & discussion wiki) — CHRN-16 ---
+  # Memos captured by phone, transcribed on the shared ASR service, routed by the
+  # Scribe into a note / ticket / discussion. Served on TWO hosts off one backend,
+  # the same split Lyceum uses (SERV-60): chronicle.… is tunneled and Access-gated
+  # for the browser, chronicle-direct.… is on the WAN entrypoint for the Android
+  # app and MCP, which hold a bearer session and cannot do browser SSO.
+  #
+  # No `ports:`. Reached only through Traefik; publishing a port here would put a
+  # listener on the host and bypass the edge entirely.
+  # NOT provisioned by db/init-db.sh. Chronicle's database needs TWO roles
+  # (chronicle, chronicle_tier1) and the grant that enforces its tier-1/tier-2
+  # boundary, so it is created by deploy/provision-db.sh in chronicle's own repo —
+  # run once, by hand, as superuser. Consequence worth knowing: a cold host rebuild
+  # does NOT self-heal this the way init-db.sh does for everything else, and
+  # chronicle will crash-loop until that script is run.
+  # See github.com/Einlanzerous/chronicle (deploy/README.md is the runbook).
+  chronicle:
+    image: ghcr.io/einlanzerous/chronicle:${CHRONICLE_TAG:-latest}
+    container_name: chronicle
+    restart: unless-stopped
+    environment:
+      - CHRONICLE_PORT=4009
+      - CHRONICLE_DATABASE_URL=postgres://chronicle:${CHRONICLE_DB_PASSWORD}@postgres:5432/chronicle?sslmode=disable
+      - CHRONICLE_LOG_LEVEL=${CHRONICLE_LOG_LEVEL:-info}
+      - CHRONICLE_LOG_FORMAT=${CHRONICLE_LOG_FORMAT:-json}
+      - CHRONICLE_SHUTDOWN_GRACE=${CHRONICLE_SHUTDOWN_GRACE:-20s}
+      # Auth is unconditional (CHRN-71) — there is no flag to leave off — so the
+      # owner identity is REQUIRED to serve. Unset, the service refuses to boot
+      # rather than keeping migration 0002's placeholder, which could never match
+      # an Access-verified email and would leave SSO looking configured and
+      # silently never working.
+      - CHRONICLE_OWNER_EMAIL=${CHRONICLE_OWNER_EMAIL}
+      - CHRONICLE_OWNER_NAME=${CHRONICLE_OWNER_NAME:-}
+      # Access SSO. Chronicle verifies the assertion ITSELF against the JWKS
+      # rather than trusting the header the edge injects, so a dropped
+      # strip-cf-access on the direct router cannot forge an identity.
+      #
+      # Both are literals and must move together: config.Load errors when exactly
+      # one of the pair is set, so a literal AUD beside an empty ${...} team
+      # domain crash-loops the container before migration 0002 ever applies. The
+      # AUD must equal this host's CF_ACCESS_AUD_MAP entry on cf-access-guard.
+      # check-edge-auth.sh asserts every service-side AUD appears SOMEWHERE in the
+      # map — set membership, not per-host agreement, so it catches a value that is
+      # in no entry but would not catch two services' AUDs being swapped.
+      - CHRONICLE_CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      - CHRONICLE_CF_ACCESS_AUD=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec
+      # The origin baked into an invite's sign-in QR. MUST be the direct host: a
+      # link built from the Access-gated hostname walks a phone into an SSO wall
+      # a bearer token cannot open.
+      - CHRONICLE_MOBILE_BASE_URL=https://chronicle-direct.zerogravity.industries
+      # NOT derived from the request: TLS terminates at Traefik, so the app never
+      # sees a TLS connection and deriving it would drop Secure off a durable
+      # credential on the WAN-facing entrypoint.
+      - CHRONICLE_COOKIE_SECURE=${CHRONICLE_COOKIE_SECURE:-true}
+      # Whose X-Forwarded-For the sign-in rate limiter may believe. The `public`
+      # entrypoint sets `forwardedHeaders.trustedIPs: []` so Traefik overwrites
+      # whatever a caller sent; `internal` has no forwardedHeaders block and
+      # relies on Traefik's default, which is the same effect today.
+      #
+      # ⚠ THIS DEFAULT OVER-TRUSTS AND THE LATERAL CASE IS NOT COVERED.
+      # 172.16.0.0/12 CONTAINS construct_net (172.19.0.0/16), so every container
+      # on the box is a trusted proxy: a neighbour can POST /auth/session with a
+      # rotating X-Forwarded-For and get a fresh bucket per value (unbounded
+      # invite guessing), or send the owner's address and 429 them off their own
+      # service. That is precisely the lateral threat Chronicle's in-process
+      # limiter was written for, and at this value neither limiter covers it.
+      #
+      # A narrower CIDR does not fix it: construct_net is `external:` with
+      # default IPAM and Traefik holds no fixed address there (it has one only on
+      # construct_edge_net), so no prefix distinguishes Traefik from a neighbour.
+      # Pinning Traefik an ipv4_address on construct_net would, and is the real
+      # fix — but it touches shared networking every service uses, so it is a
+      # decision rather than a tidy-up. Tracked separately; left at the default
+      # here deliberately rather than narrowed to a value that only looks safer.
+      - CHRONICLE_TRUSTED_PROXIES=${CHRONICLE_TRUSTED_PROXIES:-172.16.0.0/12}
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    healthcheck:
+      # /healthz takes no dependencies, so this reports on the process only.
+      # Readiness (which pings Postgres) is deliberately NOT the healthcheck:
+      # restarting the container is the wrong remedy for a database blip.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4009/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Docker's 10s default would kill in-flight ingest on redeploy, which loses
+    # memos. Must exceed CHRONICLE_SHUTDOWN_GRACE.
+    stop_grace_period: 30s
+
   # --- PURSER (cross-service provisioning & invite service) — SERV-33 ---
   # One command onboards a person into multiple services: creates their Switchyard
   # user + token and grants Cloudflare Access SSO, returning a copy-pasteable
@@ -1157,7 +1249,7 @@ services:
       # tunneled router that nobody mapped is unreachable, which is loud, rather than
       # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
       # and the routers agree, so they cannot drift apart silently.
-      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway — it exists so the cutover could be rehearsed against real traffic
       # before three live routers went fail-closed at once, and it is not a steady state.

@@ -272,7 +272,13 @@ if not unmapped and not dead and not misgated and aud_map:
 # Cross-check against the AUDs the apps carry for their own SSO sign-in. A
 # mismatch means one of the two is stale, and the symptom would be "SSO works but
 # the page 403s" — a confusing failure worth catching as a config diff instead.
-service_auds = env_values("CF_ACCESS_AUD")
+# SERV-139: an OPTIONAL service prefix. Anchored on the literal name this missed
+# CHRONICLE_CF_ACCESS_AUD entirely — Chronicle verifies the assertion in-process
+# exactly as switchyard and lyceum do, so it is squarely in this check's scope,
+# and the agreement below read as satisfied on a value it never read.
+# CF_ACCESS_AUD_MAP stays excluded on its own: the trailing "=" in the pattern
+# does not match that line's "_MAP=".
+service_auds = env_values(r"[A-Z0-9_]*CF_ACCESS_AUD")
 mapped_auds = set(aud_map.values())
 for aud in service_auds:
     aud = aud.strip()
