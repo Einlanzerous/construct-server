@@ -490,25 +490,49 @@ a container.
 
 ### What the prober can see today
 
-Only `switchyard`. That is a limitation of the *inventory*, not the schedule:
+The whole dev tier — `switchyard`, `argosy`, `lyceum`, `purser` — since SERV-140.
 
-- **argosy** answers `/healthz` with plain-text `ok`. Both probers classify a
-  non-JSON 200 as `unreachable`, so a healthy argosy renders as down. Its real
-  version lives at `/api/v1/ping`, which is what `health_path` exists to point
-  at — but it cannot self-register, because registering needs a clean probe and a
-  clean probe needs the `health_path` that registration would set.
-- **lyceum** and **purser** answer with `{status, service}` and no version.
-  Honest `no_version`; neither has adopted the SWY-192 health contract.
-- Registering any of them also needs `service_environments.host_override` to have
-  a writer. **No route sets that column.** The reconciler probes the full
-  environment × service cross-product using prod's `host_template`
-  (`http://{service}:4002`) — correct for switchyard, wrong for argosy (8096),
-  lyceum (4005) and purser (4006). Registering them today would paint three
-  *prod* cells `unreachable` for services that are running fine.
+For most of this design's life it was `switchyard` alone. That was never a
+schedule limitation: the other three sat commented out in
+`ansible/roles/delivery_prober/defaults/main.yml`, one line each, behind three
+blockers. All three closed in other tickets, none of them came back here to
+uncomment a line, and the dev column showed one cell out of four for weeks after
+it could have shown four. The blockers, and what closed each:
 
-So the targets list ships with switchyard alone and the rest commented in
-`ansible/roles/delivery_prober/defaults/main.yml`, one line each, to be enabled
-as SWY-194 lands them.
+- **argosy** answered `/healthz` with plain-text `ok`, which both probers
+  classified as `unreachable` — a healthy argosy rendering as down. Its version
+  lived at `/api/v1/ping`, which is what `health_path` exists to point at, but it
+  could not self-register: registering needs a clean probe and a clean probe
+  needed the `health_path` that registration would set. **SWY-292** broke the
+  deadlock by classifying on content type rather than parseability — only markup
+  means something in *front* of the service answered — and argosy has since
+  adopted the SWY-192 shape on `/healthz` anyway. Either alone would have done.
+- **lyceum** and **purser** answered `{status, service}` with no version: an
+  honest `no_version`. **SERV-128**'s per-service PRs landed the health contract;
+  lyceum reports a real semver and purser reports the literal `dev` for an
+  unreleased build.
+- **Registering any of them would have painted three *prod* cells red**, because
+  the reconciler probes the environment × service cross-product using prod's
+  `host_template` — then the literal `http://{service}:4002`, switchyard's port
+  and nobody else's — and `service_environments.host_override` has no writer.
+  **SWY-294** replaced the template with `http://{service}:{port}`, and
+  `resolveProbeUrl` returns null rather than a failure for a service with no
+  port, so a registration is at worst inert. `host_override` still has no writer
+  and no longer needs one.
+
+Two consequences worth stating, because both look like bugs and are not:
+
+- **`version: "dev"` is recorded verbatim, and reads as drift.** `deriveDrift`
+  does not parse semver — this estate pins bare shas as legitimate versions, so a
+  semver comparison would decide an unreleased build has no drift. purser and
+  argosy therefore show drifted against prod, which is exactly true.
+- **A dev rebuild that leaves `version` at `dev` is still a new row.** The
+  ingest's unchanged check compares version, digest *and* sha.
+
+The infrastructure containers in the dev project — `cf-access-guard-dev`,
+`traefik-dev`, `postgres-dev`, `cloudflared-dev` — are deliberately absent.
+`postgres-dev` has no HTTP health endpoint at all, so tier A cannot describe it.
+If they belong on the matrix that is tier B (SWY-194) work.
 
 ### A dead prober is not yet visible
 

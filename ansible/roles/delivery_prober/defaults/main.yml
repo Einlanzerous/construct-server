@@ -36,42 +36,72 @@ delivery_prober_interval: 5min
 # and "misspelled" are indistinguishable from outside. An unknown name is a 404
 # on every run, and the wrapper treats that as a hard failure.
 #
-# Only switchyard is listed, and that is a current limitation rather than the
-# intended end state. As of 2026-08-23 the inventory holds exactly one service.
+# The whole dev tier, as of SERV-140. This list carried switchyard alone from
+# SERV-111 until then: the other three sat commented out behind blockers, the
+# blockers were closed one by one in other tickets, and nothing came back here to
+# uncomment them. The cost was three of the four cells on the dev column of a
+# matrix whose entire purpose is dev↔prod drift.
 #
-#   argosy  http://127.0.0.1:18096   needs health_path=/api/v1/ping — /healthz
-#                                    answers plain-text `ok`, which both probers
-#                                    classify as `unreachable`. It cannot
-#                                    self-register: registering requires a clean
-#                                    probe, and a clean probe requires the
-#                                    health_path that registration would set.
-#   lyceum  http://127.0.0.1:14005   answers {"status":"ok","service":"lyceum"} —
-#   purser  http://127.0.0.1:14006   and {"service":"purser","status":"ok"}.
-#                                    Honest `no_version` until SERV-128's
-#                                    per-service PRs land and release.
+# Verified against the live tier before uncommenting, by running the SHARED
+# classifier — `server/src/lib/delivery/health-contract.ts`, the same module the
+# prober imports, so this is what the prober will conclude and not an
+# approximation of it — over each endpoint at the path the inventory gives it:
 #
-# ── The prod-collateral blocker is GONE (SWY-294, verified 2026-08-23) ──────
+#   switchyard  http://127.0.0.1:14002   observed  4.18.0
+#   argosy      http://127.0.0.1:18096   observed  dev  (sha 8845c6e)
+#   lyceum      http://127.0.0.1:14005   observed  1.12.0
+#   purser      http://127.0.0.1:14006   observed  dev  (sha 8a8c016)
 #
-# This list used to carry a second reason not to add them: that registering a
-# first_party service creates its PROD pair too, and the in-process reconciler
-# would probe every one of them at prod's `host_template` — then the literal
-# `http://{service}:4002`, which is switchyard's port and nobody else's. That
-# would have painted three prod cells `unreachable` for services running fine.
+# All four are already registered with a null `health_path`, so all four are
+# probed at `/healthz` and none needs a registration step first. Re-run that
+# check rather than trusting this list before adding a fifth — every stale claim
+# it replaces was accurate when it was written.
 #
-# SWY-294 replaced the literal with `{port}`, and prod's row on this box now
-# reads `http://{service}:{port}`. `resolveProbeUrl` returns null — "not
-# addressable", left at `not_probed` rather than marked failed — when a service
-# carries no port. So registering a service WITHOUT a port is inert, and
-# registering one WITH its correct port probes the right address. Neither
-# manufactures a red cell.
+# ── the blockers this list used to carry, and why each is gone ──────────────
 #
-# What remains is only the health-contract gap above. Uncomment each line as its
-# service adopts SWY-192 and starts reporting a version.
+#   argosy needed health_path=/api/v1/ping. Its /healthz answered plain-text
+#   `ok`, which the prober classified as `unreachable`, and it could not
+#   self-register: registering requires a clean probe and a clean probe required
+#   the health_path that registration would set. Closed twice over — SWY-292
+#   stopped reading a text/plain body as silence (only markup, which means
+#   something in FRONT of the service answered, is unreachable now), and argosy
+#   itself now answers /healthz with {"status":"ok","version":…,"sha":…}. Either
+#   alone would have sufficed, so there is nothing left to configure.
+#
+#   lyceum and purser reported no version. An honest `no_version` until SERV-128's
+#   per-service PRs landed. They have: lyceum reports a real semver, purser
+#   reports the literal "dev" for an unreleased build.
+#
+#   Registering them would paint three PROD cells red. This was true while prod's
+#   host_template was the literal `http://{service}:4002` — switchyard's port and
+#   nobody else's. SWY-294 replaced it with `http://{service}:{port}`, and
+#   `resolveProbeUrl` returns null for a service carrying no port, so a portless
+#   registration is inert rather than red. It is moot for these three anyway:
+#   all nine first-party services are already in the inventory and all nine prod
+#   pairs read `observed` with zero consecutive failures. Adding them here
+#   creates DEV pairs, which do not exist yet, and touches no prod row.
+#
+# `version: "dev"` is correct and is stored verbatim. `deriveDrift` deliberately
+# does not parse semver — this estate pins bare shas as legitimate versions, so a
+# semver comparison would quietly decide an unreleased build has no drift. purser
+# and argosy will therefore read as DRIFTED against prod's 0.15.0 and 0.26.0,
+# which is true and is the thing the matrix exists to say out loud. A dev rebuild
+# is not invisible either: the ingest's unchanged check compares version, digest
+# AND sha, so a rebuild that leaves version at "dev" still writes a row when the
+# sha moves.
+#
+# ── what is deliberately NOT here ───────────────────────────────────────────
+#
+# cf-access-guard-dev, traefik-dev, postgres-dev and cloudflared-dev also run in
+# the dev project. They are infrastructure rather than first-party applications,
+# and postgres-dev has no HTTP health endpoint at all, so tier A cannot describe
+# them. If they belong on the matrix that is tier B (SWY-194) work and should be
+# decided deliberately, not settled by whether someone remembered a line here.
 delivery_prober_targets:
   switchyard: "http://127.0.0.1:14002"
-  # argosy: "http://127.0.0.1:18096"
-  # lyceum: "http://127.0.0.1:14005"
-  # purser: "http://127.0.0.1:14006"
+  argosy: "http://127.0.0.1:18096"
+  lyceum: "http://127.0.0.1:14005"
+  purser: "http://127.0.0.1:14006"
 
 # ── the credential ──────────────────────────────────────────────────────────
 #
