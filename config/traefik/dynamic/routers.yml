@@ -82,8 +82,14 @@ http:
     # length, and a 5 req/s bucket across a chunked 40-minute upload would throttle
     # ingest rather than an attacker. Sits on top of Chronicle's own in-process
     # limiter, which exists for a different threat: the container is reachable on
-    # construct_net by every other service without passing Traefik, so this one
-    # does nothing for that path and that one does nothing about WAN volume.
+    # construct_net by every other service without passing Traefik, so this edge
+    # limiter does nothing for that path.
+    #
+    # NOTE: the in-process limiter does not currently cover that path either.
+    # CHRONICLE_TRUSTED_PROXIES defaults to 172.16.0.0/12, which CONTAINS
+    # construct_net (172.19.0.0/16) — so every neighbour is a trusted proxy and can
+    # pick its own bucket via X-Forwarded-For. Tracked; do not read the sentence
+    # above as saying the lateral path is covered.
     chronicle-login-ratelimit:
       rateLimit:
         average: 5
@@ -316,7 +322,9 @@ http:
     # browser arrives already signed in and POSTs /auth/sso/cloudflare to exchange the
     # assertion for the same kind of per-device session the direct host issues. Its
     # AUD is in cf-access-guard's CF_ACCESS_AUD_MAP and in the service's own
-    # CHRONICLE_CF_ACCESS_AUD; check-edge-auth.sh asserts the two agree.
+    # CHRONICLE_CF_ACCESS_AUD. check-edge-auth.sh asserts every service-side AUD
+    # appears SOMEWHERE in the map — set membership, not per-host agreement, so it
+    # would not catch two services' AUDs being swapped.
     chronicle:
       entryPoints:
         - internal
@@ -463,6 +471,13 @@ http:
         servers:
           - url: "http://wiki:80"
 
+    chronicle:
+      loadBalancer:
+        # One Go binary on :4009 serving both hosts — the tunneled Access-gated one
+        # and the direct WAN one. Backend for three routers above.
+        servers:
+          - url: "http://chronicle:4009"
+
     placard:
       loadBalancer:
         # One Go binary serves the front page, the mark mirror and the API
@@ -472,11 +487,6 @@ http:
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.
-    chronicle:
-      loadBalancer:
-        servers:
-          - url: "http://chronicle:4009"
-
     blackhole:
       loadBalancer:
         servers:

@@ -660,6 +660,12 @@ services:
   #
   # No `ports:`. Reached only through Traefik; publishing a port here would put a
   # listener on the host and bypass the edge entirely.
+  # NOT provisioned by db/init-db.sh. Chronicle's database needs TWO roles
+  # (chronicle, chronicle_tier1) and the grant that enforces its tier-1/tier-2
+  # boundary, so it is created by deploy/provision-db.sh in chronicle's own repo —
+  # run once, by hand, as superuser. Consequence worth knowing: a cold host rebuild
+  # does NOT self-heal this the way init-db.sh does for everything else, and
+  # chronicle will crash-loop until that script is run.
   # See github.com/Einlanzerous/chronicle (deploy/README.md is the runbook).
   chronicle:
     image: ghcr.io/einlanzerous/chronicle:${CHRONICLE_TAG:-latest}
@@ -685,8 +691,10 @@ services:
       # Both are literals and must move together: config.Load errors when exactly
       # one of the pair is set, so a literal AUD beside an empty ${...} team
       # domain crash-loops the container before migration 0002 ever applies. The
-      # AUD must equal this host's CF_ACCESS_AUD_MAP entry on cf-access-guard —
-      # check-edge-auth.sh asserts the two agree.
+      # AUD must equal this host's CF_ACCESS_AUD_MAP entry on cf-access-guard.
+      # check-edge-auth.sh asserts every service-side AUD appears SOMEWHERE in the
+      # map — set membership, not per-host agreement, so it catches a value that is
+      # in no entry but would not catch two services' AUDs being swapped.
       - CHRONICLE_CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
       - CHRONICLE_CF_ACCESS_AUD=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec
       # The origin baked into an invite's sign-in QR. MUST be the direct host: a
@@ -697,11 +705,26 @@ services:
       # sees a TLS connection and deriving it would drop Secure off a durable
       # credential on the WAN-facing entrypoint.
       - CHRONICLE_COOKIE_SECURE=${CHRONICLE_COOKIE_SECURE:-true}
-      # Whose X-Forwarded-For the sign-in rate limiter may believe. Both
-      # entrypoints set `forwardedHeaders.trustedIPs: []`, so Traefik overwrites
-      # whatever a caller sent — which makes this trustworthy from Traefik and
-      # from nowhere else. A neighbour container on construct_net is not a
-      # trusted peer and stays keyed on its real address.
+      # Whose X-Forwarded-For the sign-in rate limiter may believe. The `public`
+      # entrypoint sets `forwardedHeaders.trustedIPs: []` so Traefik overwrites
+      # whatever a caller sent; `internal` has no forwardedHeaders block and
+      # relies on Traefik's default, which is the same effect today.
+      #
+      # ⚠ THIS DEFAULT OVER-TRUSTS AND THE LATERAL CASE IS NOT COVERED.
+      # 172.16.0.0/12 CONTAINS construct_net (172.19.0.0/16), so every container
+      # on the box is a trusted proxy: a neighbour can POST /auth/session with a
+      # rotating X-Forwarded-For and get a fresh bucket per value (unbounded
+      # invite guessing), or send the owner's address and 429 them off their own
+      # service. That is precisely the lateral threat Chronicle's in-process
+      # limiter was written for, and at this value neither limiter covers it.
+      #
+      # A narrower CIDR does not fix it: construct_net is `external:` with
+      # default IPAM and Traefik holds no fixed address there (it has one only on
+      # construct_edge_net), so no prefix distinguishes Traefik from a neighbour.
+      # Pinning Traefik an ipv4_address on construct_net would, and is the real
+      # fix — but it touches shared networking every service uses, so it is a
+      # decision rather than a tidy-up. Tracked separately; left at the default
+      # here deliberately rather than narrowed to a value that only looks safer.
       - CHRONICLE_TRUSTED_PROXIES=${CHRONICLE_TRUSTED_PROXIES:-172.16.0.0/12}
     networks:
       - construct_net
