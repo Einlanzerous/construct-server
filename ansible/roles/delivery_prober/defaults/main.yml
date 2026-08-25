@@ -42,20 +42,26 @@ delivery_prober_interval: 5min
 # uncomment them. The cost was three of the four cells on the dev column of a
 # matrix whose entire purpose is dev↔prod drift.
 #
-# Verified against the live tier before uncommenting, by running the SHARED
-# classifier — `server/src/lib/delivery/health-contract.ts`, the same module the
-# prober imports, so this is what the prober will conclude and not an
+# Verified against the live tier on 2026-08-25, before uncommenting, by running
+# the SHARED classifier — `server/src/lib/delivery/health-contract.ts`, the same
+# module the prober imports, so this is what the prober will conclude and not an
 # approximation of it — over each endpoint at the path the inventory gives it:
 #
 #   switchyard  http://127.0.0.1:14002   observed  4.18.0
-#   argosy      http://127.0.0.1:18096   observed  dev  (sha 8845c6e)
+#   argosy      http://127.0.0.1:18096   observed  dev
 #   lyceum      http://127.0.0.1:14005   observed  1.12.0
-#   purser      http://127.0.0.1:14006   observed  dev  (sha 8a8c016)
+#   purser      http://127.0.0.1:14006   observed  dev
+#
+# The durable claim is the middle column: each of these answers the SWY-192
+# health contract at `/healthz`. The versions are the evidence for it and not
+# the claim — `deploy-dev.yml` pulls `latest` on a schedule, so a `dev` build's
+# sha is the fastest-moving fact anyone could write in this file, and SERV-140's
+# own ticket already went stale on purser's within a day of being filed. Dated
+# for the same reason. Re-run the check rather than trusting this list before
+# adding a fifth: every stale claim it replaces was accurate when written.
 #
 # All four are already registered with a null `health_path`, so all four are
-# probed at `/healthz` and none needs a registration step first. Re-run that
-# check rather than trusting this list before adding a fifth — every stale claim
-# it replaces was accurate when it was written.
+# probed at `/healthz` and none needs a registration step first.
 #
 # ── the blockers this list used to carry, and why each is gone ──────────────
 #
@@ -97,6 +103,27 @@ delivery_prober_interval: 5min
 # and postgres-dev has no HTTP health endpoint at all, so tier A cannot describe
 # them. If they belong on the matrix that is tier B (SWY-194) work and should be
 # decided deliberately, not settled by whether someone remembered a line here.
+#
+# ── the ports below are a COPY, and this is the copy that will drift ────────
+#
+# Each one restates a `docker-compose.dev.yml` default that `DEV_ENV_FILE` can
+# override: DEV_SWITCHYARD_PORT / DEV_ARGOSY_PORT / DEV_LYCEUM_PORT /
+# DEV_PURSER_PORT (compose lines 133, 148, 192, 225; documented in
+# `.env.dev.example:109-112`). Nothing sets an override today, so every value
+# here is currently correct.
+#
+# Set one — say DEV_LYCEUM_PORT=14105 — redeploy dev, and lyceum publishes
+# 14105 while this file keeps probing 14005. Connection refused, posted as
+# `unreachable`, and the matrix shows a healthy lyceum down. That is a false
+# RED, the direction SWY-284 went out of its way to avoid, and unlike a stale
+# health-contract claim nothing about it is self-announcing.
+#
+# `health_path` is read from the inventory at runtime rather than configured
+# here, precisely so it cannot become this kind of second copy. The ports cannot
+# take that route — the prober needs a reachable address before it can ask
+# Switchyard anything, and Switchyard's `port` column is the CONTAINER port
+# (lyceum 4005), not the host publication (14005). So the duplication stays and
+# the mitigation is this comment: change a DEV_*_PORT and change it here too.
 delivery_prober_targets:
   switchyard: "http://127.0.0.1:14002"
   argosy: "http://127.0.0.1:18096"

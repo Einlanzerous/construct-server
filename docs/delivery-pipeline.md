@@ -492,6 +492,21 @@ a container.
 
 The whole dev tier — `switchyard`, `argosy`, `lyceum`, `purser` — since SERV-140.
 
+**"Since SERV-140" means configured, not applied.** `PROBE_TARGETS` is rendered
+into `/etc/delivery-prober/prober.env` by the `delivery_prober` role, and
+`deploy.yml` rsyncs `scripts/**` without ever running ansible — so merging a
+change to that role leaves the box probing whatever it probed before, with git
+reading done. It takes `ansible-playbook ansible/site.yml --tags
+delivery_prober` (the untagged sops `fail` pre-task is skipped on a tagged run,
+so a host without the age key can apply it by supplying
+`delivery_prober_token`). `make probe-status` shows the last run and
+`journalctl -u delivery-prober` reports `targets=N` on every tick, which is the
+cheapest way to tell which state the host is actually in.
+
+That gap is worth naming because it is the SERV-140 shape one layer up: three
+commented-out lines were at least *visible* as unfinished, and an applied-vs-
+merged divergence is not visible anywhere.
+
 For most of this design's life it was `switchyard` alone. That was never a
 schedule limitation: the other three sat commented out in
 `ansible/roles/delivery_prober/defaults/main.yml`, one line each, behind three
