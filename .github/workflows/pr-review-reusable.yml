@@ -402,6 +402,30 @@ jobs:
       # shape-lawyering: signet's config already puts per-package options at the
       # root. Missing a root-level `extra-files` yields a short set and reproduces
       # the argosy red exactly.
+      #
+      # And the files the release TYPE itself writes (SERV-142). `changelog-path`
+      # and `extra-files` are the only two things a config SAYS, but a strategy
+      # also writes files nobody declares: release-type `node` bumps
+      # `package.json` natively, and drydock — the first consumer whose type owns
+      # a file — had its 1.8.0 release PR go red twice on a `package.json` the
+      # set could not see. Same failure as SERV-136 from a different missing
+      # input, and the log said so precisely ("carries 1 path(s) beyond the
+      # generated release material (package.json)") while predicting the failure
+      # that followed.
+      #
+      # Only on an EXPLICIT `release-type`. Release-please defaults an unset one
+      # to `node`, and assuming that here would widen switchyard's and signet's
+      # skip on a guess about repos that have never needed it — against this
+      # rule's whole posture, which is that not knowing something leaves the set
+      # short and the PR gets read. `node` is the only entry in the map because
+      # it is the only one observed: argosy's `simple` and construct-server's
+      # `go` release PRs touch nothing beyond what they declare. A new type goes
+      # in the map when a repo proves it needs it, not before.
+      #
+      # Out of scope, and short rather than wrong: the `node-workspace` plugin
+      # bumps every member `package.json`, which cannot be enumerated from this
+      # config alone. Such a repo's release PR gets reviewed and goes red, the
+      # same safe direction every other gap here falls in.
       - name: Triage — should this be reviewed, and how deeply
         id: triage
         env:
@@ -612,7 +636,7 @@ jobs:
             rm -f "$RP_ERR"
 
             if [ "$RP_FOUND" = yes ]; then
-              # Every package, prefixed by its key (SERV-136). Why: above the step.
+              # Every package, prefixed (SERV-136) + release-type files (SERV-142). Why: above the step.
               RELEASE_FILES=$(
                 {
                   echo '.release-please-manifest.json'
@@ -621,17 +645,20 @@ jobs:
                   # old single-root behaviour. Why: above the step.
                   jq -r '
                     . as $cfg
+                    | ({ node: ["package.json", "package-lock.json", "npm-shrinkwrap.json"] }) as $owned
                     | ($cfg.packages // {".": {}})
                     | to_entries[]
                     | .key as $dir
                     | .value as $p
                     | (if $dir == "." or $dir == "" then ""
                        else ($dir | sub("/+$"; "")) + "/" end) as $prefix
+                    | ($p["release-type"] // $cfg["release-type"] // "") as $rt
                     | ($prefix + ($p["changelog-path"] // $cfg["changelog-path"] // "CHANGELOG.md")),
                       ((($p["extra-files"] // []) + ($cfg["extra-files"] // []))[]?
                          | (if type == "string" then . else .path end)
                          | select(. != null)
-                         | $prefix + .)
+                         | $prefix + .),
+                      ($owned[$rt][]? | $prefix + .)
                   ' <<<"$RP_CONFIG" 2>/dev/null || true
                 } | sed '/^[[:space:]]*$/d' | sort -u
               )

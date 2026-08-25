@@ -190,9 +190,15 @@ source — for exactly the case the expression existed to serve.
 5. Bot-authored release PR whose changed paths are all generated release
    material → skip. The expected set is **derived from
    `release-please-config.json` on the base ref** — manifest, `changelog-path`,
-   and every `extra-files` target — so adding an `extra-files` entry cannot
-   silently un-match the skip. `release_files` is the fallback for repos with no
-   config (release-please in non-manifest mode).
+   every `extra-files` target, and the files the release TYPE writes without
+   being asked (SERV-142: `node` bumps `package.json`, which no key in the
+   config names) — so adding an `extra-files` entry cannot silently un-match the
+   skip, and neither can a release type that owns a file. `release_files` is the
+   fallback for repos with no config (release-please in non-manifest mode).
+   The type map holds `node` only, because it is the only type observed to write
+   anything: an unset `release-type` contributes nothing rather than assuming
+   release-please's own `node` default, which would widen the skip for two repos
+   on a guess.
    The test is a **subset**, not set equality: a repo running release-please in
    non-manifest mode touches only `CHANGELOG.md`, and an equality test would
    never fire there. Anything *outside* the list falls through to the rules
