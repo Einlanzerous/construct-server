@@ -236,7 +236,7 @@ jobs:
 
       - name: Resolve the pin variable
         # One variable per SOURCE REPO, not per image — a repo's backend and frontend ship
-        # from one release, so 11 variables cover 15 images (versions.env). The service
+        # from one release, so 12 variables cover 16 images (versions.env). The service
         # names in the dropdown map onto the keys by uppercasing, cook_book included.
         #
         # SIGNET IS THE ONE EXCEPTION, in both the key and the file (SERV-130). It is a
