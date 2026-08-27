@@ -705,27 +705,35 @@ services:
       # sees a TLS connection and deriving it would drop Secure off a durable
       # credential on the WAN-facing entrypoint.
       - CHRONICLE_COOKIE_SECURE=${CHRONICLE_COOKIE_SECURE:-true}
-      # Whose X-Forwarded-For the sign-in rate limiter may believe. The `public`
-      # entrypoint sets `forwardedHeaders.trustedIPs: []` so Traefik overwrites
-      # whatever a caller sent; `internal` has no forwardedHeaders block and
-      # relies on Traefik's default, which is the same effect today.
+      # Whose X-Forwarded-For the sign-in rate limiter may believe (CHRN-75,
+      # SERV-148). Not a CIDR list any more, and the reason is worth keeping: the
+      # question is "did this request come through our edge", and on this network
+      # THE PEER ADDRESS CANNOT ANSWER IT. construct_net is `external:` with
+      # default IPAM, so Traefik takes a DHCP address there by allocation order
+      # alone and nothing distinguishes it from the seventeen other containers.
+      # The retired CHRONICLE_TRUSTED_PROXIES defaulted to 172.16.0.0/12, which
+      # CONTAINS construct_net (172.19.0.0/16) — so every neighbour was a trusted
+      # proxy and could pick its own rate-limit bucket by writing a header.
       #
-      # ⚠ THIS DEFAULT OVER-TRUSTS AND THE LATERAL CASE IS NOT COVERED.
-      # 172.16.0.0/12 CONTAINS construct_net (172.19.0.0/16), so every container
-      # on the box is a trusted proxy: a neighbour can POST /auth/session with a
-      # rotating X-Forwarded-For and get a fresh bucket per value (unbounded
-      # invite guessing), or send the owner's address and 429 them off their own
-      # service. That is precisely the lateral threat Chronicle's in-process
-      # limiter was written for, and at this value neither limiter covers it.
+      # A shared secret answers that one question. Traefik stamps this value on
+      # X-Chronicle-Proxy-Secret via `customRequestHeaders`, which OVERWRITES
+      # whatever the caller sent — the same mechanism strip-identity-headers
+      # relies on — so through Traefik the header is honest however it arrived,
+      # and around Traefik a neighbour keeps only its own forgery. Chronicle
+      # COMPARES it in constant time and never presence-tests it: a direct
+      # neighbour arrives with the header present and wrong, so treating "set" as
+      # "trusted" would reintroduce the whole defect in a new spelling.
       #
-      # A narrower CIDR does not fix it: construct_net is `external:` with
-      # default IPAM and Traefik holds no fixed address there (it has one only on
-      # construct_edge_net), so no prefix distinguishes Traefik from a neighbour.
-      # Pinning Traefik an ipv4_address on construct_net would, and is the real
-      # fix — but it touches shared networking every service uses, so it is a
-      # decision rather than a tidy-up. Tracked separately; left at the default
-      # here deliberately rather than narrowed to a value that only looks safer.
-      - CHRONICLE_TRUSTED_PROXIES=${CHRONICLE_TRUSTED_PROXIES:-172.16.0.0/12}
+      # What Chronicle then reads is trustworthy for a second reason: the `public`
+      # entrypoint sets `forwardedHeaders.trustedIPs: []`, so Traefik discards a
+      # caller's X-Forwarded-For and writes the peer address itself. The secret
+      # says the chain came from us; that setting is why it has one honest entry.
+      #
+      # The same variable is on the traefik service below — one value, two
+      # readers, both from PROD_ENV_FILE. If they disagree, or if this is empty,
+      # Chronicle ignores X-Forwarded-For and every WAN sign-in shares one
+      # bucket: blunt but safe, and it says so in the log rather than failing.
+      - CHRONICLE_PROXY_SECRET=${CHRONICLE_PROXY_SECRET:-}
     networks:
       - construct_net
     depends_on:
@@ -1161,6 +1169,14 @@ services:
       # `docker exec crowdsec cscli bouncers add traefik-bouncer -o raw` → .env.
       # Referenced from dynamic/routers.yml via file-provider go-templating.
       - CROWDSEC_BOUNCER_KEY=${CROWDSEC_BOUNCER_KEY:-}
+      # The value Traefik stamps on X-Chronicle-Proxy-Secret for every Chronicle
+      # router (CHRN-75 / SERV-148), so Chronicle can tell a request that came
+      # through the edge from one a neighbour on construct_net sent it directly.
+      # Same variable on the chronicle service above, and the comment there is
+      # where the reasoning lives. Like the LAPI key above, it is referenced from
+      # dynamic/routers.yml via file-provider go-templating — `{{ env "..." }}`
+      # and NOT `${...}`, which that provider does not expand.
+      - CHRONICLE_PROXY_SECRET=${CHRONICLE_PROXY_SECRET:-}
     volumes:
       - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./config/traefik/dynamic:/etc/traefik/dynamic:ro
