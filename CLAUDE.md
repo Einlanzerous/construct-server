@@ -263,7 +263,7 @@ anything deploys or gets versioned.
   pulls and recreates only the services behind the pins that actually moved, `--no-deps`.
   **Every other deploy still pulls the whole stack**, deliberately: that is where the patch
   float is supposed to land. Three things this does *not* bound, and do not write that it
-  does: four of the ten pins cover two services each and recreate in pairs — `APERTURE_TAG`,
+  does: four of the twelve pins cover two services each and recreate in pairs — `APERTURE_TAG`,
   `CENTRIFUGE_TAG`, `SWITCHYARD_TAG` (backend + frontend) and `INTERLOCK_TAG` (web +
   worker); the pin is still major.minor, so rolling back to `0.13` gets
   the newest `0.13` patch and **not necessarily the image prod ran the last time it was on
