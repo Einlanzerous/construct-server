@@ -21,6 +21,33 @@ The standards it applies live in `REVIEW.md` and `CLAUDE.md` in the repository
 being reviewed; the model behind it is configuration (SERV-59, SERV-64). Keep
 judgement in those files, not here.
 
+## Where you write files
+
+**`/tmp` is shared with every other repository's runner on this host, and
+staging a file there will eventually post your review to somebody else's pull
+request.** Every runner on this box runs as the same user, so `/tmp` is one
+namespace across all of them; seven-plus repositories are reviewed
+concurrently and a review takes minutes. `/tmp/review-body.md` is the obvious
+name, which is exactly the problem — it is the name a second run picks
+independently, and it overwrites yours between you writing it and you reading
+it back to post.
+
+That is not hypothetical. It has happened twice (SERV-137 on `purser#40`,
+SERV-143 on `drydock#82`), and both times a complete, fluent review of a
+*different repository* was posted under a green check. Neither reviewer could
+have noticed: `-f body="$(cat …)"` substitutes the file into the request
+without its content ever passing through your context, so you never see what
+you actually posted, and your own transcript looks correct.
+
+So **every scratch file you create goes in the run-private directory named in
+"## This run"** — the review body, any inline-comment fragments, the JSON
+payload you assemble, the ticket comment. Not `/tmp`, and not `$HOME`. The
+workspace root is the other safe choice; it is per-run too.
+
+One filename is fixed and is **not** scratch: the workflow reads
+`review-verdict.json` (step 5) from the workspace root, so write that one
+exactly there.
+
 ## 1. Load the standards, before the diff
 
 There may be **two** copies of `CLAUDE.md`, and which one you are holding matters:
@@ -138,12 +165,20 @@ neutral so the existing workflow stays intact:
 
 ```bash
 gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
-  -f event=COMMENT -f body="$(cat review-body.md)"
+  -f event=COMMENT -f body="$(cat "$RUNNER_TEMP/review-body.md")"
 ```
 
 Use the summary shape `REVIEW.md` specifies. Prefer inline comments on the
 offending lines where you can place them accurately; fall back to the summary
 body when a line has moved.
+
+**End the body with the run marker given in "## This run", on a line of its
+own.** It is an HTML comment, so it renders as nothing; it is what lets the
+workflow prove that the review sitting on this PR is the one this run wrote.
+The Gate fails the check when it is missing, and names the other run when the
+body carries someone else's — which is what makes a repeat of the two
+incidents above red instead of green, since counting reviews before and after
+cannot tell them apart.
 
 Then write the verdict the workflow gates on. This file is **required** — write
 it even when you find nothing, and even if posting the review failed:
@@ -171,7 +206,7 @@ curl -sf -X POST -m 15 \
   -H "Authorization: Bearer $SWITCHYARD_TOKEN" \
   -H 'Content-Type: application/json' \
   "$SWITCHYARD_URL/v1/tickets/$TICKET_KEY/comments" \
-  -d "$(jq -n --arg b "$(cat ticket-comment.md)" '{body: $b}')"
+  -d "$(jq -n --arg b "$(cat "$RUNNER_TEMP/ticket-comment.md")" '{body: $b}')"
 ```
 
 Build the body with `jq` as above rather than interpolating into JSON by hand —
