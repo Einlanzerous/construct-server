@@ -5,7 +5,7 @@ name: PR Review
 #
 # This repo both HOSTS the reusable workflow and calls it. The call is a local
 # `./` reference so a change to the shared workflow is exercised by its own PR
-# rather than only after merge — the other three repos pin `@main`.
+# rather than only after merge — every other caller pins `@main`.
 #
 # Everything that is judgement lives in `REVIEW.md`, `CLAUDE.md` and
 # `PRINCIPLES.md`; everything that is procedure lives in

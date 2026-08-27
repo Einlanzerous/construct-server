@@ -163,6 +163,15 @@ and revert it in the same PR:
 
 Read what it produces knowing the reviewer was running the prompt under review.
 
+**Revert it in the same PR**, and not only for the reason above. A caller that
+subscribes to `issue_comment` has no `github.event.pull_request` on that event,
+so once the line reaches a default branch the expression resolves to an empty
+string and the reusable workflow's empty-value guard fails every
+`@claude review` at "Fetch the reviewer prompt" — the one retry path the
+workflow itself points at. On a PR branch it is inert, because a
+comment-triggered run executes the *default* branch's copy of the caller; see
+Gotchas below.
+
 ### `max_turns` is a tripwire, not a budget
 
 Completed reviews measured **9–50 turns, median 33** over 18 runs. A cap near 40

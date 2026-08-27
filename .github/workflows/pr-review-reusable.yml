@@ -1812,10 +1812,14 @@ jobs:
           # either a reviewer that skipped the last instruction or a body
           # inherited from a run whose procedure predates the stamp — and the
           # second of those is precisely the failure being caught.
+          # `|| LATEST_ID=""` so the readable error below is reachable. Without
+          # it `set -e` kills the step on the assignment itself and the message
+          # never prints — the count check above already guarantees a review
+          # exists, so an API failure is the only way to get here empty.
           LATEST_ID=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
-                 --jq ".[] | select(.user.login == \"$REVIEWER_LOGIN\") | .id" | sort -n | tail -1)
+                 --jq ".[] | select(.user.login == \"$REVIEWER_LOGIN\") | .id" | sort -n | tail -1) || LATEST_ID=""
           if [ -z "$LATEST_ID" ]; then
-            echo "::error::Could not identify the review just posted, though the count went from ${BEFORE} to ${AFTER}."
+            echo "::error::Could not identify the review just posted, though the count went from ${BEFORE} to ${AFTER}. The reviews API did not answer."
             exit 1
           fi
           # A second call rather than reusing the paginated one above: bodies are
