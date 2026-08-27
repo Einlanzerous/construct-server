@@ -19,6 +19,21 @@ resolved by checking rather than assuming.
 
 ## Adding it to a repo
 
+**Prerequisite: the repo needs its own registered self-hosted runner.** These
+repos live under the `Einlanzerous` **user** account rather than an
+organisation, and a user account cannot share runners between repositories — so
+every adopter needs one of its own, which is why this box runs one per repo. The
+`runs_on` default is `self-hosted` because the job has to reach Switchyard over
+localhost.
+
+Skipping it fails **silently**. The review job sits `queued` with
+`labels=self-hosted, runner=` and GitHub holds it for 24 hours before timing it
+out: no red check, no annotation, nothing in the job summary. It reads as a slow
+queue rather than a missing prerequisite — on a workflow whose entire design goal
+(SERV-87) is that the check's colour is load-bearing. purser sat there for 35
+minutes with the caller, both files and both secrets already correct (SERV-138).
+[Registering the repo's runner](#registering-the-repos-runner) is below.
+
 ```yaml
 # .github/workflows/pr-review.yml
 name: PR Review
@@ -64,6 +79,45 @@ pin to the workflow commit automatically. That context and `job_workflow_ref` ar
 both **empty** on this Actions version (verified on argosy#211 and signet#37), so
 they are explicit inputs instead: **if you pin `uses: ...@<tag>`, pin
 `prompt_ref` to the same tag**, because nothing links them for you.
+
+### Registering the repo's runner
+
+`runners/POOL-README.md` on the box covers adding a *pooled* runner to a repo
+that already has one. This is the other case, and the one an adopter is in:
+a repo's **first**. The house layout is `/home/magos/runners/<repo>/`, runner
+named `<repo>-runner`, labels `self-hosted,Linux,X64`.
+
+```bash
+rsync -a --exclude='.credentials*' --exclude='.runner*' --exclude='.service' \
+      --exclude='.env' --exclude='.path' --exclude='_work/' --exclude='_diag/' \
+      /home/magos/runners/<sibling>/ /home/magos/runners/<repo>/
+
+cd /home/magos/runners/<repo>
+./config.sh --unattended --url https://github.com/Einlanzerous/<repo> \
+  --token "$(gh api -X POST /repos/Einlanzerous/<repo>/actions/runners/registration-token --jq .token)" \
+  --name <repo>-runner --work _work
+
+cp /home/magos/runners/<sibling>/.path .path   # config.sh writes the configuring shell's PATH
+sudo ./svc.sh install magos && sudo ./svc.sh start
+```
+
+Three things the copy can get wrong:
+
+- **If the sibling's `bin` and `externals` are symlinks** into versioned
+  directories — which is what a runner self-update leaves behind, so some of
+  these are and some are not — `rsync` preserves the *absolute* targets and the
+  new tree quietly runs the sibling's binaries. Repoint them:
+  `ln -sfn /home/magos/runners/<repo>/bin.<ver> /home/magos/runners/<repo>/bin`,
+  and the same for `externals`.
+- **Use the stock service template.** `pool-service.template` is
+  switchyard-pool-specific — its `BUN_INSTALL_CACHE_DIR` line exists because
+  those three runners share one `$HOME` — and does not belong on a single runner.
+- **Do not pass `--labels e2e`.** Exactly one runner on this box may carry it;
+  `runners/POOL-README.md` has the whole argument.
+
+A job already sitting in that 24-hour queue picks the runner up as soon as it
+registers, so there is no need to cancel the run or close and reopen the PR.
+purser's did.
 
 ## Inputs
 
@@ -383,6 +437,20 @@ reviewer runs with `--allowedTools Bash,Read,Grep,Glob` and spawns none today.
   `ready_for_review` reach the file rules with no label at all. The label on its
   own fires nothing; the caller does not subscribe to `labeled`. It is not a gap
   after merge: both triggers then run the same merged copy.
+- **`/tmp` is one namespace across every runner on this box, and the reviewer
+  used to stage its review body there.** Two runs picked `/tmp/review-body.md`
+  independently, one overwrote the other between writing and posting, and a
+  complete review of *another repository* landed on a PR under a green check —
+  twice (SERV-137 on purser#40, SERV-143 on drydock#82). The reviewer cannot see
+  it happen: `-f body="$(cat …)"` never puts the content in its context, so its
+  transcript looks correct and the inline comments, which do come from context,
+  are its own. Nothing had instructed `/tmp` — it is simply the obvious
+  filename, which is why the fix in `review-prompt.md` is a stated rule with the
+  reason attached rather than a corrected path. The before/after review count
+  cannot catch it either, since the wrong body still increments the count, so the
+  Gate additionally checks that the posted body carries this run's
+  `<!-- pr-review: <repo>#<pr> run <id> -->` marker and names the other run when
+  it does not. The marker is composed once, in the review job's `env`.
 - **`claude-code-action` fails runs it completed.** It throws when `num_turns`
   exceeds `max_turns` even on a run the SDK allowed to finish. The workflow reads
   the result message from the execution file and decides for itself; the action's
@@ -395,5 +463,7 @@ reviewer runs with `--allowedTools Bash,Read,Grep,Glob` and spawns none today.
 - SERV-59 (the reviewer), SERV-87 (the check now means something), SERV-92 (this
   extraction), SERV-126 (the first review a conflicting PR never got), SERV-127
   (the round export), SGNT-36 (adopting it without thinking about the inputs).
+- SERV-137 and SERV-143 (one repo's review body posted to another repo's PR),
+  SERV-138 (adopting it needs a runner, and the checklist did not say so).
 - SWY-302 (the transcript producer), SWY-327 (`job_class`), SWY-328 (the
   consumer for the sidecar above).
