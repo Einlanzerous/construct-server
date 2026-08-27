@@ -85,15 +85,42 @@ http:
     # construct_net by every other service without passing Traefik, so this edge
     # limiter does nothing for that path.
     #
-    # NOTE: the in-process limiter does not currently cover that path either.
-    # CHRONICLE_TRUSTED_PROXIES defaults to 172.16.0.0/12, which CONTAINS
-    # construct_net (172.19.0.0/16) — so every neighbour is a trusted proxy and can
-    # pick its own bucket via X-Forwarded-For. Tracked; do not read the sentence
-    # above as saying the lateral path is covered.
+    # That path is covered now, by chronicle-proxy-secret below (CHRN-75 /
+    # SERV-148): the in-process limiter believes X-Forwarded-For only on a
+    # request carrying a secret Traefik stamps, so a neighbour going direct is
+    # keyed on its own address and cannot choose a bucket. Read the sentence
+    # above as scoping this middleware, not as the lateral path being unguarded.
     chronicle-login-ratelimit:
       rateLimit:
         average: 5
         burst: 15
+
+    # Proof that a request came through this edge (CHRN-75 / SERV-148). Attached to
+    # every router that reaches the chronicle service — chronicle-public,
+    # chronicle-public-auth and chronicle — because clientIP is a general answer and
+    # CHRN-20's upload router will want it too. A Chronicle router without it is not
+    # broken, it is silently coarse: the app falls back to keying every WAN sign-in
+    # on Traefik's address, and says so in its log rather than failing.
+    #
+    # `customRequestHeaders` OVERWRITES a header the client sent rather than
+    # appending, which is the property the whole design rests on and the same one
+    # strip-identity-headers uses above — a client's own X-Chronicle-Proxy-Secret is
+    # replaced here, so it never reaches the app. Chronicle compares the value in
+    # constant time and never presence-tests it.
+    #
+    # ⚠ `{{ env "..." }}`, NOT `${...}`. The file provider does not expand `${...}`;
+    # it would stamp that literal string, which never matches, and nothing would
+    # error — Chronicle would log a mismatch and quietly stay on the coarse bucket.
+    # crowdsecLapiKey below is the same mechanism and the existence proof that this
+    # form works. The value reaches the traefik container from PROD_ENV_FILE via the
+    # env line in docker-compose.yml. Unset, the template renders empty and an empty
+    # customRequestHeaders value DELETES the header rather than sending a blank one —
+    # the same property strip-identity-headers is built on — so the request arrives
+    # carrying nothing at all and Chronicle takes its no-header path.
+    chronicle-proxy-secret:
+      headers:
+        customRequestHeaders:
+          X-Chronicle-Proxy-Secret: '{{ env "CHRONICLE_PROXY_SECRET" }}'
 
     # Origin-side validation of Cf-Access-Jwt-Assertion (SERV-106). Every router on
     # the `internal` entrypoint carries this, and scripts/check-edge-auth.sh fails if
@@ -238,6 +265,7 @@ http:
       middlewares:
         - crowdsec-bouncer
         - strip-cf-access
+        - chronicle-proxy-secret
       tls:
         certResolver: letsencrypt
         domains:
@@ -258,6 +286,7 @@ http:
         - crowdsec-bouncer
         - strip-cf-access
         - chronicle-login-ratelimit
+        - chronicle-proxy-secret
       tls:
         certResolver: letsencrypt
         domains:
@@ -332,6 +361,7 @@ http:
       service: chronicle
       middlewares:
         - cf-access-jwt
+        - chronicle-proxy-secret
       # No TLS: internal is plain HTTP (Cloudflare terminates TLS at the edge and
       # the tunnel encrypts the wire).
 
