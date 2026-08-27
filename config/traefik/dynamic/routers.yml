@@ -113,7 +113,10 @@ http:
     # error — Chronicle would log a mismatch and quietly stay on the coarse bucket.
     # crowdsecLapiKey below is the same mechanism and the existence proof that this
     # form works. The value reaches the traefik container from PROD_ENV_FILE via the
-    # env line in docker-compose.yml; unset, Traefik stamps an empty header.
+    # env line in docker-compose.yml. Unset, the template renders empty and an empty
+    # customRequestHeaders value DELETES the header rather than sending a blank one —
+    # the same property strip-identity-headers is built on — so the request arrives
+    # carrying nothing at all and Chronicle takes its no-header path.
     chronicle-proxy-secret:
       headers:
         customRequestHeaders:
