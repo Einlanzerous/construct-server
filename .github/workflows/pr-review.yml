@@ -35,6 +35,23 @@ jobs:
   pr-review:
     uses: ./.github/workflows/pr-review-reusable.yml
     with:
+      # ####################################################################
+      # TEMPORARY — REMOVE BEFORE MERGING THIS PR (SERV-143).
+      #
+      # `prompt_ref` defaults to `main`, so a change to `review-prompt.md` is
+      # normally not exercised by its own PR. This PR adds a Gate assertion that
+      # the posted review body carries this run's marker, and the instruction to
+      # emit that marker is in the same PR's `review-prompt.md` — so without this
+      # line the review of this PR would run `main`'s unstamped procedure against
+      # the new assertion and fail by construction. Pointed at the head for one
+      # run, per docs/pr-reviewer.md > "Testing a change to review-prompt.md".
+      #
+      # Leaving it in permanently would let any pull request rewrite the
+      # reviewer's own instructions, which is the exact reason the default is
+      # `main`. Delete this and the line below before merge.
+      prompt_ref: ${{ github.event.pull_request.head.sha }}
+      # ####################################################################
+
       # Paths where a mistake widens access, loses data, leaks a secret, or
       # compromises the runner. These get the deeper pass. This is the one input
       # with no sensible default and it is worth keeping honest: a regex that

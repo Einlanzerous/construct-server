@@ -875,6 +875,15 @@ jobs:
       # matter run before anything guarantees a remote, and relying on job
       # ordering for repo resolution is what broke triage. See the triage job.
       GH_REPO: ${{ github.repository }}
+      # Which review run this is, composed once and handed to the reviewer in
+      # "## This run" so the Gate can prove the review sitting on the PR is the
+      # one this run wrote (SERV-137, SERV-143). Defined here for the same
+      # reason REVIEWER_LOGIN is defined once: two copies of an identity that
+      # must match exactly is the drift this shared workflow exists to stop.
+      #
+      # The run id rather than only repo+PR, so a body staged by an earlier
+      # round on this same PR is caught too — not just one from another repo.
+      REVIEW_MARKER: "<!-- pr-review: ${{ github.repository }}#${{ needs.triage.outputs.number }} run ${{ github.run_id }} -->"
       # REVIEWER_LOGIN is workflow-level — triage reads it too. See the top.
 
     steps:
@@ -1186,6 +1195,11 @@ jobs:
             echo "- The scoped diff is \`${SCOPE_DIR}/review-diff.patch\`; what it covers"
             echo "  and what was excluded is \`${SCOPE_DIR}/scope.md\`. Read the scope"
             echo "  first — it is how you decide what to spend the budget on."
+            echo "- Scratch files go in \`${RUNNER_TEMP}\`, which belongs to this run"
+            echo "  alone and is \`\$RUNNER_TEMP\` in your shell. Never \`/tmp\` — see"
+            echo "  \"Where you write files\"."
+            echo "- End the review body with this line, exactly, on a line of its own:"
+            echo "  \`${REVIEW_MARKER}\`"
             echo 'REVIEW_PROMPT_EOF'
           } >> "$GITHUB_OUTPUT"
 
@@ -1775,6 +1789,51 @@ jobs:
           if [ "$AFTER" -le "$BEFORE" ]; then
             echo "::error::Reviewer produced a verdict but no review appeared on the PR (${BEFORE} before, ${AFTER} after)."
             echo "The findings are in the Review step log; the review was written but not posted." >&2
+            exit 1
+          fi
+
+          # ...and a review appearing is not OUR review appearing. Twice, a
+          # complete and fluent review of a DIFFERENT repository was posted to a
+          # PR here and the check went green: the count above still went up, and
+          # the reviewer's own transcript showed nothing wrong, because the body
+          # reached the API through `$(cat file)` and never passed through its
+          # context. Both runs had staged their body at the same absolute path
+          # on this shared host and one overwrote the other between writing and
+          # posting (SERV-137 on purser#40, SERV-143 on drydock#82).
+          #
+          # `review-prompt.md` fixes the cause by moving scratch off /tmp. This
+          # is the part that still holds when the next variant arrives, and it
+          # is an exact test rather than a heuristic: every run stamps its body
+          # with its own marker, so a stolen body carries the marker of the run
+          # that wrote it and this names that run in the error.
+          #
+          # Fatal on a MISSING marker too, on the same reasoning as the missing
+          # verdict above: unverifiable is not clean. An unstamped body is
+          # either a reviewer that skipped the last instruction or a body
+          # inherited from a run whose procedure predates the stamp — and the
+          # second of those is precisely the failure being caught.
+          LATEST_ID=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
+                 --jq ".[] | select(.user.login == \"$REVIEWER_LOGIN\") | .id" | sort -n | tail -1)
+          if [ -z "$LATEST_ID" ]; then
+            echo "::error::Could not identify the review just posted, though the count went from ${BEFORE} to ${AFTER}."
+            exit 1
+          fi
+          # A second call rather than reusing the paginated one above: bodies are
+          # multi-line, so they cannot be streamed a line at a time, and
+          # `--paginate` applies `--jq` per page — a `max_by` filter there would
+          # return one body per page rather than one body.
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews/$LATEST_ID" \
+                 --jq '.body // ""' > "$RUNNER_TEMP/posted-body.md"
+
+          if ! grep -qF -- "$REVIEW_MARKER" "$RUNNER_TEMP/posted-body.md"; then
+            FOUND=$(grep -oE -- '<!-- pr-review: [^>]*-->' "$RUNNER_TEMP/posted-body.md" | head -1) || true
+            if [ -n "${FOUND:-}" ]; then
+              echo "::error::The review just posted here is stamped '${FOUND}', but this run is '${REVIEW_MARKER}'. A body belonging to another review run was posted to this PR — its findings are not about this PR (SERV-143)."
+            else
+              echo "::error::The review just posted here carries no run marker; expected '${REVIEW_MARKER}' on a line of its own. Either the reviewer skipped the stamp, or the body came from a run whose procedure predates it. Re-run the review."
+            fi
+            echo "Posted body, first 20 lines:" >&2
+            head -20 "$RUNNER_TEMP/posted-body.md" >&2
             exit 1
           fi
 
