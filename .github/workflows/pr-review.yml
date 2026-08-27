@@ -40,12 +40,20 @@ jobs:
       # instructions — `review-prompt.md` is not on claude-code-action's restore
       # list, so nothing else would stop it. #164 pinned it to the PR head for
       # one run, to exercise a change to the procedure and the assertion that
-      # gates on it in the same PR, and the pin was merged by accident. Two
-      # things were live for the hour it sat on this branch: that rewrite, and a
-      # broken `@claude review` — this caller subscribes to `issue_comment`,
+      # gates on it in the same PR, and the pin was merged by accident
+      # (2026-08-27 18:35Z; removed by #165).
+      #
+      # The two hazards had DIFFERENT exposure, and the difference is the part
+      # worth keeping. A comment-triggered run executes the DEFAULT branch's
+      # copy of this caller, not the PR's. So the instruction rewrite was live
+      # on #164's own branch as well as on main, while the second hazard could
+      # only ever be live on main: this caller subscribes to `issue_comment`,
       # where `github.event.pull_request` does not exist, so the expression
       # resolved to an empty string and the reusable workflow's empty-value
-      # guard failed the fetch before any review ran.
+      # guard failed the fetch before any review ran — `@claude review` broken
+      # repo-wide, which is the retry path the exhaustion report and the draft
+      # and release skips all point at. "It is inert on the branch" is true of
+      # one of those and not the other.
       #
       # The recipe for pinning it deliberately, and the caveat, are in
       # docs/pr-reviewer.md > "Testing a change to review-prompt.md".
