@@ -736,7 +736,7 @@ services:
       - CHRONICLE_PROXY_SECRET=${CHRONICLE_PROXY_SECRET:-}
       # CHRN-23. Where memo audio lives. The in-container path is deliberately
       # the SAME as the host path, so a path in a log line means one thing
-      # wherever it is read. /data is the NVMe (458G total, 256G free).
+      # wherever it is read. /data is the NVMe.
       #
       # Chronicle does NOT create this, and REFUSES TO BOOT if it is missing or
       # is not a directory. That is the right way round: a typo'd path springing
@@ -781,7 +781,14 @@ services:
       # BOTH subdirectories must exist on the host before chronicle is next
       # recreated, or it refuses to boot (see CHRONICLE_AUDIO_DIR above):
       #   mkdir -p /data/chronicle/audio /data/chronicle/inbox
-      # No sudo — /data is magos-owned. Ownership is not the gate today either:
+      # No sudo — /data is magos-owned — but only while nothing else got here
+      # first: the Docker daemon creates a missing bind source as ROOT, and then
+      # that mkdir fails with Permission denied in exactly the state that needs
+      # it. So the real guard is the ansible task that claims this path before
+      # compose sees it, with a cheap mkdir in deploy.yml for the warm host that
+      # has not re-run ansible; the line above is the manual fallback.
+      #
+      # Ownership is not the gate today in the other direction either:
       # chronicle's Dockerfile sets no USER, so the process is root inside the
       # container. If that changes, the failure is a write error on ingest
       # rather than at boot, so it would not be caught by the checks here.

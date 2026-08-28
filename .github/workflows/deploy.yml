@@ -312,6 +312,15 @@ jobs:
         # which is why the ansible task is the real guard, and this is the cheap one.
         run: mkdir -p "$DEPLOY_ROOT/wiki/site"
 
+      - name: Ensure the chronicle capture directories exist
+        # Chronicle stats both of these at boot and refuses to start if either is
+        # missing, so compose reaching them first would not silently misplace the
+        # corpus — it would red the deploy. Same division of labour as the wiki
+        # bind source above: ansible claims /data/chronicle on a cold host, this
+        # covers a warm one that has not re-run the playbook, and neither can fix a
+        # directory the daemon already created as root.
+        run: mkdir -p /data/chronicle/audio /data/chronicle/inbox
+
       - name: Log in to GitHub Container Registry
         run: |
           GITHUB_USER=$(grep '^GITHUB_USER=' "$DEPLOY_ROOT/.env" | cut -d'=' -f2)
