@@ -1,5 +1,25 @@
 # Changelog
 
+## [4.25.0](https://github.com/Einlanzerous/construct-server/compare/v4.24.0...v4.25.0) (2026-08-27)
+
+
+### Features
+
+* **cfaccess:** one Cloudflare Access verifier for the estate (SERV-131) ([#154](https://github.com/Einlanzerous/construct-server/issues/154)) ([c65266d](https://github.com/Einlanzerous/construct-server/commit/c65266d17b9ce7c4f0baef40b0d16b09b943561d))
+* **chronicle:** serve Chronicle on both entrypoints (CHRN-16, SERV-139) ([#162](https://github.com/Einlanzerous/construct-server/issues/162)) ([d552bd5](https://github.com/Einlanzerous/construct-server/commit/d552bd51b980aa0e57113b26b67125c7d5d011a1))
+* **chronicle:** stamp X-Chronicle-Proxy-Secret at the edge (SERV-148) ([#166](https://github.com/Einlanzerous/construct-server/issues/166)) ([1202fd0](https://github.com/Einlanzerous/construct-server/commit/1202fd0b8916edfdc1316474c6a5d684cedea370))
+* **delivery:** probe the whole dev tier, not just switchyard (SERV-140) ([#163](https://github.com/Einlanzerous/construct-server/issues/163)) ([7d5d33a](https://github.com/Einlanzerous/construct-server/commit/7d5d33af3cd8d4fc3300c190f45aaefd1a55ccd4))
+* **pr-review:** export the PR ref, the round and the pass (SERV-127) ([#152](https://github.com/Einlanzerous/construct-server/issues/152)) ([07857e9](https://github.com/Einlanzerous/construct-server/commit/07857e99dde7b8628e9cf230d293ba1f6b3aeffb))
+* **purser:** pass the CF spin-up ids through to the container (PRSR-11) ([#148](https://github.com/Einlanzerous/construct-server/issues/148)) ([b86e5fd](https://github.com/Einlanzerous/construct-server/commit/b86e5fd59602e5664b087b191da8343fd501609c))
+
+
+### Bug Fixes
+
+* **pr-review:** count the files a release TYPE writes as release material (SERV-142) ([#161](https://github.com/Einlanzerous/construct-server/issues/161)) ([97f97fd](https://github.com/Einlanzerous/construct-server/commit/97f97fde074f02793aadf9b656b9f746da691375))
+* **pr-review:** drop the temporary prompt_ref pin merged in [#164](https://github.com/Einlanzerous/construct-server/issues/164) (SERV-143) ([#165](https://github.com/Einlanzerous/construct-server/issues/165)) ([70f6898](https://github.com/Einlanzerous/construct-server/commit/70f68982440ee37894c02b9f02268d4305323358))
+* **pr-review:** stage scratch off the shared /tmp, and gate on the body being this run's (SERV-143, SERV-137, SERV-138) ([#164](https://github.com/Einlanzerous/construct-server/issues/164)) ([af8b1cc](https://github.com/Einlanzerous/construct-server/commit/af8b1cc78241f9a8fc1220b015ad3f8c2d7ca7e7))
+* **promote:** teach promote.yml that chronicle exists (SERV-149) ([#167](https://github.com/Einlanzerous/construct-server/issues/167)) ([31b13fb](https://github.com/Einlanzerous/construct-server/commit/31b13fb338e653bb5345500ca34727c062880560))
+
 ## [4.24.0](https://github.com/Einlanzerous/construct-server/compare/v4.23.0...v4.24.0) (2026-08-23)
 
 
