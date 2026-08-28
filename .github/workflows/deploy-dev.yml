@@ -42,8 +42,15 @@ run-name: >-
 # wrong about two of the four repos. A dispatch only helps if a merge produced an image
 # dev can move to, and `dev-versions.env` pins `latest` for all four. Measured 2026-08-28:
 #
-#   argosy    :latest is main's tip           a dispatch moves dev
-#   purser    :latest is main's tip           a dispatch moves dev  (SERV-108)
+#   argosy    :latest is main's tip           would move dev, but argosy has no
+#                                             credential to send a dispatch with — no
+#                                             RELEASE_BOT_* secret and no
+#                                             create-github-app-token step. A privilege
+#                                             decision, not a missing line of YAML.
+#   purser    :latest is main's tip ONLY once purser#52 merges. Until then it is
+#                                             whatever won the latest=auto race, which on
+#                                             2026-08-28 was the unstamped main build of
+#                                             the v0.16.0 release commit.
 #   lyceum    :latest is the last RELEASE     a dispatch moves nothing (LYCM-121)
 #   switchyard  no image is built on merge at all — release.yml is gated on
 #               `release_created`, so there is nothing for :latest to point at
