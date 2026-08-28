@@ -150,7 +150,7 @@
     group: "{{ user_name }}"
     mode: "0755"
 
-# This gates the BOOTSTRAP copy two tasks below, and must carry that task's own
+# This gates the BOOTSTRAP copy below, and must carry that task's own
 # condition (SERV-153). The BOOTSTRAP copy below is `force: false`, so on a host
 # that already has a .env it does nothing -- but this assert ran unconditionally and
 # hard-failed the whole play over a file that was never going to be read. That is how
@@ -230,19 +230,55 @@
       - SWITCHYARD_DB_PASSWORD
       # Switchyard
       - SWITCHYARD_PUBLIC_URL
+    # An empty value is not a value -- CLAUDE.md's first invariant, and this check
+    # was certifying `POSTGRES_PASSWORD=` as present. That exact key is the one the
+    # invariant is written about: Postgres stores an empty password as NULL, so
+    # `ALTER ROLE ... PASSWORD ''` blanks the role and every SCRAM login fails with
+    # 28P01. It bit Purser three times. A seed file that passes this check and then
+    # produces that is the check working against the thing it exists for.
+    #
+    # DD_TAGS is the one key that may legitimately be empty: Datadog treats it as
+    # "no extra tags", which is a real configuration and not an oversight. Anything
+    # added to this allowlist needs the same kind of reason.
+    blank_ok_env_keys:
+      - DD_TAGS
+    # Names only, again. This finds keys DEFINED WITH NOTHING AFTER THE `=` without
+    # any value entering a fact, so the no-credentials-in-facts property above holds
+    # for the emptiness check too.
+    #
+    # `KEY=""` and `KEY=''` count as empty, not just a bare `KEY=`. That is not
+    # quoting pedantry here: .env.example line 4 ships `DD_TAGS="env:prod
+    # host:construct"`, so the template this seed is written from establishes quotes
+    # as an ordinary way to write a value -- and clearing that line gives `DD_TAGS=""`
+    # rather than `DD_TAGS=`. Compose strips matched surrounding quotes in an
+    # env_file, so `POSTGRES_PASSWORD=""` reaches the stack as the empty string and
+    # is the ALTER ROLE ... PASSWORD '' case above, arriving through a spelling the
+    # narrower pattern waved past.
+    #
+    # The alternation is NON-capturing on purpose: a second capture group would make
+    # regex_findall return tuples, and this list would stop being names.
+    blank_env_keys: >-
+      {{ lookup('file', playbook_dir + '/../.env')
+         | regex_findall('(?m)^([A-Za-z_][A-Za-z0-9_]*)=[ \t]*(?:""|\'\')?[ \t]*$') }}
     # Sorted so a failure message is deterministic: `difference` is a set operation
     # and does not promise to preserve the order above.
     missing_env_keys: "{{ required_env_keys | difference(bootstrap_env_keys) | sort }}"
+    empty_env_keys: >-
+      {{ required_env_keys | difference(blank_ok_env_keys)
+         | intersect(blank_env_keys) | sort }}
   assert:
     that:
       - missing_env_keys | length == 0
+      - empty_env_keys | length == 0
     fail_msg: >-
-      The bootstrap .env ({{ playbook_dir }}/../.env) is missing
-      {{ missing_env_keys | length }} required key(s): {{ missing_env_keys | join(', ') }}.
+      The bootstrap .env ({{ playbook_dir }}/../.env) is not usable as a seed.
+      Missing: {{ missing_env_keys | join(', ') or 'none' }}.
+      Defined but EMPTY, which is not a value: {{ empty_env_keys | join(', ') or 'none' }}.
       That file seeds {{ deploy_root }}/.env on a cold host and is read from the
       machine running ansible, not from the target.
     success_msg: >-
-      bootstrap .env defines all {{ required_env_keys | length }} required keys
+      bootstrap .env defines all {{ required_env_keys | length }} required keys,
+      none of them empty
     quiet: true
   when: not deployed_env.stat.exists
 
@@ -270,6 +306,20 @@
     # secret is RENDERED by Signet, so a `gh secret set` on it is reverted by the next
     # sync rather than persisting.
     force: false
+  # `force: false` alone does NOT make this a no-op on a warm host, and that is the
+  # half SERV-153's first pass missed. `copy` resolves its controller-side `src`
+  # BEFORE it looks at `dest`, so a machine with no ./.env fails here — "Could not
+  # find or access ... on the Ansible Controller" — even though the file it was
+  # going to write already exists and would not have been overwritten. That is the
+  # same shape as the incident this whole block was fixed for: a play stopped
+  # part-applied over a file that was never going to be read, only with a message
+  # that says nothing about the file being a cold-host seed.
+  #
+  # So it carries the gate's condition too. Behaviour on a cold host is unchanged;
+  # what this removes is the src resolution on a run that had no use for it. It also
+  # makes the comment above the stat literally true -- the gate now guards exactly
+  # the condition this task acts under.
+  when: not deployed_env.stat.exists
 
 # The deployed environment has two sources (SERV-96): credentials, from the secret on
 # a CI deploy or from the bootstrap copy above on a cold host; and the first-party
