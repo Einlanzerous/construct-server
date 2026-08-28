@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.26.0](https://github.com/Einlanzerous/construct-server/compare/v4.25.0...v4.26.0) (2026-08-28)
+
+
+### Features
+
+* **chronicle:** give Chronicle its capture config (SERV-151) ([#168](https://github.com/Einlanzerous/construct-server/issues/168)) ([fd5970f](https://github.com/Einlanzerous/construct-server/commit/fd5970fd397afeeeb7070fd86101665f3e1a88d6))
+
 ## [4.25.0](https://github.com/Einlanzerous/construct-server/compare/v4.24.0...v4.25.0) (2026-08-27)
 
 
