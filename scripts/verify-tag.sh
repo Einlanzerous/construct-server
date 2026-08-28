@@ -15,7 +15,7 @@
 # half-deployed state worth refusing.
 #
 # The image list is derived from docker-compose.yml rather than hardcoded here, so
-# adding an eleventh service needs no edit to this script — and so this can never
+# adding another service needs no edit to this script — and so this can never
 # disagree with what the stack actually runs.
 #
 # Usage:

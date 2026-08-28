@@ -255,6 +255,32 @@
     group: "{{ user_name }}"
     mode: "0755"
 
+# Chronicle's bind source (SERV-151), claimed here for the same reason and with a
+# sharper failure than the wiki's. /data/chronicle is not in the repo and nothing
+# generates it, so on a cold host compose reaches a missing bind source first and
+# the daemon creates /data/chronicle as ROOT. Chronicle then REFUSES TO BOOT,
+# because it stats both subdirectories and will not invent them — a typo'd path
+# springing into existence is how a corpus ends up on the container's writable
+# layer and vanishes at the next redeploy.
+#
+# The remedy printed in docker-compose.yml is `mkdir -p` with no sudo, and in that
+# state it fails with Permission denied — the instruction and the failure it
+# addresses cannot both be true. Claiming the path here is what keeps them apart.
+# The subdirectories are named individually because it is `audio/` and `inbox/`
+# that chronicle stats; a magos-owned parent with root-owned children fails the
+# same way.
+- name: Ensure the chronicle capture directories exist and are owned by user
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ user_name }}"
+    group: "{{ user_name }}"
+    mode: "0755"
+  loop:
+    - /data/chronicle
+    - /data/chronicle/audio
+    - /data/chronicle/inbox
+
 # Two tasks that wrote copyparty config out-of-band are deliberately gone (SERV-76).
 #
 # `Create copyparty configuration` wrote a four-line stub over
