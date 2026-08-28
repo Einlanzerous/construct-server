@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.26.1](https://github.com/Einlanzerous/construct-server/compare/v4.26.0...v4.26.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **ansible:** gate the bootstrap .env check on the copy it guards (SERV-153) ([#170](https://github.com/Einlanzerous/construct-server/issues/170)) ([55cb301](https://github.com/Einlanzerous/construct-server/commit/55cb301810096fa5f1ee5dba4ff5613e28c5f90d))
+* **ansible:** gate the bootstrap .env copy too, and reject empty values (SERV-153) ([#172](https://github.com/Einlanzerous/construct-server/issues/172)) ([eee3bcc](https://github.com/Einlanzerous/construct-server/commit/eee3bcc40e384790528d928c95ced60845e0bc23))
+
 ## [4.26.0](https://github.com/Einlanzerous/construct-server/compare/v4.25.0...v4.26.0) (2026-08-28)
 
 
