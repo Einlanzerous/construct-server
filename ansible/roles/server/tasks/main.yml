@@ -245,9 +245,21 @@
     # Names only, again. This finds keys DEFINED WITH NOTHING AFTER THE `=` without
     # any value entering a fact, so the no-credentials-in-facts property above holds
     # for the emptiness check too.
+    #
+    # `KEY=""` and `KEY=''` count as empty, not just a bare `KEY=`. That is not
+    # quoting pedantry here: .env.example line 4 ships `DD_TAGS="env:prod
+    # host:construct"`, so the template this seed is written from establishes quotes
+    # as an ordinary way to write a value -- and clearing that line gives `DD_TAGS=""`
+    # rather than `DD_TAGS=`. Compose strips matched surrounding quotes in an
+    # env_file, so `POSTGRES_PASSWORD=""` reaches the stack as the empty string and
+    # is the ALTER ROLE ... PASSWORD '' case above, arriving through a spelling the
+    # narrower pattern waved past.
+    #
+    # The alternation is NON-capturing on purpose: a second capture group would make
+    # regex_findall return tuples, and this list would stop being names.
     blank_env_keys: >-
       {{ lookup('file', playbook_dir + '/../.env')
-         | regex_findall('(?m)^([A-Za-z_][A-Za-z0-9_]*)=[ \t]*$') }}
+         | regex_findall('(?m)^([A-Za-z_][A-Za-z0-9_]*)=[ \t]*(?:""|\'\')?[ \t]*$') }}
     # Sorted so a failure message is deterministic: `difference` is a set operation
     # and does not promise to preserve the order above.
     missing_env_keys: "{{ required_env_keys | difference(bootstrap_env_keys) | sort }}"
