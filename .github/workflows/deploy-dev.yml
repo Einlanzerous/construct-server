@@ -1,5 +1,32 @@
 name: Deploy to Dev
 
+# A dispatched run says WHICH repo and commit asked for it (SERV-108). Without it a
+# `repository_dispatch` row reads as the bare event type — `image-updated` today, and
+# `deploy-dev` for the per-merge dispatches — naming neither the service nor the commit.
+# That matters most in the case you are least likely to open: four repos merging inside a
+# few minutes queue four runs, and `concurrency` supersedes a PENDING run, so the title is
+# all that survives of a dispatch that never executed.
+#
+# THREE ARMS, NOT TWO, and the third one is why. `run-name` overrides GitHub's default for
+# EVERY event, and that default is event-specific: the workflow name on `schedule`, the
+# event type on `repository_dispatch`, and the COMMIT MESSAGE on `push`. A two-way branch
+# therefore fixes the dispatch rows and quietly replaces the most informative title in the
+# list with the least — measured over the last 100 runs, 10 of the 11 `push` rows read as
+# their commit subject. `push` is not a rare path here either: every path trigger below
+# lands on it, and those are the runs where *what changed* is the whole question. So the
+# push arm keeps the commit message rather than printing the word "push".
+#
+# Every field is read for display only and guarded, so a dispatch composed by hand, or by
+# a repo that sends `image` without `repo`, still renders something.
+run-name: >-
+  ${{ github.event_name == 'repository_dispatch'
+      && format('Deploy to Dev — {0} @ {1}',
+                github.event.client_payload.repo || github.event.client_payload.image || 'unknown repo',
+                github.event.client_payload.sha || 'no sha')
+      || (github.event_name == 'push'
+          && format('Deploy to Dev — {0}', github.event.head_commit.message || github.sha)
+          || format('Deploy to Dev — {0}', github.event_name)) }}
+
 # The pipeline's step 2 (SERV-97). `docs/delivery-pipeline.md` has always said a merge
 # auto-deploys to dev with no gate — SERV-77 built the dev project and its `make dev-*`
 # targets, but nothing moved code into it, so dev was a sandbox someone started by hand
@@ -18,8 +45,31 @@ name: Deploy to Dev
 #
 # So the schedule is the mechanism that makes the acceptance criterion true today, and the
 # dispatch is the mechanism that makes it prompt. Adding a per-merge `deploy-dev` dispatch
-# to each service repo's `publish.yml` is the follow-up (SERV-108); when every one of them
-# sends it, this cron can drop to a low-frequency backstop or go away.
+# to each service repo's `publish.yml` is the follow-up (SERV-108).
+#
+# THE CRON CANNOT GO AWAY, and the sentence that used to sit here saying it could was
+# wrong about two of the four repos. A dispatch only helps if a merge produced an image
+# dev can move to, and `dev-versions.env` pins `latest` for all four. Measured 2026-08-28:
+#
+#   argosy    :latest is main's tip           would move dev, but argosy has no
+#                                             credential to send a dispatch with — no
+#                                             RELEASE_BOT_* secret and no
+#                                             create-github-app-token step. A privilege
+#                                             decision, not a missing line of YAML.
+#   purser    :latest is main's tip ONLY once purser#52 merges. Until then it is
+#                                             whatever won the latest=auto race, which on
+#                                             2026-08-28 was the unstamped main build of
+#                                             the v0.16.0 release commit.
+#   lyceum    :latest is the last RELEASE     a dispatch moves nothing (LYCM-121)
+#   switchyard  no image is built on merge at all — release.yml is gated on
+#               `release_created`, so there is nothing for :latest to point at
+#
+# For lyceum and switchyard the cron is not a backstop behind a dispatch; it is the only
+# thing that moves them, and what it moves them to is the last release. Dev therefore
+# tracks RELEASES for those two and main for the other two, which is a split nobody
+# chose — LYCM-121 and SERV-108 each decided it locally, in different directions, for
+# good local reasons. Resolving it is an open decision on SERV-108; until it is resolved,
+# do not read a green deploy-dev run as "dev is running what just merged".
 #
 # WHAT THIS DOES NOT DO: touch prod. Different root, different compose file, different
 # project, different network, different secret. The last step asserts that rather than

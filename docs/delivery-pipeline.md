@@ -229,8 +229,13 @@ already a first-class user. It lands in `llm_observations` for cost attribution 
 
 **0. Merge.** PR green on the repo's existing CI, reviewed, merged to `main`.
 
-**1. Publish.** `publish.yml` builds and pushes `sha-<short>` and `latest`. Already
-happens today; no change.
+**1. Publish.** *Written as "`publish.yml` builds and pushes `sha-<short>` and `latest`
+— already happens today; no change." That was never true of all four repos, and the
+correction twenty lines below depends on it: **switchyard has no `publish.yml` at all**
+(images are built in `release.yml`, gated on `release_created`), and **lyceum's pushes
+`sha-<short>` only on a merge** — its `:latest` is written by the release build alone
+(LYCM-121). argosy and purser are the two this step describes accurately. Measured
+2026-08-28.*
 
 **2. Auto-deploy to dev.** `repository_dispatch` → construct-server `deploy-dev.yml`,
 deploying *that sha* to the dev project only. Dev always tracks HEAD. No gate here —
@@ -244,14 +249,31 @@ the gate is what comes after.
   `latest`, deliberately. Dev's job is to run what just merged; a pinned dev is a second
   prod. The file earns its place by giving a **temporary** dev pin a reviewable home, and by
   making dev's version state answerable from git rather than from the box.*
-- *A dispatch alone would not have worked, and this is the part worth carrying forward. The
-  service repos do dispatch `image-updated` — from `release.yml`, gated on release-please
-  cutting a version. So it fires on a **release**, not on a merge. `latest` is pushed by
-  `publish.yml` on every push to main and announced to nobody. A dispatch-only workflow
-  would have left dev moving on releases while looking like it had fixed the problem. An
-  **hourly schedule** is what makes step 2 true today; the dispatch is what makes it prompt.
-  Adding a per-merge `deploy-dev` dispatch to each service repo's `publish.yml` is
-  **SERV-108**, and it is what lets the cron drop back to a backstop.*
+- *A dispatch alone would not have worked, and this is the part worth carrying forward.
+  Switchyard dispatches `image-updated` — from `release.yml`, gated on release-please
+  cutting a version. So it fires on a **release**, not on a merge; argosy, lyceum and
+  purser dispatch nothing at all. A dispatch-only workflow would have left dev moving on
+  releases while looking like it had fixed the problem. An **hourly schedule** is what
+  makes step 2 true today; the dispatch is what makes it prompt. Adding a per-merge
+  `deploy-dev` dispatch to each service repo's `publish.yml` is **SERV-108**.*
+- ***The cron cannot go away, and this document said otherwise until 2026-08-28.*** *It
+  claimed SERV-108 was "what lets the cron drop back to a backstop". A dispatch only helps
+  if a merge produced an image dev can move to, and `dev-versions.env` pins `latest` for
+  all four. Measured across the four repos:*
+
+  | repo | builds on merge? | `:latest` points at | a dispatch would |
+  |---|---|---|---|
+  | argosy | yes | main's tip | move dev — no credential to send one yet |
+  | purser | yes | main's tip, after purser#52 | move dev |
+  | lyceum | `:sha-<short>` only | the last **release** (LYCM-121) | move nothing |
+  | switchyard | **no** — gated on `release_created` | the last release | move nothing |
+
+  *For lyceum and switchyard the cron is not a backstop behind a dispatch; it is the only
+  thing that moves them, and what it moves them to is the last release. **Dev tracks
+  releases for those two and main for the other two** — a split nobody chose, since
+  LYCM-121 and SERV-108 each decided it locally in opposite directions. Resolving it is an
+  open decision on SERV-108. Until then, do not read a green `deploy-dev` run as "dev is
+  running what just merged".*
 
 *Note what actually moves dev, because it is not obvious: a floating tag is not a floating
 container. The image string never changes, so compose sees no drift and `up -d` alone is a
