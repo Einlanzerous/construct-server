@@ -21,7 +21,7 @@
 # bug once (see the tag-assertion step in deploy.yml, SERV-88). One definition, no rule
 # to remember.
 #
-# The strip list is read from versions.env itself, so adding an eleventh service needs
+# The strip list is read from versions.env itself, so adding another service needs
 # no edit here, and only the keys that file actually defines are touched. A blanket regex
 # over `_TAG` would have been simpler and wrong: it would eat any third-party pin the
 # secret happened to carry. There are none left as of SERV-105 — the third-party images

@@ -270,7 +270,7 @@ jobs:
         # characters to a shell test but the empty string to compose (it floated purser
         # to `:latest` while this step reported success); compose takes the LAST
         # duplicate key where a grep takes the first; and a hardcoded variable list goes
-        # quietly stale the day an eleventh service is added. Reading `config --images`
+        # quietly stale the day another service is added. Reading `config --images`
         # in the deploy root, against the same .env compose will use, cannot disagree
         # with compose by construction.
         #
