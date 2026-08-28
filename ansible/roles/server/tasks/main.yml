@@ -150,37 +150,101 @@
     group: "{{ user_name }}"
     mode: "0755"
 
-- name: Read .env file contents
-  set_fact:
-    env_file_content: "{{ lookup('file', playbook_dir + '/../.env') }}"
+# This gates the BOOTSTRAP copy two tasks below, and must carry that task's own
+# condition (SERV-153). The BOOTSTRAP copy below is `force: false`, so on a host
+# that already has a .env it does nothing -- but this assert ran unconditionally and
+# hard-failed the whole play over a file that was never going to be read. That is how
+# a stale .env on an operator's workstation stopped an ansible run against a
+# perfectly healthy server, ~20 tasks before the change the run was for.
+#
+# It reads the CONTROLLER's checkout on purpose, and that is not the bug it looks
+# like: `copy`'s src is controller-side, so this file IS the source of that bootstrap
+# copy. Validating the target instead would be checking the wrong file. The DEPLOYED
+# one is read from the target further down (`Load .env variables`, via slurp), which
+# is the right shape for "what is the stack running" and the wrong one for "is the
+# seed complete".
+#
+# The match is anchored to ^KEY= rather than left a bare substring. `search(item)`
+# passed on any occurrence anywhere -- inside a comment, or inside a longer key that
+# merely contains this one -- so it could pass a file that does not define the key it
+# claims to have found.
+- name: Check whether the deploy root already has a .env
+  stat:
+    path: "{{ deploy_root }}/.env"
+  register: deployed_env
 
+- name: Report that the bootstrap .env check does not apply to a warm host
+  debug:
+    msg: >-
+      {{ deploy_root }}/.env already exists, so the bootstrap copy below is a no-op
+      and its source is not validated. deploy.yml renders that file from
+      PROD_ENV_FILE and is the authority for its contents.
+  when: deployed_env.stat.exists
+
+# Reduced to key NAMES on the way in, rather than held whole and marked `no_log`.
+# The file carries every prod credential and `set_fact` echoes its value at -v, so
+# the safe version is one that never has a value to leak: regex_findall keeps only
+# what is left of each `=`. That is a property of the expression rather than an
+# annotation someone has to remember to re-add, which is the same argument
+# render-env.sh's strip loses by being a mitigation (SERV-94).
+#
+# It also makes the anchoring structural. The old check was `search(item)` against
+# the raw text, which passed on any occurrence anywhere -- a key named only in a
+# COMMENT, or one that is merely a suffix of a longer key, both certified a file
+# that does not define it. Comparing against an extracted key set cannot do that.
+- name: Index the keys the bootstrap .env defines
+  set_fact:
+    bootstrap_env_keys: >-
+      {{ lookup('file', playbook_dir + '/../.env')
+         | regex_findall('(?m)^([A-Za-z_][A-Za-z0-9_]*)=') }}
+  when: not deployed_env.stat.exists
+
+# One assert over a set, NOT a loop over 15 asserts. `quiet: true` does not do what
+# it looks like it does -- it suppresses the assertion detail, not the default
+# callback's per-item lines -- so a loop prints one line per key however it is
+# marked, and a loop skipped by `when` prints one SKIPPING line per key plus a
+# task-level one. Sixteen lines to say a check did not apply. This form prints one
+# line in every case, and names every missing key at once instead of stopping at
+# the first.
 - name: Validate required .env keys are present
+  vars:
+    required_env_keys:
+      # Datadog
+      - DD_API_KEY
+      - DD_SITE
+      - DD_TAGS
+      # Semaphore UI
+      - SEMAPHORE_ADMIN_PASSWORD
+      - SEMAPHORE_ADMIN_NAME
+      - SEMAPHORE_ADMIN_EMAIL
+      - SEMAPHORE_ADMIN
+      # GitHub / GHCR
+      - GITHUB_USER
+      - GITHUB_PAT
+      # Service ports
+      - COOK_BOOK_PORT
+      - SWITCHYARD_PORT
+      # Postgres / per-service DB passwords
+      - POSTGRES_PASSWORD
+      - COOK_BOOK_DB_PASSWORD
+      - SWITCHYARD_DB_PASSWORD
+      # Switchyard
+      - SWITCHYARD_PUBLIC_URL
+    # Sorted so a failure message is deterministic: `difference` is a set operation
+    # and does not promise to preserve the order above.
+    missing_env_keys: "{{ required_env_keys | difference(bootstrap_env_keys) | sort }}"
   assert:
     that:
-      - "env_file_content is search(item)"
-    fail_msg: "Missing required key '{{ item }}' in .env file"
-  loop:
-    # Datadog
-    - DD_API_KEY
-    - DD_SITE
-    - DD_TAGS
-    # Semaphore UI
-    - SEMAPHORE_ADMIN_PASSWORD
-    - SEMAPHORE_ADMIN_NAME
-    - SEMAPHORE_ADMIN_EMAIL
-    - SEMAPHORE_ADMIN
-    # GitHub / GHCR
-    - GITHUB_USER
-    - GITHUB_PAT
-    # Service ports
-    - COOK_BOOK_PORT
-    - SWITCHYARD_PORT
-    # Postgres / per-service DB passwords
-    - POSTGRES_PASSWORD
-    - COOK_BOOK_DB_PASSWORD
-    - SWITCHYARD_DB_PASSWORD
-    # Switchyard
-    - SWITCHYARD_PUBLIC_URL
+      - missing_env_keys | length == 0
+    fail_msg: >-
+      The bootstrap .env ({{ playbook_dir }}/../.env) is missing
+      {{ missing_env_keys | length }} required key(s): {{ missing_env_keys | join(', ') }}.
+      That file seeds {{ deploy_root }}/.env on a cold host and is read from the
+      machine running ansible, not from the target.
+    success_msg: >-
+      bootstrap .env defines all {{ required_env_keys | length }} required keys
+    quiet: true
+  when: not deployed_env.stat.exists
 
 # Deliberately does NOT notify a Docker restart (SERV-84). Restarting the daemon
 # restarts containers with their OLD spec, so it cannot deliver an env change —
