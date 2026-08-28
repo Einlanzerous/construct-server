@@ -229,8 +229,13 @@ already a first-class user. It lands in `llm_observations` for cost attribution 
 
 **0. Merge.** PR green on the repo's existing CI, reviewed, merged to `main`.
 
-**1. Publish.** `publish.yml` builds and pushes `sha-<short>` and `latest`. Already
-happens today; no change.
+**1. Publish.** *Written as "`publish.yml` builds and pushes `sha-<short>` and `latest`
+— already happens today; no change." That was never true of all four repos, and the
+correction twenty lines below depends on it: **switchyard has no `publish.yml` at all**
+(images are built in `release.yml`, gated on `release_created`), and **lyceum's pushes
+`sha-<short>` only on a merge** — its `:latest` is written by the release build alone
+(LYCM-121). argosy and purser are the two this step describes accurately. Measured
+2026-08-28.*
 
 **2. Auto-deploy to dev.** `repository_dispatch` → construct-server `deploy-dev.yml`,
 deploying *that sha* to the dev project only. Dev always tracks HEAD. No gate here —

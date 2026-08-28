@@ -184,7 +184,7 @@ the dev `.env`, pulls, and runs the same `make dev-*` targets a human would:
 |---|---|
 | `schedule` | hourly — the backstop that makes "dev tracks HEAD" true |
 | `repository_dispatch: deploy-dev` | what a service repo should send on every merge (**SERV-108**) |
-| `repository_dispatch: image-updated` | what service repos send today, on release |
+| `repository_dispatch: image-updated` | what **switchyard alone** sends today, on release |
 | `push` to `main` | touching `docker-compose.dev.yml`, `dev-versions.env`, `db/`, `scripts/` |
 | `workflow_dispatch` | by hand |
 
@@ -196,8 +196,16 @@ the per-merge dispatch where one helps.
 
 **The cron is not going away, and only two of the four repos can be made prompt.** A
 dispatch only helps if a merge produced an image dev can move to, and `dev-versions.env`
-pins `latest` for all four. `argosy` and `purser` publish `:latest` from main's tip, so a
-dispatch moves them. **`lyceum` publishes `:latest` only from a release** (LYCM-121, and
+pins `latest` for all four. `argosy` publishes `:latest` from main's tip, and `purser`
+does too once purser#52 merges — until then purser's is whatever won the `latest=auto`
+race, which on 2026-08-28 was the unstamped main build of the `v0.16.0` release commit.
+So a dispatch moves those two — though **argosy cannot currently send one**: it has no
+`RELEASE_BOT_*` secret and no `create-github-app-token` step anywhere in its workflows,
+because its release-please runs under `GITHUB_TOKEN` and calls `publish.yml` by
+`workflow_call` (the SERV-125 fix). Giving it one is a privilege decision, not a missing
+line of YAML.
+
+**`lyceum` publishes `:latest` only from a release** (LYCM-121, and
 deliberate — a main build has no semver, so its label could never match the ledger's
 strict equality), and **`switchyard` builds no image on a merge at all** — its
 `build-and-push` job is gated on `release_created`. For those two the cron is the only
