@@ -734,6 +734,58 @@ services:
       # Chronicle ignores X-Forwarded-For and every WAN sign-in shares one
       # bucket: blunt but safe, and it says so in the log rather than failing.
       - CHRONICLE_PROXY_SECRET=${CHRONICLE_PROXY_SECRET:-}
+      # CHRN-23. Where memo audio lives. The in-container path is deliberately
+      # the SAME as the host path, so a path in a log line means one thing
+      # wherever it is read. /data is the NVMe (458G total, 256G free).
+      #
+      # Chronicle does NOT create this, and REFUSES TO BOOT if it is missing or
+      # is not a directory. That is the right way round: a typo'd path springing
+      # into existence is how the corpus ends up on the container's writable
+      # layer, which looks like it works right up until a redeploy takes the
+      # audio with it. So the mkdir below is a prerequisite of the deploy, not
+      # a tidy-up after it.
+      #
+      # It is also the switch for the app's own upload path: set, POST
+      # /memos/uploads serves; unset, all four upload routes answer 503 naming
+      # this variable and GET /admin/storage reports no corpus.
+      - CHRONICLE_AUDIO_DIR=/data/chronicle/audio
+      # CHRN-19. The Copyparty-fed inbox, ONE SUBDIRECTORY PER ACCOUNT named
+      # after the account's UUID. A file carries no identity of its own and
+      # tier2.memos.author_id is NOT NULL, so the directory is the only thing
+      # that can supply an author — which is why the watcher creates no
+      # directories and ignores any that does not name an existing account.
+      #
+      # Set WITHOUT CHRONICLE_AUDIO_DIR the service refuses to start: a watcher
+      # with nowhere to copy recordings to would record memos whose audio is
+      # immediately missing. The two move together.
+      #
+      # Copyparty does NOT serve this yet — copyparty.conf publishes exactly one
+      # volume, [/] -> /w/hdd/media — so the watcher runs against an inbox
+      # nothing fills, costing one readdir per interval. Publishing it is a
+      # separate decision rather than an oversight: that config is
+      # `accs: rwmd: *`, anonymous and gated only by Tailscale, so anyone on the
+      # tailnet could drop a file into any account's directory and have the memo
+      # attributed to them. Chronicle's authenticated upload endpoint is the
+      # alternative.
+      - CHRONICLE_INBOX_DIR=/data/chronicle/inbox
+      # These restate internal/watch's own defaults (5s and 10s), the way
+      # CHRONICLE_SHUTDOWN_GRACE above restates config.Load's. Settle is how
+      # long a file must be untouched before it is read — one of three guards
+      # against reading a half-written upload, and not the one that guarantees
+      # anything (the re-stat after the copy is). Raise it for a slow sync
+      # client: worst case from written to a memo row is settle + interval.
+      - CHRONICLE_WATCH_INTERVAL=${CHRONICLE_WATCH_INTERVAL:-5s}
+      - CHRONICLE_WATCH_SETTLE=${CHRONICLE_WATCH_SETTLE:-10s}
+    volumes:
+      # rw: the only durable store for tier-2 audio, which nothing regenerates.
+      # BOTH subdirectories must exist on the host before chronicle is next
+      # recreated, or it refuses to boot (see CHRONICLE_AUDIO_DIR above):
+      #   mkdir -p /data/chronicle/audio /data/chronicle/inbox
+      # No sudo — /data is magos-owned. Ownership is not the gate today either:
+      # chronicle's Dockerfile sets no USER, so the process is root inside the
+      # container. If that changes, the failure is a write error on ingest
+      # rather than at boot, so it would not be caught by the checks here.
+      - /data/chronicle:/data/chronicle
     networks:
       - construct_net
     depends_on:
