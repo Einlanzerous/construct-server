@@ -360,10 +360,12 @@ jobs:
             echo "node_id=${{ github.event.pull_request.node_id }}" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── THIS STEP IS NEAR A HARD GITHUB LIMIT ────────────────────────────────
+      # ── SHELL COMMENTS IN THIS BLOCK COUNT TOWARD A HARD GITHUB LIMIT ────────
       #
       # A `run:` block is ONE expression, and GitHub caps an expression at 21,000
-      # characters. This one is the largest in the estate and sits close to it —
+      # characters. This one was 20,439 of them — 561 from breaking every review
+      # in the estate — until SERV-150 moved the prose below out to here, which
+      # is what the rest of this comment is. It is now under half the cap;
       # `scripts/check-run-expression-size.sh` prints the current headroom.
       #
       # SHELL COMMENTS INSIDE THE BLOCK COUNT. Adding a paragraph of explanation
@@ -380,6 +382,119 @@ jobs:
       #
       # Prose belongs HERE, above the step, where it is a YAML comment and free.
       # Keep the block itself to code and short pointers.
+      #
+      # ── skip() reports a reason, not just a skip ─────────────────────────────
+      #
+      # `reason` is not decoration. The `review` job going grey says a review
+      # did not happen; this says why, and it goes to the job summary rather
+      # than only to this log — the summary is one click from the checks
+      # list, the log is several and nobody opens it.
+      #
+      # ── re-review on push, and the first review it suppressed (SERV-126) ─────
+      #
+      # Re-reviewing on every push is the single largest cost multiplier,
+      # and most pushes are a typo fix on a PR that was already read. Opt
+      # in per PR with the label when a change is worth watching closely.
+      #
+      # But note the word RE-review: this rule is about the second read
+      # onward, and it was suppressing the first (SERV-126). A PR that
+      # conflicts with its base produces NO `pull_request` runs at all —
+      # GitHub evaluates the event against `refs/pull/N/merge`, which does
+      # not exist while the merge is unresolvable — so a PR opened
+      # conflicting never fires `opened`, the one action that reviews
+      # unconditionally. Every event it ever sees is a `synchronize` from
+      # the rebase that fixes the conflict, and each one landed here.
+      # argosy#194 went green in 9 seconds having been read by nothing.
+      #
+      # That is the sixth variant of the silent pass the concurrency key
+      # above keeps the ledger of, and the first that is not a
+      # cancellation: there was no run to cancel. So the test is not
+      # "which action is this" but "has anything ever read this PR" —
+      # which closes the class rather than this instance, and leaves the
+      # cost rule doing exactly the job it was written for.
+      #
+      # Conflicting PRs are also the ones being rebased and force-pushed,
+      # which is where mistakes get made.
+      #
+      # What closing it costs, because this file writes consequences down:
+      # a duplicate concurrent review inside the first review's window.
+      # The scenario is the one the ledger's variant three already names —
+      # a fixup pushed minutes after opening — and the action stays in the
+      # concurrency key, so the two runs do not cancel each other. The
+      # `opened` review is still running and has posted nothing, so the
+      # `synchronize` sees PRIOR=0 and reviews too. Both post. Before this
+      # change the second was skipped unconditionally.
+      #
+      # Accepted rather than prevented: reviewing twice is the safe
+      # direction and the second read sees the newer code, whereas
+      # detecting an in-flight run (a `gh run list` probe) is more
+      # machinery than a duplicate is worth — and machinery of exactly the
+      # kind the ledger above records five failures of.
+      #
+      # ── counting prior reviews ───────────────────────────────────────────────
+      #
+      # Same idiom as the review job's before/after assertion: stream
+      # the ids and count lines, because `--paginate` applies `--jq` per
+      # page and a `length` filter would emit one number per page.
+      #
+      # `|| PRIOR=0` guards the query, not the decision. An API hiccup
+      # must not read as "already reviewed" — unreachable means unknown,
+      # and unknown resolves toward reviewing. The cost of being wrong
+      # that way is one extra review; the cost of being wrong the other
+      # way is this ticket.
+      #
+      # ── the release-PR skip, and why it is keyed on three things ─────────────
+      #
+      # A release PR is a generated CHANGELOG and a version manifest, opened
+      # by the release bot. There is nothing for a fresh-context reviewer to
+      # say about it, and claude-code-action refuses a bot-initiated run
+      # outright ("Workflow initiated by non-human actor: …ind-release-bot —
+      # Add bot to allowed_bots list"), so without this the check is red on
+      # every release, permanently, and on exactly the PRs that most need to
+      # look trustworthy at a glance. Observed on #200 (run 31772576197):
+      # Claude never started, no execution file, and the Gate correctly
+      # called it a malfunction — correctly, and uselessly, forever.
+      #
+      # Ported from signet, which hit this first and whose comment predicted
+      # this repo would. The docs-only rule below nearly covers it and does
+      # not: CHANGELOG.md is .md, .release-please-manifest.json is not.
+      #
+      # Keyed on all three of author, branch and file list, because each one
+      # alone is a claim the other two do not enforce:
+      #
+      #   author  — the reason this rule exists is that the INITIATING ACTOR
+      #             is a bot. Keying on the branch alone would let a human
+      #             push `release-please--anything` touching exactly these
+      #             two files and skip review, and per CLAUDE.md
+      #             ("Release-please owns CHANGELOG.md and versions. Don't
+      #             hand-edit.") a hand-edit of those two is precisely the
+      #             change worth a look. `user.type` is `Bot` for the release
+      #             app and `User` for a person; verified on #200 and #205.
+      #   branch  — scopes it to the release train rather than any bot.
+      #   files   — a release PR carrying anything beyond what release-please
+      #             itself stamps is real code riding a release, which is the
+      #             silent pass this ticket exists to close. Note what this
+      #             is NOT saying: release-please's own `extra-files` targets
+      #             are expected material and are derived INTO the skip set
+      #             below, because it writes only a version line into them.
+      #             An earlier revision argued the opposite — that
+      #             `extra-files` was a reason to distrust the file list —
+      #             which was right while the list was a hardcoded pair and
+      #             wrong once it is derived from the config.
+      #
+      # What the fall-through actually does, because it is NOT a review:
+      # nothing configures `allowed_bots`, so a bot-authored PR that reaches
+      # the review job is rejected by claude-code-action exactly as before —
+      # Claude never starts and the Gate reports a malfunction. That red is
+      # deliberate and is the point: unreviewed code riding a release PR
+      # should be loud, and a loud red beats a quiet skip. It is not a
+      # reviewed verdict, and the annotation says so rather than leaving the
+      # next reader to expect one.
+      #
+      # A HUMAN-authored `release-please--*` branch falls out of this
+      # condition entirely and gets an ordinary review, which is the case the
+      # author check adds. `@claude review` also still forces a real review
+      # on any of these, because the initiating actor is then the commenter.
       #
       # ── how the release-file set is derived (SERV-136) ───────────────────────
       #
@@ -426,6 +541,143 @@ jobs:
       # bumps every member `package.json`, which cannot be enumerated from this
       # config alone. Such a repo's release PR gets reviewed and goes red, the
       # same safe direction every other gap here falls in.
+      #
+      # ── reading the config: BASE ref, and exit status not empty output ───────
+      #
+      # DERIVED from release-please-config.json where there is one, and
+      # only falling back to the `release_files` input where there is not.
+      #
+      # This is argosy's rule, and it had to be recovered rather than
+      # written: argosy's local copy read the set out of the config, and
+      # the first port of it to the shared workflow dropped that for the
+      # static default — which does not contain argosy's third path, so
+      # every argosy release would have gone red again. Its own comment
+      # named the failure before the port deleted it: "Restating it is how
+      # this silently rots the next time an extra-file is added — the skip
+      # stops matching, and the only symptom is a red check on a release
+      # nobody looks twice at." Extraction losing the best local version is
+      # the exact failure SERV-92 exists to prevent, so the derivation
+      # belongs here where all four repos get it.
+      #
+      # Read from the BASE ref, so a PR cannot widen its own skip by
+      # editing the config. Anything unexpected — missing config, changed
+      # schema, malformed JSON — leaves the set short, the subset test
+      # fails, and it does NOT skip: every failure of this rule lands on
+      # "review it" rather than "wave it through".
+      # Branch on the EXIT STATUS, never on whether the output is empty:
+      # `gh api` prints the error response body to STDOUT and only its
+      # `gh: Not Found (HTTP 404)` summary to stderr. So `2>/dev/null ||
+      # true` leaves 127 bytes of `{"message":"Not Found",...}` in the
+      # variable, `[ -n "$RP_CONFIG" ]` is true for a repo with no config,
+      # and the fallback below becomes unreachable. Measured on this repo,
+      # which has no config: len=127.
+      #
+      # It was latent here — jq against that error JSON yields
+      # `{manifest, CHANGELOG.md}`, a superset of construct-server's
+      # one-file release PR, so the subset test passed and the skip still
+      # worked for the wrong reason. The `release_files` input was simply
+      # dead. Same shape as the review-ignore fetch above, which already
+      # discriminates this way; this one was written the sloppy way.
+      #
+      # ── subset, not set equality ─────────────────────────────────────────────
+      #
+      # SUBSET, not set equality. Equality also requires the release PR
+      # to carry every file in the list, and a repo can legitimately carry
+      # fewer: construct-server runs release-please in non-manifest mode,
+      # so its release commits touch CHANGELOG.md and nothing else, and an
+      # equality test never fires there. The question this rule is asking
+      # is "is there anything here that ISN'T generated release material",
+      # which is a subset test; expressing it as equality made it silently
+      # inapplicable to the repo hosting it.
+      #
+      # ── generated artifacts come out of scope here (SERV-87) ─────────────────
+      #
+      # Read from the BASE ref, never the workspace. A PR that widens its own
+      # ignore list should not get the widened list applied to itself — the
+      # realistic failure is an over-broad pattern silently suppressing
+      # review of the very change that introduced it, not an attacker. (A
+      # same-repo PR can already edit this workflow and have its version run;
+      # what bounds that is the fork guard above plus the repo being private
+      # and single-author. This is defence against the mistake, not the
+      # adversary, and `.github/review-ignore` being in SENSITIVE below is
+      # what makes the deeper pass read the edit.)
+      #
+      # A 404 is the ordinary case in a repo that has not adopted one yet:
+      # no file means no exclusions, which must not be an error. Everything
+      # else is a fetch failure and says so — an empty read and a failed read
+      # both end up reviewing the whole diff, which is the safe direction,
+      # but they are not the same event and a silent `|| true` over both is
+      # how "the filter quietly stopped working" becomes invisible. Same
+      # lesson as the Switchyard ticket fetch below, which discriminates on
+      # status for the same reason.
+      #
+      # ── validating the ignore patterns before using them ─────────────────────
+      #
+      # grep exits 2 on a MALFORMED pattern and 1 on no-match, and the
+      # `|| true` below cannot tell those apart. One unbalanced paren in this
+      # per-repo file therefore emptied BOTH lists — every path landed in
+      # neither "generated" nor "reviewable" — and twenty lines on, the empty
+      # REVIEWABLE read as "the generator wrote all of it" and skipped the PR
+      # green with `only generated files changed` while the actual diff went
+      # unread. A silent pass with a false explanation attached, from a typo,
+      # in exactly the class SERV-87 exists to close. The two grep warnings on
+      # stderr were the only trace, in a log these comments elsewhere concede
+      # nobody opens.
+      #
+      # So validate every pattern first, against empty input: 0 or 1 is a
+      # working regex, anything above is not. Named per-pattern, because
+      # "review-ignore is broken" without saying which line is a worse error
+      # than the one it replaces.
+      #
+      # ── nothing left once the generated output is removed ────────────────────
+      #
+      # Nothing left once the generator output is removed. This is a real
+      # skip, not a degenerate one: `bun run api:gen` on its own is a
+      # regeneration commit, and there is no hand-written line to review.
+      #
+      # An explicit `@claude review` overrides every other skip rule, so it
+      # has to override this one too — and "review nothing" is not a coherent
+      # way to honour it. Asking for a review of a regeneration-only PR means
+      # asking about the regeneration, so put the whole diff back in scope
+      # rather than handing the reviewer an empty patch.
+      #
+      # ── docs-only changes ────────────────────────────────────────────────────
+      #
+      # Docs-only changes get nothing out of a correctness reviewer. Written
+      # as "is anything here NOT docs?" rather than a negated -q test: with
+      # -q, grep short-circuits and reports no selection even when a
+      # non-matching line exists, which silently skipped any PR that touched
+      # code and a .md file together.
+      #
+      # Asked of REVIEWABLE rather than FILES: a PR of docs plus regenerated
+      # types has nothing for a correctness reviewer either, and running it
+      # against FILES would have called that a code change.
+      #
+      # ── the sensitive-path tier, and the two ways its regex can fail ─────────
+      #
+      # Paths where a mistake widens access, loses data, leaks a secret, or
+      # compromises the runner. These get the deeper pass.
+      # routes/auth.ts is the SSO login endpoint and scripts/authz-guard.ts is
+      # the mechanical check (wired at ci.yml:35) enforcing the permission
+      # invariants REVIEW.md asks about by hand — deleting its invocation was
+      # caught, gutting its logic was not. REVIEW.md / CLAUDE.md /
+      # review-prompt.md / review-ignore are the reviewer's own standards and
+      # its own scope: a PR that loosens them is a governance change, not
+      # documentation.
+      # An empty ERE matches every line, so an unset `sensitive_paths`
+      # would silently route every PR to the expensive tier — the same
+      # "empty is not a value" shape as the rest of this estate. The input is
+      # `required: true`, but required only stops it being omitted, not being
+      # passed as "". Refuse it rather than guess a default: what counts as
+      # sensitive is the one thing this workflow genuinely cannot know.
+      #
+      # The mirror of the empty check above, and the more dangerous half.
+      # `if grep -qE` runs with errexit off, so a malformed regex — an
+      # unbalanced paren in a hand-written ERE full of escapes — exits 2,
+      # takes the `else` branch, and puts every PR on the CHEAP tier. Empty
+      # over-escalates and is caught loudly; invalid de-escalates and was not
+      # caught at all, which is the wrong way round.
+      #
       - name: Triage — should this be reviewed, and how deeply
         id: triage
         env:
@@ -451,10 +703,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # `reason` is not decoration. The `review` job going grey says a review
-          # did not happen; this says why, and it goes to the job summary rather
-          # than only to this log — the summary is one click from the checks
-          # list, the log is several and nobody opens it.
+          # skip() writes the reason to the job summary, not only this log. Why: above the step.
           skip() {
             echo "review=false" >> "$GITHUB_OUTPUT"
             echo "reason=$1"    >> "$GITHUB_OUTPUT"
@@ -473,54 +722,11 @@ jobs:
               skip "draft PR (comment '@claude review' to force one)"
             fi
 
-            # Re-reviewing on every push is the single largest cost multiplier,
-            # and most pushes are a typo fix on a PR that was already read. Opt
-            # in per PR with the label when a change is worth watching closely.
-            #
-            # But note the word RE-review: this rule is about the second read
-            # onward, and it was suppressing the first (SERV-126). A PR that
-            # conflicts with its base produces NO `pull_request` runs at all —
-            # GitHub evaluates the event against `refs/pull/N/merge`, which does
-            # not exist while the merge is unresolvable — so a PR opened
-            # conflicting never fires `opened`, the one action that reviews
-            # unconditionally. Every event it ever sees is a `synchronize` from
-            # the rebase that fixes the conflict, and each one landed here.
-            # argosy#194 went green in 9 seconds having been read by nothing.
-            #
-            # That is the sixth variant of the silent pass the concurrency key
-            # above keeps the ledger of, and the first that is not a
-            # cancellation: there was no run to cancel. So the test is not
-            # "which action is this" but "has anything ever read this PR" —
-            # which closes the class rather than this instance, and leaves the
-            # cost rule doing exactly the job it was written for.
-            #
-            # Conflicting PRs are also the ones being rebased and force-pushed,
-            # which is where mistakes get made.
-            #
-            # What closing it costs, because this file writes consequences down:
-            # a duplicate concurrent review inside the first review's window.
-            # The scenario is the one the ledger's variant three already names —
-            # a fixup pushed minutes after opening — and the action stays in the
-            # concurrency key, so the two runs do not cancel each other. The
-            # `opened` review is still running and has posted nothing, so the
-            # `synchronize` sees PRIOR=0 and reviews too. Both post. Before this
-            # change the second was skipped unconditionally.
-            #
-            # Accepted rather than prevented: reviewing twice is the safe
-            # direction and the second read sees the newer code, whereas
-            # detecting an in-flight run (a `gh run list` probe) is more
-            # machinery than a duplicate is worth — and machinery of exactly the
-            # kind the ledger above records five failures of.
+            # Re-review on push needs the 'review:always' label — unless nothing has ever
+            # reviewed this PR (SERV-126). Why: above the step.
             if [ "$ACTION" = "synchronize" ] && [[ ",$LABELS," != *",review:always,"* ]]; then
-              # Same idiom as the review job's before/after assertion: stream
-              # the ids and count lines, because `--paginate` applies `--jq` per
-              # page and a `length` filter would emit one number per page.
-              #
-              # `|| PRIOR=0` guards the query, not the decision. An API hiccup
-              # must not read as "already reviewed" — unreachable means unknown,
-              # and unknown resolves toward reviewing. The cost of being wrong
-              # that way is one extra review; the cost of being wrong the other
-              # way is this ticket.
+              # Stream the ids and count lines; `|| PRIOR=0` guards the query, not the
+              # decision. Why: above the step.
               PRIOR=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
                         --jq ".[] | select(.user.login == \"$REVIEWER_LOGIN\") | .id" | wc -l) || PRIOR=0
 
@@ -536,91 +742,11 @@ jobs:
             skip "empty diff"
           fi
 
-          # A release PR is a generated CHANGELOG and a version manifest, opened
-          # by the release bot. There is nothing for a fresh-context reviewer to
-          # say about it, and claude-code-action refuses a bot-initiated run
-          # outright ("Workflow initiated by non-human actor: …ind-release-bot —
-          # Add bot to allowed_bots list"), so without this the check is red on
-          # every release, permanently, and on exactly the PRs that most need to
-          # look trustworthy at a glance. Observed on #200 (run 31772576197):
-          # Claude never started, no execution file, and the Gate correctly
-          # called it a malfunction — correctly, and uselessly, forever.
-          #
-          # Ported from signet, which hit this first and whose comment predicted
-          # this repo would. The docs-only rule below nearly covers it and does
-          # not: CHANGELOG.md is .md, .release-please-manifest.json is not.
-          #
-          # Keyed on all three of author, branch and file list, because each one
-          # alone is a claim the other two do not enforce:
-          #
-          #   author  — the reason this rule exists is that the INITIATING ACTOR
-          #             is a bot. Keying on the branch alone would let a human
-          #             push `release-please--anything` touching exactly these
-          #             two files and skip review, and per CLAUDE.md
-          #             ("Release-please owns CHANGELOG.md and versions. Don't
-          #             hand-edit.") a hand-edit of those two is precisely the
-          #             change worth a look. `user.type` is `Bot` for the release
-          #             app and `User` for a person; verified on #200 and #205.
-          #   branch  — scopes it to the release train rather than any bot.
-          #   files   — a release PR carrying anything beyond what release-please
-          #             itself stamps is real code riding a release, which is the
-          #             silent pass this ticket exists to close. Note what this
-          #             is NOT saying: release-please's own `extra-files` targets
-          #             are expected material and are derived INTO the skip set
-          #             below, because it writes only a version line into them.
-          #             An earlier revision argued the opposite — that
-          #             `extra-files` was a reason to distrust the file list —
-          #             which was right while the list was a hardcoded pair and
-          #             wrong once it is derived from the config.
-          #
-          # What the fall-through actually does, because it is NOT a review:
-          # nothing configures `allowed_bots`, so a bot-authored PR that reaches
-          # the review job is rejected by claude-code-action exactly as before —
-          # Claude never starts and the Gate reports a malfunction. That red is
-          # deliberate and is the point: unreviewed code riding a release PR
-          # should be loud, and a loud red beats a quiet skip. It is not a
-          # reviewed verdict, and the annotation says so rather than leaving the
-          # next reader to expect one.
-          #
-          # A HUMAN-authored `release-please--*` branch falls out of this
-          # condition entirely and gets an ordinary review, which is the case the
-          # author check adds. `@claude review` also still forces a real review
-          # on any of these, because the initiating actor is then the commenter.
+          # Keyed on author AND branch AND file list — each alone is a claim the other
+          # two do not enforce. Why: above the step.
           if [ "$MANUAL" != "true" ] && [ "$AUTHOR_TYPE" = "Bot" ] && [[ "$HEAD_BRANCH" == "$RELEASE_PREFIX"* ]]; then
-            # DERIVED from release-please-config.json where there is one, and
-            # only falling back to the `release_files` input where there is not.
-            #
-            # This is argosy's rule, and it had to be recovered rather than
-            # written: argosy's local copy read the set out of the config, and
-            # the first port of it to the shared workflow dropped that for the
-            # static default — which does not contain argosy's third path, so
-            # every argosy release would have gone red again. Its own comment
-            # named the failure before the port deleted it: "Restating it is how
-            # this silently rots the next time an extra-file is added — the skip
-            # stops matching, and the only symptom is a red check on a release
-            # nobody looks twice at." Extraction losing the best local version is
-            # the exact failure SERV-92 exists to prevent, so the derivation
-            # belongs here where all four repos get it.
-            #
-            # Read from the BASE ref, so a PR cannot widen its own skip by
-            # editing the config. Anything unexpected — missing config, changed
-            # schema, malformed JSON — leaves the set short, the subset test
-            # fails, and it does NOT skip: every failure of this rule lands on
-            # "review it" rather than "wave it through".
-            # Branch on the EXIT STATUS, never on whether the output is empty:
-            # `gh api` prints the error response body to STDOUT and only its
-            # `gh: Not Found (HTTP 404)` summary to stderr. So `2>/dev/null ||
-            # true` leaves 127 bytes of `{"message":"Not Found",...}` in the
-            # variable, `[ -n "$RP_CONFIG" ]` is true for a repo with no config,
-            # and the fallback below becomes unreachable. Measured on this repo,
-            # which has no config: len=127.
-            #
-            # It was latent here — jq against that error JSON yields
-            # `{manifest, CHANGELOG.md}`, a superset of construct-server's
-            # one-file release PR, so the subset test passed and the skip still
-            # worked for the wrong reason. The `release_files` input was simply
-            # dead. Same shape as the review-ignore fetch above, which already
-            # discriminates this way; this one was written the sloppy way.
+            # Read from the BASE ref. Branch on gh's EXIT STATUS, never on whether the
+            # output is empty. Why: above the step.
             RP_ERR=$(mktemp)
             if RP_CONFIG=$(gh api -H 'Accept: application/vnd.github.raw' \
                              "repos/$GITHUB_REPOSITORY/contents/release-please-config.json?ref=$BASE_REF" \
@@ -668,14 +794,8 @@ jobs:
               echo "→ no release-please-config.json on $BASE_REF; using the release_files input: $(tr '\n' ' ' <<<"$RELEASE_FILES")"
             fi
 
-            # SUBSET, not set equality. Equality also requires the release PR
-            # to carry every file in the list, and a repo can legitimately carry
-            # fewer: construct-server runs release-please in non-manifest mode,
-            # so its release commits touch CHANGELOG.md and nothing else, and an
-            # equality test never fires there. The question this rule is asking
-            # is "is there anything here that ISN'T generated release material",
-            # which is a subset test; expressing it as equality made it silently
-            # inapplicable to the repo hosting it.
+            # SUBSET, not set equality: a repo can legitimately carry fewer of these
+            # files. Why: above the step.
             UNEXPECTED=$(comm -23 <(sort -u <<<"$FILES") <(printf '%s\n' "$RELEASE_FILES"))
             if [ -z "$UNEXPECTED" ]; then
               skip "release PR (generated release material only)"
@@ -683,26 +803,8 @@ jobs:
             echo "::warning::Release branch carries $(grep -c . <<<"$UNEXPECTED") path(s) beyond the generated release material ($(tr '\n' ' ' <<<"$UNEXPECTED")), so it is NOT being skipped here. Whether it gets reviewed depends on the rules below; if it reaches the reviewer it will fail, because the author is a bot and claude-code-action refuses bot-initiated runs. Comment '@claude review' to get an actual review of it."
           fi
 
-          # --- Generated artifacts come out of scope here (SERV-87) ----------
-          #
-          # Read from the BASE ref, never the workspace. A PR that widens its own
-          # ignore list should not get the widened list applied to itself — the
-          # realistic failure is an over-broad pattern silently suppressing
-          # review of the very change that introduced it, not an attacker. (A
-          # same-repo PR can already edit this workflow and have its version run;
-          # what bounds that is the fork guard above plus the repo being private
-          # and single-author. This is defence against the mistake, not the
-          # adversary, and `.github/review-ignore` being in SENSITIVE below is
-          # what makes the deeper pass read the edit.)
-          #
-          # A 404 is the ordinary case in a repo that has not adopted one yet:
-          # no file means no exclusions, which must not be an error. Everything
-          # else is a fetch failure and says so — an empty read and a failed read
-          # both end up reviewing the whole diff, which is the safe direction,
-          # but they are not the same event and a silent `|| true` over both is
-          # how "the filter quietly stopped working" becomes invisible. Same
-          # lesson as the Switchyard ticket fetch below, which discriminates on
-          # status for the same reason.
+          # .github/review-ignore, read from the BASE ref. A 404 is the ordinary case;
+          # anything else is a fetch failure and says so. Why: above the step.
           IGNORE_ERR=$(mktemp)
           if IGNORE=$(gh api -H 'Accept: application/vnd.github.raw' \
                         "repos/$GITHUB_REPOSITORY/contents/.github/review-ignore?ref=$BASE_REF" \
@@ -719,21 +821,8 @@ jobs:
           rm -f "$IGNORE_ERR"
           PATTERNS=$(grep -vE '^[[:space:]]*(#|$)' <<<"${IGNORE:-}" || true)
 
-          # grep exits 2 on a MALFORMED pattern and 1 on no-match, and the
-          # `|| true` below cannot tell those apart. One unbalanced paren in this
-          # per-repo file therefore emptied BOTH lists — every path landed in
-          # neither "generated" nor "reviewable" — and twenty lines on, the empty
-          # REVIEWABLE read as "the generator wrote all of it" and skipped the PR
-          # green with `only generated files changed` while the actual diff went
-          # unread. A silent pass with a false explanation attached, from a typo,
-          # in exactly the class SERV-87 exists to close. The two grep warnings on
-          # stderr were the only trace, in a log these comments elsewhere concede
-          # nobody opens.
-          #
-          # So validate every pattern first, against empty input: 0 or 1 is a
-          # working regex, anything above is not. Named per-pattern, because
-          # "review-ignore is broken" without saying which line is a worse error
-          # than the one it replaces.
+          # Validate every pattern against empty input first: grep exits 2 on a malformed
+          # regex and 1 on no-match, and `|| true` cannot tell them apart. Why: above the step.
           while IFS= read -r p; do
             [ -n "$p" ] || continue
             grep -qE -- "$p" </dev/null 2>/dev/null && rc=0 || rc=$?
@@ -757,15 +846,8 @@ jobs:
             REVIEWABLE="$FILES"
           fi
 
-          # Nothing left once the generator output is removed. This is a real
-          # skip, not a degenerate one: `bun run api:gen` on its own is a
-          # regeneration commit, and there is no hand-written line to review.
-          #
-          # An explicit `@claude review` overrides every other skip rule, so it
-          # has to override this one too — and "review nothing" is not a coherent
-          # way to honour it. Asking for a review of a regeneration-only PR means
-          # asking about the regeneration, so put the whole diff back in scope
-          # rather than handing the reviewer an empty patch.
+          # A real skip, not a degenerate one — but '@claude review' overrides it by
+          # putting the whole diff back in scope. Why: above the step.
           if [ -z "$REVIEWABLE" ]; then
             if [ "$MANUAL" != "true" ]; then
               printf 'reviewable_b64=\ngenerated_b64=\n' >> "$GITHUB_OUTPUT"
@@ -781,15 +863,8 @@ jobs:
             echo "generated_b64=$(printf '%s\n' "${GENERATED:-}" | base64 -w0)"
           } >> "$GITHUB_OUTPUT"
 
-          # Docs-only changes get nothing out of a correctness reviewer. Written
-          # as "is anything here NOT docs?" rather than a negated -q test: with
-          # -q, grep short-circuits and reports no selection even when a
-          # non-matching line exists, which silently skipped any PR that touched
-          # code and a .md file together.
-          #
-          # Asked of REVIEWABLE rather than FILES: a PR of docs plus regenerated
-          # types has nothing for a correctness reviewer either, and running it
-          # against FILES would have called that a code change.
+          # "Is anything here NOT docs?", asked of REVIEWABLE rather than FILES, and not
+          # written as a negated -q test. Why: above the step.
           CODE=$(grep -vE '(^docs/|'"$DOCS_EXTRA_RE"'\.md$)' <<<"$REVIEWABLE" || true)
           # The reviewer's own standards are .md but are not documentation.
           STANDARDS=$(grep -E "$STANDARDS_RE" <<<"$REVIEWABLE" || true)
@@ -797,31 +872,14 @@ jobs:
             skip "documentation only"
           fi
 
-          # Paths where a mistake widens access, loses data, leaks a secret, or
-          # compromises the runner. These get the deeper pass.
-          # routes/auth.ts is the SSO login endpoint and scripts/authz-guard.ts is
-          # the mechanical check (wired at ci.yml:35) enforcing the permission
-          # invariants REVIEW.md asks about by hand — deleting its invocation was
-          # caught, gutting its logic was not. REVIEW.md / CLAUDE.md /
-          # review-prompt.md / review-ignore are the reviewer's own standards and
-          # its own scope: a PR that loosens them is a governance change, not
-          # documentation.
-          # An empty ERE matches every line, so an unset `sensitive_paths`
-          # would silently route every PR to the expensive tier — the same
-          # "empty is not a value" shape as the rest of this estate. The input is
-          # `required: true`, but required only stops it being omitted, not being
-          # passed as "". Refuse it rather than guess a default: what counts as
-          # sensitive is the one thing this workflow genuinely cannot know.
+          # An empty ERE matches every line and would put every PR on the expensive
+          # tier, so refuse it rather than guess a default. Why: above the step.
           if [ -z "${SENSITIVE_RE//[[:space:]]/}" ]; then
             echo "::error::sensitive_paths is empty. It is an ERE matched against changed paths; empty matches everything and would put every PR on the expensive tier. See docs/pr-reviewer.md."
             exit 1
           fi
-          # The mirror of the empty check above, and the more dangerous half.
-          # `if grep -qE` runs with errexit off, so a malformed regex — an
-          # unbalanced paren in a hand-written ERE full of escapes — exits 2,
-          # takes the `else` branch, and puts every PR on the CHEAP tier. Empty
-          # over-escalates and is caught loudly; invalid de-escalates and was not
-          # caught at all, which is the wrong way round.
+          # The mirror of the empty check, and the more dangerous half: an invalid ERE
+          # takes the else branch and de-escalates silently. Why: above the step.
           grep -qE -- "$SENSITIVE_RE" </dev/null 2>/dev/null && rc=0 || rc=$?
           if [ "$rc" -gt 1 ]; then
             echo "::error::sensitive_paths is not a valid extended regex, so every PR would silently take the cheaper tier: ${SENSITIVE_RE}"
