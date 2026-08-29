@@ -360,7 +360,7 @@ jobs:
             echo "node_id=${{ github.event.pull_request.node_id }}" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── THIS STEP IS NEAR A HARD GITHUB LIMIT ────────────────────────────────
+      # ── SHELL COMMENTS IN THIS BLOCK COUNT TOWARD A HARD GITHUB LIMIT ────────
       #
       # A `run:` block is ONE expression, and GitHub caps an expression at 21,000
       # characters. This one was 20,439 of them — 561 from breaking every review
@@ -591,8 +591,6 @@ jobs:
       # inapplicable to the repo hosting it.
       #
       # ── generated artifacts come out of scope here (SERV-87) ─────────────────
-      #
-      # --- Generated artifacts come out of scope here (SERV-87) ----------
       #
       # Read from the BASE ref, never the workspace. A PR that widens its own
       # ignore list should not get the widened list applied to itself — the
