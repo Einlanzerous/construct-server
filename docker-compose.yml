@@ -651,6 +651,124 @@ services:
       retries: 3
       start_period: 15s
 
+  # --- ASR (shared estate transcription service) — SERV-156 / CHRN-82 ---
+  # Adapted from asr/deploy/compose.asr.yml in the chronicle repo, which is where
+  # this shape stays reviewable. Chronicle is client one; Catenary is invited as
+  # client two (CHRN-29), which is why this is an estate service on its own
+  # database rather than a package inside Chronicle.
+  #
+  # Half of this block is a property of THIS MACHINE rather than of the service —
+  # which render node, which group, where the models live — settled by CHRN-24.
+  #
+  # NOT provisioned by db/init-db.sh, the same exception chronicle above carries:
+  # its role and database come from asr/deploy/provision-db.sh in chronicle's
+  # repo, run once as superuser under `signet exec`. A cold host rebuild does not
+  # self-heal it and asr will crash-loop until that script is run.
+  asr:
+    image: ghcr.io/einlanzerous/estate-asr:${ASR_TAG:-latest}
+    container_name: asr
+    restart: unless-stopped
+    # The image's ENTRYPOINT is whisper-cli so that CHRN-12's benchmark harness
+    # runs through it unmodified and the published numbers keep comparing to
+    # something. The service overrides it here, visibly, rather than by changing
+    # what the image is.
+    entrypoint: ["/usr/local/bin/asrd"]
+    command: ["serve"]
+    # No `ports:`. Reached container-to-container on construct_net. Publishing a
+    # port would put a transcription queue on the host for anything that can
+    # reach it — and whisper-server, the resident child, has no auth at all.
+    expose:
+      - "4011"
+    # renderD129 is the R9700; renderD128 is the CometLake iGPU. Confirmed from
+    # /sys/class/drm/*/device/uevent rather than assumed from the numbering,
+    # which reads the wrong way round on this box:
+    #   renderD128 -> i915   0000:00:02.0
+    #   renderD129 -> amdgpu 0000:03:00.0   <- Navi 48
+    # Passing only the R9700 means the iGPU is not in the container to be
+    # enumerated at all, so GGML_VK_VISIBLE_DEVICES is a second belt rather than
+    # the only thing between this and a 20x slower device.
+    devices:
+      - /dev/dri/renderD129:/dev/dri/renderD129
+    # The render node is root:render 0660, so a non-root container needs the
+    # group. 993 is THIS HOST's render gid (getent group render) — a host fact,
+    # not a portable constant, and the first thing to check if the container
+    # reports no Vulkan device.
+    group_add:
+      - "993"
+    environment:
+      - GGML_VK_VISIBLE_DEVICES=0
+      - ASR_PORT=4011
+      - ASR_DATABASE_URL=postgres://asr:${ASR_DB_PASSWORD}@postgres:5432/asr?sslmode=disable
+      # `name:token` pairs, out of Signet, never written here. Empty is a BOOT
+      # ERROR rather than an open service: client_id is derived from the token
+      # and nothing else, because CHRN-26 queues per client for fairness and a
+      # client-asserted identity would let either service jump the other's queue.
+      # asrd also refuses a token under 32 characters.
+      - ASR_CLIENT_TOKENS=${ASR_CLIENT_TOKENS}
+      - ASR_DEFAULT_MODEL=${ASR_DEFAULT_MODEL:-small.en}
+      # CHRN-26. What the advisory lock names, and what lands in leased_by — per
+      # DEVICE, never per deployment. A second card is a second value here and
+      # not a redesign; two asrd processes naming the SAME device still exclude
+      # each other, which is the redeploy case the lock exists for.
+      - ASR_DEVICE_ID=${ASR_DEVICE_ID:-r9700}
+      # The resident child. Loopback only: whisper-server has no authentication
+      # of any kind, so a listener on construct_net that transcribes anything
+      # sent to it would make ASR_CLIENT_TOKENS decorative. Deliberately not in
+      # `expose:` for the same reason.
+      - ASR_WHISPER_SERVER_ADDR=127.0.0.1:8081
+      - ASR_LOG_LEVEL=${ASR_LOG_LEVEL:-info}
+      - ASR_LOG_FORMAT=${ASR_LOG_FORMAT:-json}
+      # Recorded on every result alongside the model: a corpus transcribed by two
+      # different backends over time is one whose quality varies invisibly.
+      - ASR_BACKEND=vulkan
+    healthcheck:
+      # An HTTP GET of /healthz, NOT `asrd version`, which the upstream fragment
+      # used. `asrd version` prints a string and exits 0 from a bare container
+      # with no GPU, no database, no config and no server — verified — so it
+      # reports healthy for a wedged process for ever. CLAUDE.md's rule is that a
+      # healthcheck must be able to FAIL, and scripts/assert-healthy.sh (the
+      # SERV-102 post-deploy gate) is what consumes this answer.
+      #
+      # /healthz and not /readyz, which the upstream comment already argued for
+      # and the upstream test did not do: /readyz answers unready for a standby,
+      # and a standby is a correct state — restarting it would restart the
+      # healthy half of a redeploy. Liveness is the only question a restart is
+      # the answer to.
+      #
+      # bash's /dev/tcp rather than curl: the image ships no curl, wget, nc,
+      # python or busybox (checked). `sh` is dash and has no /dev/tcp, so bash is
+      # named explicitly. `$$` escapes compose interpolation.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/4011
+          && printf 'GET /healthz HTTP/1.0\r\n\r\n' >&3
+          && read -r line <&3
+          && case "$$line" in *" 200 "*) exit 0 ;; *) exit 1 ;; esac
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # The resident loads a model onto the GPU at boot. /healthz is liveness and
+      # should answer before that finishes, but a cold Vulkan init is not instant
+      # and an unhealthy first minute would be noise.
+      start_period: 60s
+    depends_on:
+      - postgres
+    networks:
+      - construct_net
+    volumes:
+      # The model store, READ-ONLY. asrd says so at boot if it finds nothing
+      # here; without it every submit is a 400 naming a model the deployment does
+      # not have, and nothing in that 400 points at an unmounted volume.
+      #
+      # An ABSOLUTE default rather than the upstream fragment's `~/tools/...`.
+      # Compose does expand `~` (tested), but to the home of whoever invokes it,
+      # and prod compose runs from /opt/construct-server under the self-hosted
+      # runner's systemd service. An absolute path cannot drift with $HOME.
+      - ${ASR_MODELS_DIR:-/home/magos/tools/whisper.cpp/models}:/opt/whisper/models:ro
+
   # --- CHRONICLE (voice-note ingestion → notes & discussion wiki) — CHRN-16 ---
   # Memos captured by phone, transcribed on the shared ASR service, routed by the
   # Scribe into a note / ticket / discussion. Served on TWO hosts off one backend,
@@ -776,6 +894,20 @@ services:
       # client: worst case from written to a memo row is settle + interval.
       - CHRONICLE_WATCH_INTERVAL=${CHRONICLE_WATCH_INTERVAL:-5s}
       - CHRONICLE_WATCH_SETTLE=${CHRONICLE_WATCH_SETTLE:-10s}
+      # SERV-156. The transcription pump. Until these were set chronicle booted
+      # with the pump OFF and logged its remedy line — correct and safe, and it
+      # meant nothing transcribed and nothing pruned.
+      #
+      # VALIDATED AS A PAIR at boot: one without the other is a refusal, not a
+      # half-configured pump. CHRONICLE_AUDIO_DIR above is a third requirement —
+      # a pump with nowhere to read recordings from is refused too.
+      #
+      # The token must match the `chronicle:` entry in the asr service's
+      # ASR_CLIENT_TOKENS. Both come out of Signet and neither is written here;
+      # they are two keys carrying one value because the pair is what the ASR
+      # side derives client_id from.
+      - CHRONICLE_ASR_URL=http://asr:4011
+      - CHRONICLE_ASR_TOKEN=${CHRONICLE_ASR_TOKEN}
     volumes:
       # rw: the only durable store for tier-2 audio, which nothing regenerates.
       # BOTH subdirectories must exist on the host before chronicle is next

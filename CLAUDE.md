@@ -23,6 +23,11 @@ anything deploys or gets versioned.
   second edge in the dev compose project, not a leg of prod's.
 - `caddy/`, edge routing — public 443 paths and Cloudflare Access.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
+  **Two services opt out and provision from their own repo**: chronicle (two roles
+  plus the tier-1/tier-2 grant) and `asr` (its own database and role on the shared
+  Postgres, not a schema inside Chronicle's — CHRN-25). Both run once by hand as
+  superuser, so a cold host rebuild does **not** self-heal them and both crash-loop
+  until it is done.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).
@@ -376,6 +381,16 @@ anything deploys or gets versioned.
   — so the script lists those too. When adding a healthcheck, verify it can actually
   **fail**: a probe that cannot load its driver, or a `bun -e` one-liner whose
   `require` throws, exits 0 and reports healthy forever.
+  **A version subcommand is this bug in its most plausible disguise** (SERV-156). The
+  `asr` fragment arrived with `test: ["CMD", "asrd", "version"]`, which reads like a
+  liveness probe and is not one: it spawns a NEW process, so it proves the binary is in
+  the image and nothing about the one that is meant to be serving. Run in a bare
+  container with no GPU, no database, no config and no server it prints a version and
+  exits 0. Probe the HTTP surface instead — and check what the image can probe *with*
+  before assuming `curl`, since `asr` ships none of curl, wget, nc, python or busybox,
+  and `sh` is dash. `bash`'s `/dev/tcp` is the fallback, named explicitly because
+  `CMD-SHELL` is `sh`. Prove the new probe reports **unhealthy** against a dead port
+  before trusting it; a healthcheck is the one thing you cannot test by it passing.
 - **Watchtower is opt-in and no longer rolls first-party images** (SERV-75).
   `WATCHTOWER_LABEL_ENABLE=true` means it monitors only containers carrying
   `com.centurylinklabs.watchtower.enable=true` — currently four third-party
