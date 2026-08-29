@@ -34,10 +34,17 @@ item 1.
 Two jobs, for the SERV-87 reason: declining to verify has to be a **skipped**
 job, not a green one.
 
-- **`resolve`** — validates the ticket key, reads the ticket, decides whether
-  there is anything to verify, and snapshots what dev is running.
-- **`verify`** — runs the model against `.github/verify-prompt.md`, then gates on
-  a readable `verify-verdict.json`.
+- **`resolve`** — validates the ticket key, reads the ticket, and decides whether
+  there is anything to verify. It **does not check out**, the same way the
+  reviewer's triage job does not, which is what keeps it cheap enough to always
+  run. Nothing in it may invoke `make` or read a repo file.
+- **`verify`** — checks out, snapshots what dev is running, runs the model
+  against `.github/verify-prompt.md`, classifies the run, then gates on a
+  readable `verify-verdict.json`.
+
+The version snapshot lives in `verify` and not in `resolve` precisely because it
+needs the working tree. Moving it "up" to `resolve` for tidiness is the shape
+that does not work.
 
 The prompt is the deliverable and the model is configuration (SERV-64 tracks
 moving the backend to a local gemma). Judgement lives in `CLAUDE.md` and
