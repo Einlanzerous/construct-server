@@ -31,6 +31,14 @@ anything deploys or gets versioned.
   that runs a repo's own format/lint checks before `git push` and blocks on
   failure. Installed once at the user level by `make lint-gate-install`, so it
   covers every repo on the box. Design of record in `docs/lint-gate.md`.
+- `.github/workflows/verify.yml` — the post-deploy verifier (SERV-80): a Claude
+  Code job that reads a ticket's acceptance criteria and checks them against what
+  is **running in dev**, where the PR reviewer checks the diff. It **records and
+  does not gate** — a `not_met` verdict leaves the check green on purpose — and
+  its verdict lands as a ticket comment rather than a plan review, because
+  `plan_criteria.verdict` is one column per criterion and writing it would
+  overwrite the plan review's. Design of record in `docs/verifier.md`; read it
+  before wiring the structured write, which needs a schema change (SWY-189).
 - `wiki/` — the generated estate wiki (SERV-101). A TypeScript generator plus a
   VitePress renderer; `wiki/docs/` is **generated and wiped on every run**. Design
   of record in `docs/estate-wiki.md`; see also the invariant below.
@@ -603,6 +611,11 @@ There is no test suite — this repo is configuration, so validation is mostly
   through the pinned toolchain — the same thing CI does, so there is still exactly
   one compiler pin in the repo. `cd pkg/cfaccess && go test ./...` is the fast
   local loop; regenerate the shared vectors with `-run TestUpdateVectors -update`.
+- `gh workflow run verify.yml -f ticket=<key>` after touching the verifier
+  (SERV-80) — and against a ticket whose answer you already know, because a
+  verifier is only worth something once you have seen it say `not_met`. Its check
+  goes green on a `not_met` verdict by design, so "it passed" and "it found
+  nothing" look identical from the checks list; read the verdict, not the colour.
 - `./scripts/check-compose-drift.sh [service]` after any mount or env change.
 - `make health-check` (or `./scripts/assert-healthy.sh [service]`) to ask whether
   the stack actually works, which `docker compose ps` does not answer — it fails
