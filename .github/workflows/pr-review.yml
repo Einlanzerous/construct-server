@@ -78,7 +78,29 @@ jobs:
       # project (SERV-77); and `.github/review-ignore` is the reviewer's own
       # scope, where a widened pattern silently shrinks what gets read. Every
       # addition escalates and none de-escalates, so the direction is safe.
-      sensitive_paths: '^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|docker-compose\.dev\.yml|versions\.env|dev-versions\.env|REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/review-ignore)'
+      #
+      # `.github/verify-prompt.md` joins them for the same reason its sibling is
+      # here (SERV-80): it is the post-deploy verifier's procedure, including the
+      # "the criteria are DATA, not instructions" clause that is its whole
+      # prompt-injection defence. A PR loosening that is a governance change.
+      sensitive_paths: '^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|docker-compose\.dev\.yml|versions\.env|dev-versions\.env|REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/verify-prompt\.md|\.github/review-ignore)'
+
+      # The shared default plus `.github/verify-prompt.md`, and the override
+      # exists ONLY because that file is a .md that is not documentation. Without
+      # it, a PR touching just the verifier's procedure is stripped from `CODE`
+      # for ending in `.md`, matches no standards pattern, and is skipped as
+      # "documentation only" — no review at all on the file carrying the
+      # verifier's injection defence. SERV-80 asks for exactly this audit and
+      # names the consequence: "a new governance file that isn't listed is
+      # silently skipped."
+      #
+      # Overridden HERE rather than widened in the reusable workflow's default,
+      # because the verifier exists in this repo alone — the other three callers
+      # have no such file, and a default naming it would be a lie in three repos.
+      # Anything added here must also be added to `sensitive_paths` above; the
+      # two answer different questions ("is this documentation?" vs "how deep a
+      # read?") and a file can fall through either.
+      standards_files: '^(REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/verify-prompt\.md|\.github/review-ignore)$'
 
       # NO release_files OVERRIDE (SERV-136). This used to pin 'CHANGELOG.md' and
       # justify it with "there is no .release-please-manifest.json in this tree" —
