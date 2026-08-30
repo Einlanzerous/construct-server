@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.27.0](https://github.com/Einlanzerous/construct-server/compare/v4.26.1...v4.27.0) (2026-08-30)
+
+
+### Features
+
+* **asr:** deploy the shared transcription service and turn Chronicle's pump on (SERV-156) ([#177](https://github.com/Einlanzerous/construct-server/issues/177)) ([08bc046](https://github.com/Einlanzerous/construct-server/commit/08bc0465728d07e162e89360e72616e731e3c751))
+* **verify:** post-deploy verifier as a Claude Code runner job (SERV-80) ([#175](https://github.com/Einlanzerous/construct-server/issues/175)) ([aa5e86d](https://github.com/Einlanzerous/construct-server/commit/aa5e86d8a296db6a614e52bc963b7f5ead325701))
+
 ## [4.26.1](https://github.com/Einlanzerous/construct-server/compare/v4.26.0...v4.26.1) (2026-08-28)
 
 
