@@ -689,10 +689,16 @@ services:
     # the only thing between this and a 20x slower device.
     devices:
       - /dev/dri/renderD129:/dev/dri/renderD129
-    # The render node is root:render 0660, so a non-root container needs the
-    # group. 993 is THIS HOST's render gid (getent group render) — a host fact,
-    # not a portable constant, and the first thing to check if the container
-    # reports no Vulkan device.
+    # The render node is root:render 0660. 993 is THIS HOST's render gid
+    # (`getent group render`) — a host fact, not a portable constant.
+    #
+    # It changes nothing TODAY: estate-asr sets no USER, so the process is uid 0
+    # and root bypasses the mode bits. It is here for the moment the image drops
+    # privileges, which is the change that would otherwise break GPU access with
+    # no edit to this file. So do NOT read it as the first thing to check when
+    # the container reports no Vulkan device — while the process is root it
+    # cannot be the cause. Check the device passthrough above and the ggml line
+    # in the logs instead (`Found N Vulkan devices` / `matrix cores`).
     group_add:
       - "993"
     environment:

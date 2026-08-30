@@ -31,7 +31,7 @@
 # WHAT IT DELIBERATELY DOES NOT BOUND. Scoping the pull bounds what MOVES. It does not
 # make the deploy touch exactly one container in every sense:
 #
-#   * One pin can cover several services, and four of the twelve do: APERTURE_TAG,
+#   * One pin can cover several services, and four of the thirteen do: APERTURE_TAG,
 #     CENTRIFUGE_TAG and SWITCHYARD_TAG (backend + frontend) and INTERLOCK_TAG (web +
 #     worker). A repo's images ship from one release (versions.env), so those recreate
 #     together, which is correct — they are one version — but only eight pins name

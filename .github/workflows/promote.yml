@@ -50,11 +50,11 @@ name: Promote / Rollback a Version
 #
 # What is still NOT bounded, and should not be written as if it were:
 #
-#   * FOUR of the twelve pins cover two services each, so they recreate in pairs:
+#   * FOUR of the thirteen pins cover two services each, so they recreate in pairs:
 #     APERTURE_TAG, CENTRIFUGE_TAG and SWITCHYARD_TAG (backend + frontend) and
 #     INTERLOCK_TAG (web + worker). Correct — a repo's images ship from one release — but
 #     it is two containers, and interlock-worker is one of the Node services SERV-102 is
-#     about. Only eight of the twelve pins name exactly one container.
+#     about. Only nine of the thirteen pins name exactly one container.
 #   * The pin is major.minor, so rolling purser back to 0.13 fetches the newest 0.13 PATCH.
 #     That is not necessarily the image prod was running the last time it was on 0.13. If
 #     the exact code matters, compare the org.opencontainers.image.revision label via
@@ -237,7 +237,7 @@ jobs:
 
       - name: Resolve the pin variable
         # One variable per SOURCE REPO, not per image — a repo's backend and frontend ship
-        # from one release, so 12 variables cover 16 images (versions.env). The service
+        # from one release, so 13 variables cover 17 images (versions.env). The service
         # names in the dropdown map onto the keys by uppercasing, cook_book included.
         #
         # SIGNET IS THE ONE EXCEPTION, in both the key and the file (SERV-130). It is a
