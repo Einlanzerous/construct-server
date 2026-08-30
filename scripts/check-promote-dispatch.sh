@@ -42,8 +42,12 @@
 # container was actually handed, not one exported into a shell by the person testing.
 #
 # Usage:
-#   ./scripts/check-promote-dispatch.sh              # read-only: is the grant there?
-#   ./scripts/check-promote-dispatch.sh --dispatch   # conclusive: no-op promote run
+#   ./scripts/check-promote-dispatch.sh                # read-only: is the grant there?
+#   ./scripts/check-promote-dispatch.sh --dispatch     # conclusive: no-op promote run
+#   ./scripts/check-promote-dispatch.sh --from-vault   # before the first deploy
+#
+# The flags compose: --from-vault --dispatch is the right pair immediately after minting
+# a PAT, since it settles the write grant without waiting on a deploy to carry the value.
 #
 # Environment:
 #   DEPLOY_ROOT   where the rendered .env lives (default /opt/construct-server)
@@ -68,34 +72,80 @@ WORKFLOW="promote.yml"
 err() { printf '%s\n' "$*" >&2; }
 
 DISPATCH=0
-case "${1:-}" in
-  --dispatch) DISPATCH=1 ;;
-  "") ;;
-  *) err "usage: check-promote-dispatch.sh [--dispatch]"; exit 2 ;;
-esac
+FROM_VAULT=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dispatch)   DISPATCH=1 ;;
+    --from-vault) FROM_VAULT=1 ;;
+    *) err "usage: check-promote-dispatch.sh [--from-vault] [--dispatch]"; exit 2 ;;
+  esac
+  shift
+done
 
 command -v curl >/dev/null 2>&1 || {
   err "ERROR: curl is not on PATH — this asks GitHub and cannot answer without it."
   exit 2
 }
 
-# ---- the credential, as the container was handed it ---------------------------------
+# ---- the credential ------------------------------------------------------------------
 #
-# Same read as promote.yml's GHCR login step: grep the rendered file rather than
-# sourcing it, because that file is the whole stack environment and sourcing it would
-# drag ~90 unrelated variables into this shell.
-env_file="$DEPLOY_ROOT/.env"
-if [ ! -f "$env_file" ]; then
-  err "ERROR: no deployed .env at $env_file — this host is not bootstrapped (SERV-76)."
-  err "This is a host-side check; there is nothing to interrogate from a bare checkout."
-  exit 2
+# TWO SOURCES, AND THEY ANSWER DIFFERENT QUESTIONS. Default is the deployed .env — the
+# value the switchyard container was actually handed, which is the one worth testing in
+# steady state, and the same reasoning as `make probe-delivery` reading the unit's own
+# EnvironmentFile rather than a shell export.
+#
+# `--from-vault` reads what Signet holds instead, and exists because of an ordering that
+# bites exactly once per credential and always at the worst time. `signet sync` writes
+# the PROD_ENV_FILE environment secret; only a deploy turns that into $DEPLOY_ROOT/.env,
+# via render-env.sh. So between minting a PAT and deploying, the vault has the value and
+# the deployed file does not — and the default check reports "not provisioned" for a
+# token that is provisioned correctly. Without this flag the only way to test a new grant
+# is to ship it first, which is backwards: a bad grant should be found before the merge,
+# not after.
+#
+# It reads the value into a variable and never prints it — the same discipline
+# check-env-ownership.sh keeps by never calling reveal at all. What it proves is narrower
+# than the default and the report says so: that the value the vault WILL deliver carries
+# a working grant, not that the running container holds it.
+if [ "$FROM_VAULT" -eq 1 ]; then
+  command -v signet >/dev/null 2>&1 || {
+    err "ERROR: signet is not on PATH — --from-vault asks the host vault directly."
+    exit 2
+  }
+  source_desc="the vault (construct-server/PROMOTE_DISPATCH_TOKEN)"
+  if ! TOKEN="$(signet reveal --project construct-server --name PROMOTE_DISPATCH_TOKEN 2>/dev/null)"; then
+    err "FAIL: the vault holds no construct-server/PROMOTE_DISPATCH_TOKEN."
+    err ""
+    err "Mint it first — see the provisioning steps below."
+    TOKEN=""
+  fi
+  TOKEN="$(printf '%s' "$TOKEN" | tr -d '\r\n')"
+else
+  # Same read as promote.yml's GHCR login step: grep the rendered file rather than
+  # sourcing it, because that file is the whole stack environment and sourcing it would
+  # drag ~90 unrelated variables into this shell.
+  env_file="$DEPLOY_ROOT/.env"
+  if [ ! -f "$env_file" ]; then
+    err "ERROR: no deployed .env at $env_file — this host is not bootstrapped (SERV-76)."
+    err "This is a host-side check; there is nothing to interrogate from a bare checkout."
+    err "To test a freshly minted PAT before any deploy, use --from-vault."
+    exit 2
+  fi
+  source_desc="$env_file"
+  TOKEN="$(grep -m1 '^PROMOTE_DISPATCH_TOKEN=' "$env_file" | cut -d'=' -f2- || true)"
 fi
 
-TOKEN="$(grep -m1 '^PROMOTE_DISPATCH_TOKEN=' "$env_file" | cut -d'=' -f2- || true)"
-
 if [ -z "$TOKEN" ]; then
-  err "FAIL: PROMOTE_DISPATCH_TOKEN is unset or empty in $env_file."
+  err "FAIL: PROMOTE_DISPATCH_TOKEN is unset or empty in $source_desc."
   err ""
+  if [ "$FROM_VAULT" -eq 0 ]; then
+    err "If you have just run \`signet sync\`, this is the EXPECTED state and not a"
+    err "failure of the sync: sync writes the PROD_ENV_FILE environment secret, and only"
+    err "a deploy renders that into $env_file. Check the grant now with:"
+    err "    make promote-dispatch-check vault=1"
+    err "and re-run this form after the next deploy."
+    err ""
+  fi
   err "An empty credential is not a credential (the CLAUDE.md invariant), and"
   err "docker-compose.yml passes this key through BARE — so in this state switchyard"
   err "does not see the variable at all and the promote gate stays the link-out to the"
@@ -107,8 +157,10 @@ if [ -z "$TOKEN" ]; then
   err "  2. signet set --project construct-server --name PROMOTE_DISPATCH_TOKEN"
   err "  3. signet target add-key --project construct-server \\"
   err "         --gh-secret PROD_ENV_FILE --name PROMOTE_DISPATCH_TOKEN"
-  err "  4. signet sync   # then redeploy, so render-env.sh writes it into $env_file"
-  err "  5. re-run this check"
+  err "  4. signet sync"
+  err "  5. check the grant NOW, before deploying:  --from-vault"
+  err "  6. deploy, so render-env.sh writes it into $DEPLOY_ROOT/.env, then re-run"
+  err "     this form to confirm the container holds what the vault delivered"
   exit 1
 fi
 
@@ -124,6 +176,7 @@ api() {
 }
 
 # ---- check 1: can the token see the workflow? ---------------------------------------
+printf 'Token source: %s\n' "$source_desc"
 printf 'Checking read access to %s in %s…\n' "$WORKFLOW" "$PROMOTE_REPO"
 code="$(api "https://api.github.com/repos/$PROMOTE_REPO/actions/workflows/$WORKFLOW")" || {
   err "ERROR: the request to api.github.com failed outright — no answer, not a refusal."
@@ -164,7 +217,7 @@ case "$code" in
   401)
     err "FAIL: 401 — the token was rejected outright."
     err ""
-    err "The value in $env_file is not a valid credential. Either it is a stale copy"
+    err "The value in $source_desc is not a valid credential. Either it is a stale copy"
     err "from before a rotation, or the vault holds something that is not a PAT."
     err "Rotate in the vault and \`signet sync\`, then redeploy so render-env.sh rewrites"
     err "the deployed file — editing it on the host is lost on the next deploy."

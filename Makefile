@@ -188,10 +188,18 @@ env-ownership-check:
 # read out of versions.env, so the pin does not move and nothing is committed. That run
 # holds the version-change concurrency group while it waits for its reviewer, so approve
 # or cancel it rather than leaving it pending; see the script header.
+# `vault=1` reads what Signet holds instead of the deployed .env, and is the form to use
+# straight after minting. `signet sync` writes the PROD_ENV_FILE environment secret; only
+# a deploy renders that into $(DEPLOY_ROOT)/.env — so in between, the default form reports
+# "not provisioned" for a token that is provisioned correctly, and the only other way to
+# test a new grant would be to ship it first. It proves the value the vault WILL deliver,
+# not what the container currently holds; run the default form again after the deploy.
 # Usage: make promote-dispatch-check
-#        make promote-dispatch-check dispatch=1
+#        make promote-dispatch-check vault=1
+#        make promote-dispatch-check vault=1 dispatch=1
 promote-dispatch-check:
-	@DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/check-promote-dispatch.sh $(if $(dispatch),--dispatch,)
+	@DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/check-promote-dispatch.sh \
+	  $(if $(vault),--from-vault,) $(if $(dispatch),--dispatch,)
 
 # Run the delivery prober once, right now, exactly as the timer does (SERV-111). Reads
 # the same /etc/delivery-prober/prober.env the unit does, so it proves the deployed

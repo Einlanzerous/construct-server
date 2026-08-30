@@ -527,14 +527,25 @@ signet target add-key --project construct-server \
     --gh-secret PROD_ENV_FILE --name PROMOTE_DISPATCH_TOKEN
 signet sync
 
-# 5. deploy, so render-env.sh writes it into /opt/construct-server/.env
+# 5. prove the grant BEFORE shipping it. `signet sync` writes the environment
+#    secret; only a deploy renders that into /opt/construct-server/.env, so
+#    between here and step 6 the deployed file legitimately does not have it.
+#    vault=1 reads what the vault will deliver instead of what the container holds.
+make promote-dispatch-check vault=1              # read grant; inconclusive on write
+make promote-dispatch-check vault=1 dispatch=1   # conclusive; creates a no-op run
+
+# 6. deploy, so render-env.sh writes it into /opt/construct-server/.env
 #    (editing that file by hand is lost on the next deploy)
 
-# 6. prove it — do not infer it from step 4
-make promote-dispatch-check              # read grant; inconclusive on write
-make promote-dispatch-check dispatch=1   # conclusive; creates a no-op run to resolve
+# 7. confirm the container holds what the vault delivered
+make promote-dispatch-check              # same check, now against the deployed file
 make env-ownership-check                 # the vault still claims nothing git owns
 ```
+
+*Steps 5 and 7 are the same question asked of two different values, and the split is not
+ceremony. A grant that is wrong should be found before the merge that ships it, and a
+value that failed to render should be found after — running only one of them leaves one
+of those two failures with nothing to catch it.*
 
 ***What is deliberately not here.** The repo and workflow identifiers are not compose
 config. Switchyard needs to know it dispatches `promote.yml` in `construct-server`, but
