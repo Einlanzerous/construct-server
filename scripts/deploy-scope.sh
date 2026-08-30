@@ -34,7 +34,7 @@
 #   * One pin can cover several services, and four of the thirteen do: APERTURE_TAG,
 #     CENTRIFUGE_TAG and SWITCHYARD_TAG (backend + frontend) and INTERLOCK_TAG (web +
 #     worker). A repo's images ship from one release (versions.env), so those recreate
-#     together, which is correct — they are one version — but only eight pins name
+#     together, which is correct — they are one version — but only nine pins name
 #     exactly one container.
 #   * The pinned tag is still major.minor, so pulling purser at 0.13 gets the newest 0.13
 #     patch, not the exact image that was running at 0.13 before. That float is the
