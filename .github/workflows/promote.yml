@@ -104,9 +104,29 @@ on:
         description: "Why. Recorded in the commit message — a version moving with no explanation is the blind spot this epic exists to close."
         required: true
         type: string
+      requested_by:
+        description: "Who asked. LEAVE BLANK from the Actions tab — github.actor is right there. Only an API dispatch fills it (SERV-104)."
+        required: false
+        type: string
+        default: ""
 
 # A choice input is the whole allow-list for `service`: it cannot be a typo and it cannot
 # be an injected string, which matters because these values reach a shell.
+
+# WHY `requested_by` EXISTS (SERV-104). `Delivery-Actor` is the only channel by which a
+# promoter's identity reaches the ledger, and it is set from `github.actor`. That is
+# correct for a human in the Actions tab and WRONG for an API dispatch: a run created
+# with a PAT reports the PAT's owner, so once Switchyard can dispatch (SWY-188), every
+# promote it sends would be attributed to the token — one identity for all of them,
+# recorded in the field that exists specifically to say who asked. Adding the credential
+# without this input would quietly un-do SERV-130's trailer for the path it was most
+# needed on.
+#
+# It is an ATTESTATION, NOT AN AUTHENTICATION, and the distinction should not be blurred:
+# whoever holds the dispatch token can put any string here. That is acceptable because it
+# is not what authorises anything — the `production-promote` reviewer is, and GitHub
+# records the approver independently of this field. Blank means "trust github.actor",
+# which is why the default is empty rather than a placeholder.
 
 # Two version changes at once would both edit versions.env from the same base and the
 # loser's push would be rejected. Queue them instead — cancel-in-progress would be wrong
@@ -493,10 +513,24 @@ jobs:
           KIND: ${{ inputs.kind }}
           REASON: ${{ inputs.reason }}
           ACTOR: ${{ github.actor }}
+          REQUESTED_BY: ${{ inputs.requested_by }}
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Who to credit. See the header above `on:` — blank means this was run from the
+          # Actions tab, where github.actor is the person; a value means an API dispatch
+          # told us who asked, because github.actor there is only the token's owner.
+          # Both are kept in the prose line: the claim and who was holding the credential
+          # when it was made are different facts and an incident review wants both.
+          if [ -n "${REQUESTED_BY:-}" ]; then
+            actor="$REQUESTED_BY"
+            via="dispatched by ${ACTOR}"
+          else
+            actor="$ACTOR"
+            via="via the Actions tab"
+          fi
 
           if [ "$KIND" = "rollback" ]; then
             subject="chore(deploy): roll back ${SERVICE} to ${VERSION} (SERV-79)"
@@ -534,13 +568,28 @@ jobs:
           # in the commit body and `%(trailers:key=...)` cannot reach it — git parses
           # only the LAST paragraph as trailers, which is also why all three live in
           # one -m rather than three.
+          #
+          # A TRAILER IS ONE LINE, so the values that go into the block are flattened
+          # first — and SERV-104 is what makes that necessary rather than tidy. Until an
+          # API dispatch existed, `reason` could only be typed into a single-line text box
+          # in the Actions tab and could not contain a newline. A JSON dispatch can send
+          # one, and a newline inside the block breaks git's parse of the whole paragraph:
+          # `%(trailers:key=Delivery-Kind)` then returns nothing, deploy.yml reports the
+          # deploy with no kind, no reason and no actor, and NOTHING FAILS — the promote
+          # succeeds and the ledger row is simply blank. That is the failure this epic
+          # exists to remove, arriving through the field meant to prevent it.
+          #
+          # The prose body above keeps the reason verbatim, newlines included. Only the
+          # trailer copy is flattened, because only the trailer copy is parsed.
+          flatten() { printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/  */ /g; s/^ //; s/ $//'; }
+
           git commit \
             -m "$subject" \
-            -m "Requested by ${ACTOR} via the ${KIND} workflow." \
+            -m "Requested by ${actor} (${via})." \
             -m "Reason: ${REASON}" \
             -m "Delivery-Kind: ${KIND}
-          Delivery-Reason: ${REASON}
-          Delivery-Actor: ${ACTOR}"
+          Delivery-Reason: $(flatten "$REASON")
+          Delivery-Actor: $(flatten "$actor")"
 
           # main IS protected — by the `Proect Main` ruleset, not classic branch
           # protection, which is why `branches/main/protection` returns 404 and makes it
