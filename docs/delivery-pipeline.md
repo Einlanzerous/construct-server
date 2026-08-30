@@ -345,7 +345,7 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
     script refuses rather than guesses, and every refusal degrades to the old whole-stack
     pull — the dangerous direction is a scope narrowing to nothing, which would be a green
     deploy that shipped no change at all.*
-  - ***What is deliberately still unbounded:** four of the twelve pins cover two images each and
+  - ***What is deliberately still unbounded:** four of the thirteen pins cover two images each and
     recreate in pairs — `APERTURE_TAG`, `CENTRIFUGE_TAG`, `SWITCHYARD_TAG` (backend +
     frontend) and `INTERLOCK_TAG` (web + worker), which ship from one release; and a rollback to
     `0.13` fetches the newest `0.13` patch rather than the digest prod ran the last time it
