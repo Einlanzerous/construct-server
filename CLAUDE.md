@@ -94,6 +94,40 @@ anything deploys or gets versioned.
   on its own, where a `GITHUB_TOKEN` one would not — so `promote.yml` must never also
   dispatch `deploy.yml`, or every promote runs two concurrent deploys of the same
   commit.
+  **A third credential lets Switchyard *ask* for a promote, and asking is all it can do**
+  (SERV-104). `PROMOTE_DISPATCH_TOKEN` is a fine-grained PAT with `Actions: Read and
+  write` on this repo, held by the switchyard container, which POSTs a
+  `workflow_dispatch` to `promote.yml`. It is **not** `PROMOTE_PUSH_TOKEN` — that one is
+  `contents: write`, lives on the `production-promote` environment, and is held by the
+  workflow. The `production-promote` reviewer still gates every dispatched run, which is
+  the whole reason a container may hold this at all; re-check that property, not the
+  token's scope, before widening anything. Two things follow that are easy to get wrong.
+  `repository_dispatch` would have been the familiar pattern and is the **wrong** one
+  here: it needs `contents: write` on a fine-grained PAT, which could edit `versions.env`
+  directly and skip the gate entirely. And `actions: write` has no narrower form than
+  repo-wide, so this token can also dispatch `deploy.yml`, `deploy-dev.yml`,
+  `deploy-signet.yml`, `wiki.yml` and `verify.yml`, cancel runs, and delete run logs —
+  bounded because each of those converges the box to `main` rather than changing it.
+  **It cannot approve its own gate**, which is the entry that would otherwise make the
+  sentence above false: `POST /actions/runs/{id}/pending_deployments` is in the same
+  `actions` namespace, and this environment has one required reviewer with
+  `prevent_self_review: false` who is also the PAT's owner. Probed, not assumed — the
+  POST returns **403 "Resource not accessible by personal access token"**, so
+  fine-grained PATs are refused it whatever their `actions` permission says. Note the
+  trap: the matching **GET returns 200 with `current_user_can_approve: true`**, because
+  that field describes the account the token belongs to and not the token, so reading it
+  and inferring the write would confirm a vulnerability that does not exist. Same lesson
+  as `Actions: Read` vs `Read and write` below — only the mutating call answers.
+  Unset, the token simply is not passed (bare passthrough) and Switchyard's promote gate
+  stays the link-out to the Actions tab it is today. Design of record and the mint
+  runbook: `docs/delivery-pipeline.md`.
+  **`promote.yml` takes `requested_by`, and only an API dispatch should fill it.**
+  `Delivery-Actor` is the ledger's only record of who asked and is set from
+  `github.actor`, which for a PAT-created run is the *token's* owner — so without this
+  input every Switchyard-initiated promote would be attributed to the credential.
+  Blank means "trust `github.actor`", which is correct from the Actions tab. It is an
+  **attestation, not an authentication**: whoever holds the dispatch token can put any
+  string there, and that is acceptable only because it authorises nothing.
 - Secrets the **stack** consumes reach it as `PROD_ENV_FILE`, a GitHub
   Environment secret on `home-server` — not a repo-level secret. Dev's equivalent is
   `DEV_ENV_FILE` on `home-server-dev`. **Both are rendered by Signet and neither is set
@@ -661,6 +695,31 @@ There is no test suite — this repo is configuration, so validation is mostly
   losing writer leaves no trace. It reads target metadata only and never a value.
   Host-side, and **not a deploy gate**: while the strip is in the path the hazard is
   latent, and a red prod deploy is the wrong way to learn that a vault edit was careless.
+- `make promote-dispatch-check` after minting or rotating `PROMOTE_DISPATCH_TOKEN`, the
+  credential that lets Switchyard ask `promote.yml` for a promote (SERV-104). **Not
+  `signet sync`**, which reports that a value was delivered and says nothing about
+  whether the grant behind it works — SGNT-29 is that exact bug, a fine-grained PAT that
+  403'd in use while the sync check called it healthy. The bare target is **inconclusive
+  by construction**: `Actions: Read` and `Actions: Read and write` are separate boxes on
+  the PAT form and only a POST tells them apart, so `dispatch=1` is the one that settles
+  it, by dispatching a promote whose version **no registry can resolve** — so `promote.yml`
+  refuses it at `Verify the target version exists`, which runs before `Repoint the pin`,
+  and nothing can be written whatever anyone does with the approval prompt. Do not
+  "improve" this into re-pinning a service to its current version: that reads as safer and
+  is not, because the dispatch names `ref: main` while a local `versions.env` goes stale
+  on its own, and re-pinning a stale value is a silent **rollback** filed as a promote.
+  **Cancel the run it creates** — approving only makes it go red at the tag check.
+  `vault=1` asks the vault instead of the deployed `.env`, which is the
+  form to use straight after minting: `signet sync` writes the `PROD_ENV_FILE` secret and
+  only a **deploy** renders that into `/opt/construct-server/.env`, so in between the
+  default form reports "not provisioned" for a token that is provisioned correctly — and
+  without it the only way to test a new grant is to ship it first. Run both, at their own
+  moments: a wrong grant should be caught before the merge, a failed render after it.
+  Cancelling promptly matters for a second reason: the run holds the `version-change`
+  concurrency group while it waits for its reviewer, and `cancel-in-progress: false`
+  means the next real promote queues behind it. Note also that a fine-grained PAT with no
+  repo grant answers **404, not 403** — the same shape that hid `EXTERNAL_REF_POLLER`'s
+  missing scope for weeks, so a 404 here is a grant problem and not a missing workflow.
 - `make lint-gate` runs this repo's format/lint checks the way the pre-push hook does,
   and `make lint-gate-test` proves the hook still BLOCKS (SERV-58). The second one is the
   one that matters: the gate fails open on purpose, so a gate that has quietly stopped

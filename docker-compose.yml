@@ -469,6 +469,76 @@ services:
       # credential to hand over today. Note Amber fails CLOSED: with no token
       # set on its side, every /v1 route 503s rather than opening.
       - AMBER_API_TOKEN
+      # Promote dispatch credential (SERV-104 — SERV-78 piece 3). What lets
+      # Switchyard's promote gate (SWY-188) trigger promote.yml over the API
+      # instead of linking a human out to the Actions tab:
+      #
+      #   POST /repos/Einlanzerous/construct-server/actions/workflows/promote.yml/dispatches
+      #   {"ref":"main","inputs":{"service":…,"version":…,"kind":…,"reason":…}}
+      #
+      # THE DISPATCH IS A REQUEST, NOT AN EXECUTION, and that is the whole reason
+      # handing a container a PAT is acceptable here. promote.yml runs under the
+      # `production-promote` environment, which carries a required reviewer — and it
+      # ASSERTS that gate exists rather than trusting it, because GitHub creates a
+      # missing environment unprotected on first use. So this token cannot move a
+      # version; it can only put a promote in front of a human. That is the property
+      # to re-check before widening anything here, not the token's scope.
+      #
+      # Its OWN credential, not a shared one. SERV-78 argued that from SERV-3, SERV-4
+      # and LOOP-28 — three separate incidents where one PAT spread across consumers
+      # broke a consumer by scope. It is distinct from all three GitHub credentials
+      # already in play: GITHUB_PAT is `read:packages` for GHCR pulls,
+      # EXTERNAL_REF_POLLER is PR read for the ref poller above, and
+      # PROMOTE_PUSH_TOKEN is `contents: write` held by the workflow — not by any
+      # container, and deliberately not by this one.
+      #
+      # Scope is `Actions: Read and write` on Einlanzerous/construct-server and
+      # nothing else. Record what that necessarily includes, because GitHub offers
+      # nothing narrower than repo-wide and a reader will otherwise assume this token
+      # reaches one workflow: it also dispatches deploy.yml, deploy-dev.yml,
+      # deploy-signet.yml, wiki.yml and verify.yml, and it can cancel runs and delete
+      # run logs. Bounded rather than harmless — each of those converges the box to
+      # `main` rather than changing what `main` is, and `contents` is NOT granted, so
+      # this token cannot write the pin it is asking to have written.
+      #
+      # THE ENTRY THAT WOULD BREAK THE CLAIM ABOVE IS APPROVING ITS OWN GATE, and it is
+      # NOT reachable. `POST /actions/runs/{id}/pending_deployments` sits in this same
+      # `actions` namespace, and this repo's production-promote environment is unusually
+      # exposed to it: one required reviewer (Einlanzerous), `prevent_self_review: false`,
+      # and a PAT-dispatched run whose actor IS that account. So a token that could review
+      # its own pending deployment would dispatch a real version and approve it, and the
+      # sentence above would be false. Probed with the live credential rather than reasoned
+      # about, because the answer is not derivable from the permission name:
+      #
+      #   GET  …/pending_deployments -> 200, "current_user_can_approve": true
+      #   POST …/pending_deployments -> 403 "Resource not accessible by personal access token"
+      #
+      # Fine-grained PATs are refused that endpoint outright, whatever `actions` says. Note
+      # the trap in the pair: the GET answers 200 and reports approval as possible, because
+      # that field describes the USER the token belongs to and not the token. Reading only
+      # the GET would have confirmed the vulnerability that does not exist. If GitHub ever
+      # opens that endpoint to fine-grained PATs, this comment is the one to revisit first —
+      # `prevent_self_review: true` would NOT be the fix, since with a single reviewer who
+      # is also the only person dispatching by hand it blocks every ordinary promote too.
+      #
+      # Bare passthrough for the same reason as SIGNET_API_TOKEN above, plus one that
+      # matters while SWY-188 is unbuilt: the interpolated form always sets the key,
+      # so a host without this provisioned would hand Switchyard an empty string, and
+      # an empty credential is not a credential (the CLAUDE.md invariant). Absent, the
+      # promote gate degrades to the link-out it is today.
+      #
+      # ABSENT is the operative word, and it is not the same as blank. Bare passthrough
+      # drops the key only when it is missing from the environment entirely; a line
+      # reading `PROMOTE_DISPATCH_TOKEN=` in the env file is present-and-empty and IS
+      # delivered, as `""`. That is why .env.example leaves this key commented out
+      # rather than spelled out empty like most of its neighbours.
+      #
+      # Verify the grant took with `make promote-dispatch-check` — do not infer it
+      # from `signet sync`. SGNT-29 is the bug where a fine-grained PAT grant 403'd in
+      # use while the sync check called it healthy, and a fine-grained PAT with no
+      # repo grant answers 404 rather than 403, the same shape that hid
+      # EXTERNAL_REF_POLLER's missing scope for weeks.
+      - PROMOTE_DISPATCH_TOKEN
     # Container-to-host bridge so the connector above can reach the Signet
     # daemon bound to 127.0.0.1:4010 on the host.
     extra_hosts:

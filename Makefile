@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check workflow-size health-check edge-auth-check versions assert-tokens env-ownership-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size health-check edge-auth-check versions assert-tokens env-ownership-check promote-dispatch-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
@@ -175,6 +175,33 @@ assert-tokens:
 # Usage: make env-ownership-check
 env-ownership-check:
 	@./scripts/check-env-ownership.sh
+
+# Does PROMOTE_DISPATCH_TOKEN actually work? (SERV-104) The credential that lets
+# Switchyard's promote gate ask promote.yml for a promote instead of linking a human out
+# to the Actions tab. Run it after minting or rotating that PAT — and do NOT substitute
+# `signet sync`, which reports that a value was delivered and says nothing about whether
+# the grant behind it took. SGNT-29 is that exact bug.
+#
+# The bare target is read-only and INCONCLUSIVE by construction: 'Actions: Read' and
+# 'Actions: Read and write' are separate boxes on the PAT form and only a POST tells them
+# apart. `dispatch=1` settles it by firing a real dispatch whose version NO REGISTRY CAN
+# RESOLVE, so promote.yml refuses it before it writes anything — do not "improve" that
+# into re-pinning the current version, which reads as safer and is a silent rollback
+# whenever the checkout is stale (see the script header). CANCEL the run it creates:
+# approving only makes it go red at the tag check, and a pending run holds the
+# version-change concurrency group in front of the next real promote.
+# `vault=1` reads what Signet holds instead of the deployed .env, and is the form to use
+# straight after minting. `signet sync` writes the PROD_ENV_FILE environment secret; only
+# a deploy renders that into $(DEPLOY_ROOT)/.env — so in between, the default form reports
+# "not provisioned" for a token that is provisioned correctly, and the only other way to
+# test a new grant would be to ship it first. It proves the value the vault WILL deliver,
+# not what the container currently holds; run the default form again after the deploy.
+# Usage: make promote-dispatch-check
+#        make promote-dispatch-check vault=1
+#        make promote-dispatch-check vault=1 dispatch=1
+promote-dispatch-check:
+	@DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/check-promote-dispatch.sh \
+	  $(if $(vault),--from-vault,) $(if $(dispatch),--dispatch,)
 
 # Run the delivery prober once, right now, exactly as the timer does (SERV-111). Reads
 # the same /etc/delivery-prober/prober.env the unit does, so it proves the deployed

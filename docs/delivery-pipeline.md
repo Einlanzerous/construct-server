@@ -418,6 +418,191 @@ anything — it writes a summary saying a version is available and how to promot
 dispatch keeps its meaning and loses its authority, which is step 3 semantics rather
 than step 2.*
 
+### Who may ask for a promote — the dispatch path
+
+*Piece 3 of SERV-78, split out as **SERV-104**. Pieces 1 and 2 — the workflow and the
+Environment gate — shipped and left Switchyard's `Review & promote` CTA linking out to
+the Actions tab, so every promote was still a human finding the right workflow and
+retyping four inputs into it. The missing piece was never the workflow: `promote.yml`
+has taken `workflow_dispatch` since the day it was written. It was a **credential and a
+caller**. This repo owns the credential; the caller is **SWY-188**.*
+
+***The credential.** A fine-grained PAT scoped to `Actions: Read and write` on
+`Einlanzerous/construct-server` and nothing else, held in Signet as
+`construct-server/PROMOTE_DISPATCH_TOKEN`, delivered through `PROD_ENV_FILE` and passed
+into the switchyard container. Its own credential rather than a share of an existing
+one, which SERV-78 argued from SERV-3, SERV-4 and LOOP-28 — three separate incidents
+where one PAT spread across consumers broke a consumer by scope. There are now four
+distinct GitHub credentials in this stack and it is worth being able to tell them apart:
+`GITHUB_PAT` (`read:packages`, GHCR pulls), `EXTERNAL_REF_POLLER` (PR read, the ref
+poller), `PROMOTE_PUSH_TOKEN` (`contents: write`, held by the workflow, pushes the pin)
+and this one.*
+
+***Why `workflow_dispatch` and not `repository_dispatch`,** which is the pattern this
+repo already uses everywhere else and would therefore look like the house style. The
+reason is the opposite of obvious: on a fine-grained PAT, `repository_dispatch` requires
+`contents: write`. That is strictly broader than `actions: write`, and it is broader in
+the one direction that matters here — `contents: write` can edit `versions.env`
+directly, which is the entire promote, skipping the reviewer gate that the rest of this
+design rests on. A caller that can write the pin does not need to ask for a promote. So
+the familiar pattern is the wrong one, and reaching for it by analogy would have handed
+Switchyard the thing the gate exists to withhold.*
+
+***Option 3 — an intent row and a host job that polls it — was not chosen** and is still
+the fallback if the token ever has to go. It carries no outbound credential at all,
+which is genuinely better, and costs a second host cron: SERV-111 spends its length on
+why the delivery ledger gets exactly one of those, and adding another to save a
+repo-scoped PAT is not the trade it describes.*
+
+***What the grant necessarily includes.** GitHub has no permission narrower than
+repo-wide `actions: write`, so this token can also dispatch `deploy.yml`,
+`deploy-dev.yml`, `deploy-signet.yml`, `wiki.yml` and `verify.yml`, cancel any run, and
+delete run logs and artifacts. Write that down rather than describing the token as
+"scoped to promote.yml", which is what the ticket's framing implies and what a reader
+will otherwise assume. It is bounded rather than harmless: each of those workflows
+converges the box to `main` rather than changing what `main` is, and `contents` is not
+granted, so the token cannot write the pin it is asking to have written.*
+
+***The gate is the control, not the scope.** `promote.yml` runs under the
+`production-promote` environment, which carries a required reviewer — and the workflow
+asserts that the reviewer exists rather than trusting it, because GitHub creates a
+missing environment unprotected on first use and a skipped gate would look exactly like
+an approved one. So a dispatch is a request for approval. That is the property that
+makes giving a container a PAT acceptable here, and it is the one to re-check before
+widening anything — not the token's permission list.*
+
+***The token cannot approve its own gate, and that was probed rather than assumed.**
+`POST /actions/runs/{id}/pending_deployments` lives in the same `actions` namespace the
+token has write on, so "a dispatch is only a request" depends on that endpoint being out
+of reach. This repo is unusually exposed if it is not: the environment has exactly one
+required reviewer (`Einlanzerous`), `prevent_self_review` is `false`, and a PAT-dispatched
+run's actor is that same account — the very fact that makes `requested_by` necessary. A
+token that could review its own deployment would dispatch a real version and approve it,
+with `PROMOTE_PUSH_TOKEN` supplying the push on the far side of the gate.*
+
+```
+GET  …/actions/runs/<id>/pending_deployments  -> 200  "current_user_can_approve": true
+POST …/actions/runs/<id>/pending_deployments  -> 403  Resource not accessible by
+                                                      personal access token
+```
+
+*Fine-grained PATs are refused that endpoint outright, whatever their `actions`
+permission says, so the claim holds. **Note the trap in that pair**, because it is the
+more durable lesson: the GET returns 200 and reports approval as possible, since
+`current_user_can_approve` describes the account the token belongs to rather than the
+token. Checking the read and inferring the write would have confirmed a vulnerability
+that does not exist — the same shape as `Actions: Read` versus `Actions: Read and write`
+elsewhere in this section, where only the mutating call answers the question.*
+
+*Two things to keep straight if this is revisited. If GitHub ever opens that endpoint to
+fine-grained PATs, `prevent_self_review: true` is **not** the mitigation: with a single
+required reviewer who is also the only person dispatching from the Actions tab, it blocks
+every ordinary promote too. And separately from the token question, a one-account repo's
+gate is a human confirmation step rather than a separation of duties between people — it
+bounds mistakes, which is what it is for here.*
+
+***Two things had to change in `promote.yml` after all**, both of them defects that only
+become reachable once a dispatch can come from an API rather than from a text box.*
+
+- ***`Delivery-Actor` would have named the token.** SERV-130 added that trailer because
+  it is the only channel by which a promoter's identity reaches the ledger, and it is
+  set from `github.actor`. A run created with a PAT reports the PAT's owner — so once
+  Switchyard could dispatch, every promote it sent would be attributed to the same
+  identity, in the field that exists to say who asked. A fifth input, `requested_by`,
+  fixes it: blank means "run from the Actions tab, trust `github.actor`", and a value
+  overrides it while the commit's prose line keeps both facts. It is an **attestation,
+  not an authentication** — whoever holds the token can put any string there — which is
+  acceptable only because it authorises nothing; the reviewer does, and GitHub records
+  the approver separately.*
+- ***A newline in `reason` silently emptied the whole ledger row.** The three trailers
+  share one paragraph, and git parses a trailer block only if the paragraph is
+  well-formed; a `reason` containing a newline breaks the parse, so
+  `%(trailers:key=Delivery-Kind)` returns nothing and `deploy.yml` records the deploy
+  with no kind, no reason and no actor — while the promote succeeds and nothing goes
+  red. Until now `reason` could only be typed into a single-line box and could not
+  contain one. A JSON dispatch can. The trailer copies of `reason` and the actor are now
+  flattened to one line; the prose body keeps the reason verbatim, because only the
+  trailer copy is parsed.*
+
+***Verifying the grant is a separate act from provisioning it,** and SERV-104 names
+SGNT-29 for exactly this: a fine-grained PAT grant that 403'd in use while `signet sync
+--check` reported it healthy. `signet sync` answers "was the value delivered", never
+"does the grant work". `make promote-dispatch-check` asks GitHub. Two further traps it
+is built around: a fine-grained PAT with no grant on a private repo answers **404, not
+403** (the same shape that hid `EXTERNAL_REF_POLLER`'s missing scope for weeks), and
+`Actions: Read` and `Actions: Read and write` are separate boxes — so the read-only check
+is inconclusive by construction and `dispatch=1` is what settles it.*
+
+***The version `dispatch=1` sends cannot exist, and the first design of this check got
+that wrong in a way worth recording** — it is the kind of mistake that reads as airtight.
+The original dispatched a **no-op**: re-pin the service to the version it is already on,
+read out of `versions.env`. Re-pinning what is already there cannot move anything, so the
+run was safe by definition. Except the pin was read from the **local checkout** while the
+dispatch names `ref: main`, and `promote.yml` checks out main and runs `set-version.sh`
+against **main's** copy. The two agree only while the checkout is current — and it goes
+stale on its own, because `promote.yml` commits pins straight to main and nobody has to do
+anything wrong. When they disagree, "re-pin the current version" means "pin prod to
+whatever this working copy remembers", which for a service that has since moved forward is
+a silent **rollback**, filed in the ledger as a promote, carrying a reason that says it
+changed nothing. `verify-tag.sh` would not catch it: the stale version is a real tag.
+Worse, the check's own success message told the `production-promote` reviewer — the only
+control in front of it — that approving was safe.*
+
+***So the pin is not read at all.* The dispatched version resolves in no registry, so
+`promote.yml` refuses it at `Verify the target version exists`, a step that runs before
+`Repoint the pin`. Nothing can be written whatever anyone does with the approval prompt.
+The property holds structurally rather than holding while a local file happens to match
+main — the same trade this repo makes when it rejects a container on two networks in
+favour of a boundary that cannot be misconfigured. The cost is that approving the run
+makes it go red at the tag check, so **cancel it**; that is also what keeps it from
+holding the `version-change` concurrency group in front of the next real promote.*
+
+***The runbook**, in order. Steps 2-4 are the SERV-94 shape — this project has no host
+file target, so a new key is `set` plus `target add-key`, never `import`, and `signet
+set` alone mints a value that reaches nothing.*
+
+```
+# 1. github.com > Settings > Developer settings > Personal access tokens >
+#    Fine-grained tokens > Generate new token
+#      Resource owner:      Einlanzerous
+#      Repository access:   Only select repositories -> construct-server
+#      Repository perms:    Actions: Read and write        (Metadata: Read is implied)
+#    Nothing else. Set an expiry and diarise it — an expired fine-grained PAT
+#    reads as 404, i.e. as a grant that was never made.
+
+# 2-4. into the vault, onto the render target, out to the environment secret
+signet set --project construct-server --name PROMOTE_DISPATCH_TOKEN
+signet target add-key --project construct-server \
+    --gh-secret PROD_ENV_FILE --name PROMOTE_DISPATCH_TOKEN
+signet sync
+
+# 5. prove the grant BEFORE shipping it. `signet sync` writes the environment
+#    secret; only a deploy renders that into /opt/construct-server/.env, so
+#    between here and step 6 the deployed file legitimately does not have it.
+#    vault=1 reads what the vault will deliver instead of what the container holds.
+make promote-dispatch-check vault=1              # read grant; inconclusive on write
+make promote-dispatch-check vault=1 dispatch=1   # conclusive; CANCEL the run it creates
+
+# 6. deploy, so render-env.sh writes it into /opt/construct-server/.env
+#    (editing that file by hand is lost on the next deploy)
+
+# 7. confirm the container holds what the vault delivered
+make promote-dispatch-check              # same check, now against the deployed file
+make env-ownership-check                 # the vault still claims nothing git owns
+```
+
+*Steps 5 and 7 are the same question asked of two different values, and the split is not
+ceremony. A grant that is wrong should be found before the merge that ships it, and a
+value that failed to render should be found after — running only one of them leaves one
+of those two failures with nothing to catch it.*
+
+***What is deliberately not here.** The repo and workflow identifiers are not compose
+config. Switchyard needs to know it dispatches `promote.yml` in `construct-server`, but
+that is one constant in the caller, and putting it here would mean shipping settings
+nothing reads until SWY-188 lands — the "target with no consumer" shape SERV-94 warns
+about, which reports a state that means nothing. The token is the part that has to exist
+first, because it is the part SWY-188 cannot mint for itself.*
+
 **9. Post-prod smoke.** On failure, auto-rollback to the last-good version, which the
 `deployments` table already knows.
 
