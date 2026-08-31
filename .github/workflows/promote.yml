@@ -536,34 +536,60 @@ jobs:
           # construction rather than each one remembering to sanitise. github.actor is a
           # GitHub login and cannot contain a newline; requested_by is arbitrary text.
           if [ -n "${REQUESTED_BY:-}" ]; then
-            actor="$(flatten "$REQUESTED_BY")"
+            actor_full="$(flatten "$REQUESTED_BY")"
             via="dispatched by ${ACTOR}"
           else
-            actor="$ACTOR"
+            actor_full="$ACTOR"
             via="via the Actions tab"
           fi
 
-          # BOUNDED TO 39 CHARACTERS, which is not an arbitrary tidy-up: it is Switchyard's
-          # ingest cap on `deployed_by_login` (`z.string().max(39)` in
-          # shared/src/schemas/delivery.ts — GitHub's own maximum login length). This value
-          # travels there as that field, via the Delivery-Actor trailer, deploy.yml and
-          # report-deploy.sh. Over the cap ingest returns 400, and report-deploy.sh treats a
-          # 400 as skip-and-warn, so the entire deployments row is dropped on a deploy that
-          # goes green — the blind spot this epic exists to close, reached through the field
-          # added to close it.
+          # UTF-16 CODE UNITS, not characters, because that is the unit the consumer counts.
+          # Switchyard's ingest caps `deployed_by_login` at `z.string().max(39)`
+          # (shared/src/schemas/delivery.ts — GitHub's own maximum login length), and zod's
+          # `.max()` compares JavaScript `.length`, which is UTF-16 code units. Bash's
+          # `${#var}` counts CHARACTERS under this runner's C.UTF-8 locale, so the two
+          # disagree on exactly one class of input: a non-BMP character is one character and
+          # two code units. Twenty emoji measure 20 here and 40 there — under a character
+          # cap they pass unbounded and 400 at ingest, with no warning either, because the
+          # truncation branch never fires. BMP multibyte is not affected.
           #
-          # TRUNCATE RATHER THAN REFUSE, and the schema is what settles the direction: it
-          # documents this field as "a DIAGNOSTIC, never an identity", kept even when it
-          # resolves to nobody, and `deployed_by` is a strict FK that goes null for anything
-          # unresolvable anyway. So a truncated value still does the field's whole job,
-          # while a 400 loses the row — and failing a promote over an attribution string
-          # would be worse than both. Warned rather than silent, because a quiet truncation
-          # is a quiet misattribution.
+          # A character is non-BMP precisely when UTF-8 encodes it in four bytes, whose lead
+          # byte is F0-F4 — so counting those lead bytes counts the extra units. `tr` rather
+          # than `grep` because grep exits 1 on no match and would trip `pipefail`.
+          utf16_len() {
+            local s=$1 astral
+            astral=$(printf '%s' "$s" | LC_ALL=C tr -dc $'\xf0-\xf4' | wc -c)
+            printf '%s' $(( ${#s} + astral ))
+          }
+
+          # WHY THE CAP MATTERS: over it ingest returns 400, and report-deploy.sh treats a
+          # 400 as skip-and-warn — so the entire deployments row is dropped on a deploy that
+          # goes green. That is the blind spot this epic exists to close, reached through
+          # the field added to close it.
           #
-          # Only reachable from `requested_by`: a github.actor login cannot exceed 39.
-          if [ "${#actor}" -gt 39 ]; then
-            echo "::warning title=requested_by truncated::'${actor}' exceeds Switchyard's 39-character deployed_by_login cap; recording the first 39 so the ledger row survives."
+          # TRUNCATE RATHER THAN REFUSE, and the schema settles the direction: it documents
+          # this field as "a DIAGNOSTIC, never an identity", kept even when it resolves to
+          # nobody, and `deployed_by` is a strict FK that goes null for anything
+          # unresolvable anyway. A truncated value still does the field's whole job; a 400
+          # loses the row; failing a promote over an attribution string would be worse than
+          # both.
+          #
+          # Trimmed by whole CHARACTERS, never bytes: a byte slice can cut a multibyte
+          # character in half, and that partial sequence would ride through `jq --arg` into
+          # the ingest payload. A character cut can leave a trailing space, so the result
+          # goes back through `flatten`, which only ever shortens.
+          #
+          # ONLY THE PARSED COPIES ARE BOUNDED. The prose body below keeps `actor_full`, so
+          # the untruncated attestation lives in the commit — permanent — rather than only
+          # in this run's ::warning annotation, which ages out with log retention. Same
+          # split `reason` already makes, and for the same reason: bound what a consumer
+          # parses, keep verbatim what a person reads.
+          actor="$actor_full"
+          if [ "$(utf16_len "$actor")" -gt 39 ]; then
             actor="${actor:0:39}"
+            while [ "$(utf16_len "$actor")" -gt 39 ]; do actor="${actor%?}"; done
+            actor="$(flatten "$actor")"
+            echo "::warning title=requested_by truncated::'${actor_full}' exceeds Switchyard's 39-unit deployed_by_login cap; the ledger will record '${actor}' so the row survives. The full value is in the commit body."
           fi
 
           # Carried to the Summary step, which is a separate shell and would otherwise
@@ -639,7 +665,7 @@ jobs:
           # none. `flatten` is defined at the top of this block.
           git commit \
             -m "$subject" \
-            -m "Requested by ${actor} (${via})." \
+            -m "Requested by ${actor_full} (${via})." \
             -m "Reason: ${REASON}" \
             -m "Delivery-Kind: ${KIND}
           Delivery-Reason: $(flatten "$REASON")
