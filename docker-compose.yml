@@ -501,6 +501,26 @@ services:
       # `main` rather than changing what `main` is, and `contents` is NOT granted, so
       # this token cannot write the pin it is asking to have written.
       #
+      # THE ENTRY THAT WOULD BREAK THE CLAIM ABOVE IS APPROVING ITS OWN GATE, and it is
+      # NOT reachable. `POST /actions/runs/{id}/pending_deployments` sits in this same
+      # `actions` namespace, and this repo's production-promote environment is unusually
+      # exposed to it: one required reviewer (Einlanzerous), `prevent_self_review: false`,
+      # and a PAT-dispatched run whose actor IS that account. So a token that could review
+      # its own pending deployment would dispatch a real version and approve it, and the
+      # sentence above would be false. Probed with the live credential rather than reasoned
+      # about, because the answer is not derivable from the permission name:
+      #
+      #   GET  …/pending_deployments -> 200, "current_user_can_approve": true
+      #   POST …/pending_deployments -> 403 "Resource not accessible by personal access token"
+      #
+      # Fine-grained PATs are refused that endpoint outright, whatever `actions` says. Note
+      # the trap in the pair: the GET answers 200 and reports approval as possible, because
+      # that field describes the USER the token belongs to and not the token. Reading only
+      # the GET would have confirmed the vulnerability that does not exist. If GitHub ever
+      # opens that endpoint to fine-grained PATs, this comment is the one to revisit first —
+      # `prevent_self_review: true` would NOT be the fix, since with a single reviewer who
+      # is also the only person dispatching by hand it blocks every ordinary promote too.
+      #
       # Bare passthrough for the same reason as SIGNET_API_TOKEN above, plus one that
       # matters while SWY-188 is unbuilt: the interpolated form always sets the key,
       # so a host without this provisioned would hand Switchyard an empty string, and

@@ -471,6 +471,36 @@ an approved one. So a dispatch is a request for approval. That is the property t
 makes giving a container a PAT acceptable here, and it is the one to re-check before
 widening anything — not the token's permission list.*
 
+***The token cannot approve its own gate, and that was probed rather than assumed.**
+`POST /actions/runs/{id}/pending_deployments` lives in the same `actions` namespace the
+token has write on, so "a dispatch is only a request" depends on that endpoint being out
+of reach. This repo is unusually exposed if it is not: the environment has exactly one
+required reviewer (`Einlanzerous`), `prevent_self_review` is `false`, and a PAT-dispatched
+run's actor is that same account — the very fact that makes `requested_by` necessary. A
+token that could review its own deployment would dispatch a real version and approve it,
+with `PROMOTE_PUSH_TOKEN` supplying the push on the far side of the gate.*
+
+```
+GET  …/actions/runs/<id>/pending_deployments  -> 200  "current_user_can_approve": true
+POST …/actions/runs/<id>/pending_deployments  -> 403  Resource not accessible by
+                                                      personal access token
+```
+
+*Fine-grained PATs are refused that endpoint outright, whatever their `actions`
+permission says, so the claim holds. **Note the trap in that pair**, because it is the
+more durable lesson: the GET returns 200 and reports approval as possible, since
+`current_user_can_approve` describes the account the token belongs to rather than the
+token. Checking the read and inferring the write would have confirmed a vulnerability
+that does not exist — the same shape as `Actions: Read` versus `Actions: Read and write`
+elsewhere in this section, where only the mutating call answers the question.*
+
+*Two things to keep straight if this is revisited. If GitHub ever opens that endpoint to
+fine-grained PATs, `prevent_self_review: true` is **not** the mitigation: with a single
+required reviewer who is also the only person dispatching from the Actions tab, it blocks
+every ordinary promote too. And separately from the token question, a one-account repo's
+gate is a human confirmation step rather than a separation of duties between people — it
+bounds mistakes, which is what it is for here.*
+
 ***Two things had to change in `promote.yml` after all**, both of them defects that only
 become reachable once a dispatch can come from an API rather than from a text box.*
 

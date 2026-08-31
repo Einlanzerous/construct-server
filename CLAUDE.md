@@ -108,6 +108,16 @@ anything deploys or gets versioned.
   repo-wide, so this token can also dispatch `deploy.yml`, `deploy-dev.yml`,
   `deploy-signet.yml`, `wiki.yml` and `verify.yml`, cancel runs, and delete run logs —
   bounded because each of those converges the box to `main` rather than changing it.
+  **It cannot approve its own gate**, which is the entry that would otherwise make the
+  sentence above false: `POST /actions/runs/{id}/pending_deployments` is in the same
+  `actions` namespace, and this environment has one required reviewer with
+  `prevent_self_review: false` who is also the PAT's owner. Probed, not assumed — the
+  POST returns **403 "Resource not accessible by personal access token"**, so
+  fine-grained PATs are refused it whatever their `actions` permission says. Note the
+  trap: the matching **GET returns 200 with `current_user_can_approve: true`**, because
+  that field describes the account the token belongs to and not the token, so reading it
+  and inferring the write would confirm a vulnerability that does not exist. Same lesson
+  as `Actions: Read` vs `Read and write` below — only the mutating call answers.
   Unset, the token simply is not passed (bare passthrough) and Switchyard's promote gate
   stays the link-out to the Actions tab it is today. Design of record and the mint
   runbook: `docs/delivery-pipeline.md`.
