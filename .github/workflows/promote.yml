@@ -543,6 +543,29 @@ jobs:
             via="via the Actions tab"
           fi
 
+          # BOUNDED TO 39 CHARACTERS, which is not an arbitrary tidy-up: it is Switchyard's
+          # ingest cap on `deployed_by_login` (`z.string().max(39)` in
+          # shared/src/schemas/delivery.ts — GitHub's own maximum login length). This value
+          # travels there as that field, via the Delivery-Actor trailer, deploy.yml and
+          # report-deploy.sh. Over the cap ingest returns 400, and report-deploy.sh treats a
+          # 400 as skip-and-warn, so the entire deployments row is dropped on a deploy that
+          # goes green — the blind spot this epic exists to close, reached through the field
+          # added to close it.
+          #
+          # TRUNCATE RATHER THAN REFUSE, and the schema is what settles the direction: it
+          # documents this field as "a DIAGNOSTIC, never an identity", kept even when it
+          # resolves to nobody, and `deployed_by` is a strict FK that goes null for anything
+          # unresolvable anyway. So a truncated value still does the field's whole job,
+          # while a 400 loses the row — and failing a promote over an attribution string
+          # would be worse than both. Warned rather than silent, because a quiet truncation
+          # is a quiet misattribution.
+          #
+          # Only reachable from `requested_by`: a github.actor login cannot exceed 39.
+          if [ "${#actor}" -gt 39 ]; then
+            echo "::warning title=requested_by truncated::'${actor}' exceeds Switchyard's 39-character deployed_by_login cap; recording the first 39 so the ledger row survives."
+            actor="${actor:0:39}"
+          fi
+
           # Carried to the Summary step, which is a separate shell and would otherwise
           # fall back to `github.actor` — i.e. to the token on any dispatched promote.
           # That is the same misattribution `requested_by` exists to remove, surviving in
