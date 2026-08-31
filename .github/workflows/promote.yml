@@ -519,13 +519,24 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Collapses a value to a single line. Defined HERE, above its first use, rather
+          # than next to the git trailers it was written for — `requested_by` is free text
+          # from whoever holds PROMOTE_DISPATCH_TOKEN, and every place it lands wants the
+          # same guarantee. See the trailer block below for the git half of the argument
+          # and the $GITHUB_ENV write below for the runner half.
+          flatten() { printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/  */ /g; s/^ //; s/ $//'; }
+
           # Who to credit. See the header above `on:` — blank means this was run from the
           # Actions tab, where github.actor is the person; a value means an API dispatch
           # told us who asked, because github.actor there is only the token's owner.
           # Both are kept in the prose line: the claim and who was holding the credential
           # when it was made are different facts and an incident review wants both.
+          #
+          # FLATTENED AT THE ASSIGNMENT, so every downstream use is single-line by
+          # construction rather than each one remembering to sanitise. github.actor is a
+          # GitHub login and cannot contain a newline; requested_by is arbitrary text.
           if [ -n "${REQUESTED_BY:-}" ]; then
-            actor="$REQUESTED_BY"
+            actor="$(flatten "$REQUESTED_BY")"
             via="dispatched by ${ACTOR}"
           else
             actor="$ACTOR"
@@ -537,6 +548,18 @@ jobs:
           # That is the same misattribution `requested_by` exists to remove, surviving in
           # the other human-readable record of the run, and once Switchyard dispatches
           # routinely it would be wrong every time.
+          #
+          # THE VALUE MUST BE ONE LINE, and $GITHUB_ENV is a stricter consumer than the
+          # trailer block. The runner parses this file when the step EXITS, which is after
+          # `git push` below has already put the pin on main — so a value that breaks the
+          # parse fails the step with `Invalid format` while the promote has, in every
+          # sense that matters, already happened. Worse is the case that does NOT error: a
+          # second line that is well-formed `KEY=VALUE` silently defines that variable for
+          # every later step, and those are `run:` blocks executed by
+          # `bash --noprofile --norc`, which still sources $BASH_ENV. On a self-hosted
+          # runner that is arbitrary code as the user owning the deploy root. The
+          # production-promote reviewer bounds it and is not a control you would want to
+          # be relying on, since nothing in the approval prompt shows this input.
           echo "PROMOTE_ACTOR=$actor" >> "$GITHUB_ENV"
 
           if [ "$KIND" = "rollback" ]; then
@@ -587,16 +610,17 @@ jobs:
           # exists to remove, arriving through the field meant to prevent it.
           #
           # The prose body above keeps the reason verbatim, newlines included. Only the
-          # trailer copy is flattened, because only the trailer copy is parsed.
-          flatten() { printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/  */ /g; s/^ //; s/ $//'; }
-
+          # trailer copy is flattened, because only the trailer copy is parsed — which is
+          # why `reason` is flattened here and `actor` was flattened at its assignment:
+          # the reason has one use that legitimately wants the raw text, the actor has
+          # none. `flatten` is defined at the top of this block.
           git commit \
             -m "$subject" \
             -m "Requested by ${actor} (${via})." \
             -m "Reason: ${REASON}" \
             -m "Delivery-Kind: ${KIND}
           Delivery-Reason: $(flatten "$REASON")
-          Delivery-Actor: $(flatten "$actor")"
+          Delivery-Actor: ${actor}"
 
           # main IS protected — by the `Proect Main` ruleset, not classic branch
           # protection, which is why `branches/main/protection` returns 404 and makes it
