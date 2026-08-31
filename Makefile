@@ -184,10 +184,12 @@ env-ownership-check:
 #
 # The bare target is read-only and INCONCLUSIVE by construction: 'Actions: Read' and
 # 'Actions: Read and write' are separate boxes on the PAT form and only a POST tells them
-# apart. `dispatch=1` settles it by firing a real no-op promote — the version it names is
-# read out of versions.env, so the pin does not move and nothing is committed. That run
-# holds the version-change concurrency group while it waits for its reviewer, so approve
-# or cancel it rather than leaving it pending; see the script header.
+# apart. `dispatch=1` settles it by firing a real dispatch whose version NO REGISTRY CAN
+# RESOLVE, so promote.yml refuses it before it writes anything — do not "improve" that
+# into re-pinning the current version, which reads as safer and is a silent rollback
+# whenever the checkout is stale (see the script header). CANCEL the run it creates:
+# approving only makes it go red at the tag check, and a pending run holds the
+# version-change concurrency group in front of the next real promote.
 # `vault=1` reads what Signet holds instead of the deployed .env, and is the form to use
 # straight after minting. `signet sync` writes the PROD_ENV_FILE environment secret; only
 # a deploy renders that into $(DEPLOY_ROOT)/.env — so in between, the default form reports

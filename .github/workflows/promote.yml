@@ -532,6 +532,13 @@ jobs:
             via="via the Actions tab"
           fi
 
+          # Carried to the Summary step, which is a separate shell and would otherwise
+          # fall back to `github.actor` — i.e. to the token on any dispatched promote.
+          # That is the same misattribution `requested_by` exists to remove, surviving in
+          # the other human-readable record of the run, and once Switchyard dispatches
+          # routinely it would be wrong every time.
+          echo "PROMOTE_ACTOR=$actor" >> "$GITHUB_ENV"
+
           if [ "$KIND" = "rollback" ]; then
             subject="chore(deploy): roll back ${SERVICE} to ${VERSION} (SERV-79)"
           else
@@ -632,7 +639,7 @@ jobs:
               printf '| | |\n|---|---|\n'
               printf '| Service | `%s` (`%s` in `%s`) |\n' "$SERVICE" "$PIN_KEY" "$PIN_FILE"
               printf '| Version | `%s` |\n' "$VERSION"
-              printf '| Requested by | %s |\n' "$ACTOR"
+              printf '| Requested by | %s |\n' "${PROMOTE_ACTOR:-$ACTOR}"
               printf '| Commit | `%s` |\n' "${COMMIT_SHA:-unknown}"
               printf '\n**Reason:** %s\n\n' "$REASON"
               if [ "$SERVICE" = "signet" ]; then

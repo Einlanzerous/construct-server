@@ -501,12 +501,31 @@ SGNT-29 for exactly this: a fine-grained PAT grant that 403'd in use while `sign
 is built around: a fine-grained PAT with no grant on a private repo answers **404, not
 403** (the same shape that hid `EXTERNAL_REF_POLLER`'s missing scope for weeks), and
 `Actions: Read` and `Actions: Read and write` are separate boxes — so the read-only check
-is inconclusive by construction and `dispatch=1` is what settles it, by firing a promote
-whose version is read out of `versions.env` and is therefore a no-op that commits
-nothing. That run still enters the `version-change` concurrency group and waits for its
-reviewer, so it must be approved or cancelled: a forgotten verification run queues the
-next real promote behind it, which is the worst possible thing to find during a
-rollback.*
+is inconclusive by construction and `dispatch=1` is what settles it.*
+
+***The version `dispatch=1` sends cannot exist, and the first design of this check got
+that wrong in a way worth recording** — it is the kind of mistake that reads as airtight.
+The original dispatched a **no-op**: re-pin the service to the version it is already on,
+read out of `versions.env`. Re-pinning what is already there cannot move anything, so the
+run was safe by definition. Except the pin was read from the **local checkout** while the
+dispatch names `ref: main`, and `promote.yml` checks out main and runs `set-version.sh`
+against **main's** copy. The two agree only while the checkout is current — and it goes
+stale on its own, because `promote.yml` commits pins straight to main and nobody has to do
+anything wrong. When they disagree, "re-pin the current version" means "pin prod to
+whatever this working copy remembers", which for a service that has since moved forward is
+a silent **rollback**, filed in the ledger as a promote, carrying a reason that says it
+changed nothing. `verify-tag.sh` would not catch it: the stale version is a real tag.
+Worse, the check's own success message told the `production-promote` reviewer — the only
+control in front of it — that approving was safe.*
+
+***So the pin is not read at all.* The dispatched version resolves in no registry, so
+`promote.yml` refuses it at `Verify the target version exists`, a step that runs before
+`Repoint the pin`. Nothing can be written whatever anyone does with the approval prompt.
+The property holds structurally rather than holding while a local file happens to match
+main — the same trade this repo makes when it rejects a container on two networks in
+favour of a boundary that cannot be misconfigured. The cost is that approving the run
+makes it go red at the tag check, so **cancel it**; that is also what keeps it from
+holding the `version-change` concurrency group in front of the next real promote.*
 
 ***The runbook**, in order. Steps 2-4 are the SERV-94 shape — this project has no host
 file target, so a new key is `set` plus `target add-key`, never `import`, and `signet
@@ -532,7 +551,7 @@ signet sync
 #    between here and step 6 the deployed file legitimately does not have it.
 #    vault=1 reads what the vault will deliver instead of what the container holds.
 make promote-dispatch-check vault=1              # read grant; inconclusive on write
-make promote-dispatch-check vault=1 dispatch=1   # conclusive; creates a no-op run
+make promote-dispatch-check vault=1 dispatch=1   # conclusive; CANCEL the run it creates
 
 # 6. deploy, so render-env.sh writes it into /opt/construct-server/.env
 #    (editing that file by hand is lost on the next deploy)

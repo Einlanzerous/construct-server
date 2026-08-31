@@ -692,14 +692,20 @@ There is no test suite — this repo is configuration, so validation is mostly
   403'd in use while the sync check called it healthy. The bare target is **inconclusive
   by construction**: `Actions: Read` and `Actions: Read and write` are separate boxes on
   the PAT form and only a POST tells them apart, so `dispatch=1` is the one that settles
-  it, by firing a promote whose version it reads out of `versions.env` — a no-op that
-  commits nothing. `vault=1` asks the vault instead of the deployed `.env`, which is the
+  it, by dispatching a promote whose version **no registry can resolve** — so `promote.yml`
+  refuses it at `Verify the target version exists`, which runs before `Repoint the pin`,
+  and nothing can be written whatever anyone does with the approval prompt. Do not
+  "improve" this into re-pinning a service to its current version: that reads as safer and
+  is not, because the dispatch names `ref: main` while a local `versions.env` goes stale
+  on its own, and re-pinning a stale value is a silent **rollback** filed as a promote.
+  **Cancel the run it creates** — approving only makes it go red at the tag check.
+  `vault=1` asks the vault instead of the deployed `.env`, which is the
   form to use straight after minting: `signet sync` writes the `PROD_ENV_FILE` secret and
   only a **deploy** renders that into `/opt/construct-server/.env`, so in between the
   default form reports "not provisioned" for a token that is provisioned correctly — and
   without it the only way to test a new grant is to ship it first. Run both, at their own
   moments: a wrong grant should be caught before the merge, a failed render after it.
-  **Resolve the run it creates.** It holds the `version-change`
+  Cancelling promptly matters for a second reason: the run holds the `version-change`
   concurrency group while it waits for its reviewer, and `cancel-in-progress: false`
   means the next real promote queues behind it. Note also that a fine-grained PAT with no
   repo grant answers **404, not 403** — the same shape that hid `EXTERNAL_REF_POLLER`'s

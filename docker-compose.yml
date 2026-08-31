@@ -507,6 +507,12 @@ services:
       # an empty credential is not a credential (the CLAUDE.md invariant). Absent, the
       # promote gate degrades to the link-out it is today.
       #
+      # ABSENT is the operative word, and it is not the same as blank. Bare passthrough
+      # drops the key only when it is missing from the environment entirely; a line
+      # reading `PROMOTE_DISPATCH_TOKEN=` in the env file is present-and-empty and IS
+      # delivered, as `""`. That is why .env.example leaves this key commented out
+      # rather than spelled out empty like most of its neighbours.
+      #
       # Verify the grant took with `make promote-dispatch-check` — do not infer it
       # from `signet sync`. SGNT-29 is the bug where a fine-grained PAT grant 403'd in
       # use while the sync check called it healthy, and a fine-grained PAT with no
