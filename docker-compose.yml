@@ -469,6 +469,24 @@ services:
       # credential to hand over today. Note Amber fails CLOSED: with no token
       # set on its side, every /v1 route 503s rather than opening.
       - AMBER_API_TOKEN
+      # Which project trees are NOT this operator (SWY-334 / AMBR-25). Every
+      # prompt-derived docket instrument drops prompts whose project_slug starts
+      # with one of these; empty means exclude nothing, and on this host that is
+      # the wrong answer rather than a neutral one.
+      #
+      # The self-hosted CI runners check repos out under
+      # `~/runners/<repo>/_work/…`, and the PR-review agent's system prompt lands
+      # there as an ordinary `user` turn — 625 of them since 2026-08-03,
+      # averaging ~9,976 bytes against an operator median near 110, and 624 of
+      # August's 874 sessions. Unfiltered, August's `prompt_len_p90` reads
+      # **10,054**; filtered it reads **2,215**. So the unfiltered number is not
+      # noisy, it is confidently wrong by 4.5x, and it would be stored as a
+      # reading that outlives the run that made it.
+      #
+      # Amber deliberately applies no default of its own — it does not know which
+      # trees are people, and choosing for the caller is the judgement that
+      # service does not make. Which is why this line has to exist HERE.
+      - AMBER_EXCLUDE_PROJECT_PREFIXES=${AMBER_EXCLUDE_PROJECT_PREFIXES:--home-magos-runners-}
       # Promote dispatch credential (SERV-104 — SERV-78 piece 3). What lets
       # Switchyard's promote gate (SWY-188) trigger promote.yml over the API
       # instead of linking a human out to the Actions tab:
