@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.28.0](https://github.com/Einlanzerous/construct-server/compare/v4.27.0...v4.28.0) (2026-09-01)
+
+
+### Features
+
+* **promote:** authenticated dispatch path so Switchyard can trigger promote.yml (SERV-104) ([#178](https://github.com/Einlanzerous/construct-server/issues/178)) ([49833f5](https://github.com/Einlanzerous/construct-server/commit/49833f5e42f4acaae9f24088fa84f0cfadbfc040))
+
 ## [4.27.0](https://github.com/Einlanzerous/construct-server/compare/v4.26.1...v4.27.0) (2026-08-30)
 
 
