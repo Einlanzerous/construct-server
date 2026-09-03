@@ -28,16 +28,25 @@
 #      origin disagree about whether it is open.
 #   3. Where a service validates the same assertion itself for SSO (switchyard,
 #      lyceum), its CF_ACCESS_AUD agrees with the guard's entry for its host.
-#   4. traefik.yml's `internal` address matches Traefik's ipv4_address in the
+#      This is a regex sweep over variable names ENDING in CF_ACCESS_AUD, which
+#      is why 4 exists separately.
+#   4. When switchyard-mcp is in the compose file, switchyard's CF_ACCESS_MCP_AUD
+#      equals its MCP_CF_ACCESS_AUD (SERV-161). A different question from 3: that
+#      one asks whether an audience is registered for a HOST, this asks whether
+#      the API server will ACCEPT an assertion minted for the MCP application when
+#      the MCP forwards it to POST /v1/auth/sso/cloudflare. It is here because it
+#      is the only Access misconfiguration in this estate that fails silently and
+#      green — see the block itself for what that looked like.
+#   5. traefik.yml's `internal` address matches Traefik's ipv4_address in the
 #      compose file — if they disagree, Traefik binds an address it does not hold
 #      and every tunneled app goes dark.
-#   5. LIVE: the guard reports healthy and is in `enforce` mode.
-#   6. LIVE: a spoofed-Host request to the internal entrypoint returns 403, for
+#   6. LIVE: the guard reports healthy and is in `enforce` mode.
+#   7. LIVE: a spoofed-Host request to the internal entrypoint returns 403, for
 #      every tunneled host, from the HOST — which reaches container ports whether
 #      or not they are published, and is the probe angle SERV-107's review asked
 #      for.
-#   7. LIVE: a host with no router at all does not get a 200 either.
-#   8. LIVE: the entrypoint answers on its bound address and on NO OTHER address the
+#   8. LIVE: a host with no router at all does not get a 200 either.
+#   9. LIVE: the entrypoint answers on its bound address and on NO OTHER address the
 #      Traefik container holds. `address: "1.2.3.4:9080"` is the whole of what makes
 #      the entrypoint unreachable from the app network (SERV-107) — and until this
 #      check existed, nothing asserted it: every probe above aims at the bound
@@ -231,6 +240,39 @@ raw = open(compose_file).read()
 def env_values(var):
     return re.findall(rf"^\s*-\s*{var}=(.*)$", raw, re.M)
 
+# Parsed once, here, because two checks below need it: the entrypoint-bind check
+# and the SERV-161 audience pair. RAW compose deliberately — never
+# `docker compose config`, which interpolates every variable and would pull the
+# rendered .env into this script's view (the same rule the wiki generator
+# follows, SERV-101).
+compose_doc = yaml.safe_load(raw) or {}
+
+# Distinguishes "key not declared" from "declared with an empty/absent value".
+_ABSENT = object()
+
+def service_env(service):
+    """A service's environment as a dict, whether compose spells it as a list
+    of KEY=VALUE strings or as a mapping. Returns {} for a service that is not
+    in the file, so a caller can ask about a service that may not be deployed."""
+    spec = ((compose_doc.get("services") or {}).get(service) or {}).get("environment") or {}
+    if isinstance(spec, dict):
+        return {k: "" if v is None else str(v) for k, v in spec.items()}
+    out = {}
+    for item in spec:
+        text = str(item)
+        if "=" in text:
+            k, _, v = text.partition("=")
+            out[k.strip()] = v
+        else:
+            # Bare passthrough (`- FOO`), which compose fills from the env file.
+            # None, not "", so a caller can tell "not declared here" from
+            # "declared, value not visible in the tracked file" — the idiom is
+            # live in this repo (SIGNET_API_TOKEN, AMBER_API_TOKEN,
+            # PROMOTE_DISPATCH_TOKEN), and reporting it as absent would name a
+            # specific, wrong cause on a check that gates the prod deploy.
+            out[text.strip()] = None
+    return out
+
 aud_map_raw = env_values("CF_ACCESS_AUD_MAP")
 if len(aud_map_raw) != 1:
     bad(f"expected exactly one CF_ACCESS_AUD_MAP in the compose file, found {len(aud_map_raw)}")
@@ -287,11 +329,81 @@ for aud in service_auds:
 if service_auds and all(a.strip() in mapped_auds for a in service_auds if a.strip()):
     print(f"  ok    {len(service_auds)} service-side CF_ACCESS_AUD value(s) agree with the map")
 
+# The one Access audience the sweep above structurally CANNOT see (SERV-161).
+#
+# That pattern matches names ENDING in CF_ACCESS_AUD. `CF_ACCESS_MCP_AUD` does
+# not, so it was invisible — and widening the pattern is the wrong fix, because
+# `[A-Z0-9_]*CF_ACCESS_AUD[A-Z0-9_]*` also swallows CF_ACCESS_AUD_MAP and would
+# compare the guard's whole map string against itself. It is named here instead.
+#
+# It is also a DIFFERENT question from the sweep. Everything above asks whether
+# an audience is registered for a host — a routing fact. This asks whether the
+# API server will ACCEPT an assertion minted for the MCP application when
+# switchyard-mcp forwards it to POST /v1/auth/sso/cloudflare, which is an
+# application-level trust decision one hop past anything the edge inspects.
+#
+# Why it earns a check of its own rather than a line in a runbook: it is the only
+# Access misconfiguration in this estate that fails SILENTLY AND GREEN. Every
+# other one is loud — an unmapped host is refused by the guard, a router missing
+# cf-access-jwt fails above, an unset MCP_CF_ACCESS_AUD crash-loops the
+# container. When this one was wrong (SERV-99, fixed in #184) Access
+# authenticated the user, the guard passed the request, switchyard-mcp verified
+# the assertion against its own AUD, the container was healthy, this script
+# passed both halves and assert-healthy reported 19/0 — and every remote tool
+# call failed. The only evidence anywhere was a 401 in switchyard's request log.
+#
+# Gated on switchyard-mcp being IN the compose file, not on the variable being
+# present: deploying that container is what makes the exchange necessary, so
+# absence is a failure exactly when the container exists, and this stays quiet
+# for anyone who has not deployed it. Config-only — both values are tracked, so
+# no live probe can tell you anything this cannot.
+MCP_SVC, API_SVC = "switchyard-mcp", "switchyard"
+if MCP_SVC in (compose_doc.get("services") or {}):
+    mcp_env, api_env = service_env(MCP_SVC), service_env(API_SVC)
+    mcp_raw = mcp_env.get("MCP_CF_ACCESS_AUD", _ABSENT)
+    api_raw = api_env.get("CF_ACCESS_MCP_AUD", _ABSENT)
+    mcp_side = "" if mcp_raw in (_ABSENT, None) else mcp_raw.strip()
+    api_side = "" if api_raw in (_ABSENT, None) else api_raw.strip()
+    # Declared but sourced from the env file: this script reads RAW compose, so
+    # the value genuinely is not here to compare. Say that, rather than failing a
+    # legitimate wiring or — worse — printing "carries no CF_ACCESS_MCP_AUD" at
+    # someone whose variable is present and correct.
+    if mcp_raw is None or api_raw is None:
+        print(f"  NOTE  the {MCP_SVC}/{API_SVC} Access audience pair is passed through from")
+        print("        the env file, so its value is not in the tracked compose and cannot")
+        print("        be cross-checked here. Confirm the two match by hand on a rotation.")
+    elif not api_side:
+        bad(f"{MCP_SVC} is deployed but {API_SVC} carries no CF_ACCESS_MCP_AUD")
+        print(f"        The SSO exchange accepts only CF_ACCESS_AUD without it, and the MCP")
+        print(f"        forwards assertions carrying the MCP application's audience — so every")
+        print(f"        remote tool call 401s on POST /v1/auth/sso/cloudflare while every other")
+        print(f"        check here passes. Set it on {API_SVC} to {MCP_SVC}'s MCP_CF_ACCESS_AUD.")
+    elif not mcp_side:
+        bad(f"{MCP_SVC} carries no MCP_CF_ACCESS_AUD to check {API_SVC}'s CF_ACCESS_MCP_AUD against")
+    elif api_side != mcp_side:
+        # Printed IN FULL, both sides. These are 64-hex-character tags, so a
+        # prefix would render a tail difference as two identical strings — a
+        # self-contradicting FAIL line, on the one check whose entire purpose is
+        # to leave evidence where the original bug left none. They are public
+        # identifiers tracked in git, so there is nothing to withhold.
+        bad(f"{API_SVC} CF_ACCESS_MCP_AUD does not match {MCP_SVC} MCP_CF_ACCESS_AUD")
+        print(f"        {API_SVC}: {api_side}")
+        print(f"        {MCP_SVC}: {mcp_side}")
+        first_diff = next(
+            (i for i, (a, b) in enumerate(zip(api_side, mcp_side)) if a != b),
+            min(len(api_side), len(mcp_side)),
+        )
+        print(f"        first differ at offset {first_diff}")
+        print("        These name the same Access application and must be byte-identical.")
+        print("        A mismatch fails exactly like the missing variable: silently, at the")
+        print("        SSO exchange, with nothing else red.")
+    else:
+        print(f"  ok    {API_SVC} accepts {MCP_SVC}'s Access audience (CF_ACCESS_MCP_AUD)")
+
 # The address Traefik binds `internal` to must be an address Traefik holds.
 static = yaml.safe_load(open(static_file)) or {}
 addr = ((static.get("entryPoints") or {}).get("internal") or {}).get("address", "")
 ip = addr.rsplit(":", 1)[0] if ":" in addr else ""
-compose_doc = yaml.safe_load(raw) or {}
 traefik_service, edge_net = os.environ["TRAEFIK_SERVICE"], os.environ["EDGE_NET"]
 traefik_nets = ((compose_doc.get("services") or {}).get(traefik_service) or {}).get("networks") or {}
 declared = ""

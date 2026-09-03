@@ -246,9 +246,12 @@ is mapped, or the MCP is briefly open to anyone who finds the name:
        assertion to switchyard to exchange for that person's token, and those JWTs
        carry the MCP application's audience, so without it every remote tool call
        401s on POST /v1/auth/sso/cloudflare while Access, the guard, the container
-       and check-edge-auth.sh all stay green. check-edge-auth.sh cross-checks the
-       first two and CANNOT see the third (SERV-161), so on a rotation this one is
-       verified by reading it.
+       and the container all stay green. All three are cross-checked by
+       check-edge-auth.sh, so on a rotation run `make edge-auth-check` (or
+       `config_only=1` from a checkout) rather than eyeballing them — the third
+       needed a check of its own, because the sweep that covers the first two
+       matches names ENDING in CF_ACCESS_AUD and structurally cannot see it
+       (SERV-161).
    The tag is per-application and is NOT switchyard's d3404fc3…; sharing that one
    would let a Switchyard session token drive the MCP.
 5. Only now add the tunnel route — Networks > Tunnels > the PROD tunnel (not the

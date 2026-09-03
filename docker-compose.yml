@@ -452,13 +452,13 @@ services:
       # nothing on. Must equal MCP_CF_ACCESS_AUD on the switchyard-mcp service —
       # the third place this one tag appears, after that variable and the
       # mcp.zerogravity.industries entry in cf-access-guard's CF_ACCESS_AUD_MAP.
-      # check-edge-auth.sh cross-checks the other two against each other; it does
-      # NOT know about this one, because it reasons about routers and hosts and
-      # this is an application-level trust decision. Its sweep matches names
-      # ENDING in CF_ACCESS_AUD, which this one does not — so a typo here fails
-      # exactly as silently as the missing variable did, with every edge signal
-      # green and only a 401 in switchyard's log. Tracked as SERV-161; until that
-      # lands, this pair is checked by reading it.
+      # check-edge-auth.sh asserts this equals switchyard-mcp's MCP_CF_ACCESS_AUD
+      # (SERV-161). It needed its own assertion rather than falling out of the
+      # existing sweep, which matches names ENDING in CF_ACCESS_AUD — a name this
+      # one does not have, and widening that pattern would swallow
+      # CF_ACCESS_AUD_MAP and compare the guard's map against itself. Before that
+      # check existed, a typo here failed exactly as silently as the missing
+      # variable did: every edge signal green, and only a 401 in switchyard's log.
       - CF_ACCESS_MCP_AUD=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466
       # Signet connector (SWY-165 / SERV-44). Signet is a host daemon, not a
       # container — reach it via host.docker.internal (see extra_hosts below).

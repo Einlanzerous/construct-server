@@ -561,6 +561,19 @@ anything deploys or gets versioned.
   unauthenticated request gets a `302` to a login page where Claude needs a `401` with
   `WWW-Authenticate: … resource_metadata="…"`, which is why the earlier attempts failed.
   Runbook: `docs/zerogravity-edge.md` §4.
+  **That one AUD tag lives in THREE places and the third is the one that fails silently.**
+  `MCP_CF_ACCESS_AUD` on `switchyard-mcp`, the `mcp.zerogravity.industries` entry in
+  `CF_ACCESS_AUD_MAP` on `cf-access-guard`, and `CF_ACCESS_MCP_AUD` on **switchyard** —
+  which is what lets the SSO exchange accept an assertion minted for the MCP application,
+  since the MCP holds no token and forwards each caller's JWT to
+  `POST /v1/auth/sso/cloudflare` verbatim. Miss the third and Access authenticates, the
+  guard passes, the container is healthy, `check-edge-auth` passes and `assert-healthy`
+  is green while **every remote tool call 401s** — the only evidence being a line in
+  switchyard's own request log. That was SERV-99's actual bug. All three are now
+  cross-checked by `check-edge-auth.sh` (SERV-161); note the first two are compared by a
+  regex sweep over names *ending* in `CF_ACCESS_AUD`, which structurally cannot see the
+  third, so it is asserted by name and widening that pattern is not the fix — it would
+  also swallow `CF_ACCESS_AUD_MAP` and compare the map against itself.
 - **There is ONE Cloudflare Access verifier, and it is `pkg/cfaccess`** (SERV-131).
   Do not hand-roll a second one, and do not copy this one into a service. There
   were three Go copies, written by copying, and they drifted: Lyceum's lacked the
