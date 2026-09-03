@@ -302,11 +302,37 @@ container-to-container success proves nothing about Access:
 
 ```bash
 # 401 with a resource_metadata pointer — NOT a 302, and not HTML.
-curl -si https://mcp.zerogravity.industries/mcp | head -20
+curl -si -X POST -H 'Content-Type: application/json' -d '{}' \
+  https://mcp.zerogravity.industries/mcp | head -20
 
 # The origin still refuses a spoofed Host, MCP host included.
 ./scripts/check-edge-auth.sh
 ```
+
+**What a working endpoint actually looks like** (measured 2026-09-02, once the tunnel
+route was live). The 401 comes from **Cloudflare**, not from the container, and it
+points at Cloudflare's own discovery path rather than the origin's RFC 9728 one:
+
+```
+HTTP/2 401
+www-authenticate: Bearer realm="OAuth", error="invalid_token", …
+  resource_metadata="https://mcp.zerogravity.industries/.well-known/cloudflare-access-protected-resource/mcp"
+server: cloudflare
+```
+
+That is Managed OAuth working. Two consequences worth knowing before troubleshooting
+anything here:
+
+- **Discovery never reaches the origin.** Cloudflare answers *both* its own path and
+  the origin's `/.well-known/oauth-protected-resource/mcp` with a 200 (`server:
+  cloudflare`, `cf-version` header, a body that differs from the container's), while
+  the same two paths at the internal entrypoint with a spoofed `Host` both answer
+  **403**. The edge satisfies discovery and the origin still fails closed, so the
+  `Path()` exemption the router comment describes is not needed. Do not add one.
+- **A `302` to a login page is the failure that matters**, and it is an Access
+  application problem rather than an origin one: Managed OAuth is not applying. The
+  origin's own 401 (verifiable with `docker exec`, see the router comment) is already
+  correct and is not what a client sees.
 
 ### Verification (subset of SERV-30, run once the relay + tunnel exist)
 

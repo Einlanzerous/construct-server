@@ -456,15 +456,27 @@ http:
     # shape a bouncer scenario reads as abuse, and a single decision against that
     # range would break every remote tool call at once.
     #
-    # One thing to expect if OAuth discovery misbehaves at SERV-100: the MCP server
-    # serves RFC 9728 metadata at /.well-known/oauth-protected-resource/mcp
-    # unauthenticated by design, because a client reads it precisely when it has no
-    # credentials yet. With Managed OAuth, Cloudflare answers discovery at the edge
-    # and that path should never reach here — but if a client's discovery fetch does
-    # arrive, this middleware 403s it and the symptom is Claude's "Couldn't reach the
-    # MCP server". The fix then is a narrow exact-`Path()` exemption for that one
-    # path, argued for in check-edge-auth.sh's allowlist WITH the evidence — never a
-    # PathPrefix, and never pre-emptively.
+    # OAuth discovery was the one open risk here, and SERV-100 SETTLED IT — no
+    # exemption is needed, and none should be added. The concern was that the MCP
+    # server serves RFC 9728 metadata at /.well-known/oauth-protected-resource/mcp
+    # unauthenticated by design (a client reads it precisely when it has no
+    # credentials yet), so a discovery fetch arriving here would be 403'd by this
+    # middleware and surface as Claude's "Couldn't reach the MCP server".
+    #
+    # Measured once the tunnel route was live: Cloudflare Access answers discovery
+    # at the edge and never forwards it. An unauthenticated POST to the public
+    # https://mcp.zerogravity.industries/mcp returns Cloudflare's own 401 pointing
+    # at .../.well-known/cloudflare-access-protected-resource/mcp — its path, not
+    # the origin's — and both that path AND the origin's RFC 9728 path answer 200
+    # from Cloudflare (server: cloudflare, cf-version header, a body that differs
+    # from what the container serves). Meanwhile the same two paths at the internal
+    # entrypoint with a spoofed Host both answer 403. So the edge satisfies
+    # discovery and the origin still fails closed; the request never arrives.
+    #
+    # If that ever changes, the fix is a narrow exact-`Path()` exemption for that
+    # one path, argued for in check-edge-auth.sh's allowlist WITH fresh evidence —
+    # never a PathPrefix, and never pre-emptively. Do not add one on the strength
+    # of the paragraph above; it is the record of a risk that did not materialise.
     #
     # That path is verified, not guessed (against mcp:4.29): an unauthenticated
     # POST /mcp to the origin answers 401 with
