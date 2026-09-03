@@ -68,6 +68,13 @@ middleware, so reaching the entrypoint is not sufficient to be served.
   only the direct/Argosy path needs it (tunnel apps use Cloudflare's edge cert).
 - **Authentik (SERV-19):** authored, gated behind the `identity` profile — see bring-up
   below. Not started by a plain `docker compose up -d`.
+- **Remote MCP endpoint (SERV-99 / SERV-100):** `mcp.zerogravity.industries` → tunnel →
+  `traefik:9080` → `switchyard-mcp`, gated by `cf-access-jwt` like every tunneled host.
+  The origin half is in this repo; the Access application, its **Managed OAuth**, and the
+  tunnel hostname are dashboard-only (SERV-100) and are what the AUD comes from. Until
+  that AUD is real the container cannot boot and `check-edge-auth.sh` fails, so the two
+  tickets interleave rather than running in the order their link implies — step 4 of the
+  bring-up runbook below is the whole of it.
 *(Origin JWT validation is no longer pending — see below.)*
 
 **Origin JWT validation (SERV-106) — done.** SERV-25 shipped the Access policies and
@@ -122,7 +129,7 @@ exemptions at all — and is documented in `docs/dev-environment.md`. The two sh
 | `config/traefik-dev/` | The **dev** edge's static + dynamic config (SERV-93) |
 | `services/cf-access-guard/` | Origin-side Access JWT validation (SERV-106); the only stack image built on the box, and built for both projects |
 | `scripts/check-edge-auth.sh` | Asserts the origin rejects a spoofed Host — config *and* a live probe. `--dev` for the dev edge |
-| `docker-compose.yml` | `traefik`, `cf-access-guard`, `authentik-server`, `authentik-worker`, `authentik-redis` |
+| `docker-compose.yml` | `traefik`, `cf-access-guard`, `cloudflared`, `switchyard-mcp`, `authentik-server`, `authentik-worker`, `authentik-redis` |
 | `db/init-db.sh` | Provisions the `authentik` DB/user on the shared postgres |
 | `.env.example` | New vars (`CF_DNS_API_TOKEN`, `AUTHENTIK_*`) |
 
@@ -198,6 +205,73 @@ the `cf-access-guard` service, alongside the router in `dynamic/routers.yml` and
 host it has no audience for — so the failure is a 403 on a route that should work, not
 a silent exposure. `make edge-auth-check config_only=1` names exactly which half is
 missing.
+
+### 4. The remote MCP endpoint (SERV-99 / SERV-100)
+
+`mcp.zerogravity.industries` puts Switchyard's MCP tool surface where a **hosted**
+Claude surface can reach it — Claude.ai, Desktop, mobile and Cowork all connect from
+Anthropic's cloud, not from your device, so the local stdio MCP is unreachable to them
+by construction. The origin half (the `switchyard-mcp` container, its `internal`-only
+router, the AUD map entry) is SERV-99 and lives in this repo. The Zero Trust half is
+SERV-100 and cannot be made from a file here.
+
+**Do the dashboard work in this order.** The Access policy goes on before the hostname
+is mapped, or the MCP is briefly open to anyone who finds the name:
+
+```
+1. Confirm Managed OAuth and the MCP application type are on the current plan.
+   Every step below assumes them, and finding out afterwards means the origin work
+   has nowhere to land.
+2. Create the Access application for mcp.zerogravity.industries.
+   Allow-by-email against the built-in one-time-PIN IdP, same as SERV-24/25.
+3. Enable Managed OAuth on it, and allow the redirect URI
+   https://claude.ai/api/mcp/auth_callback  (covers web, Desktop, mobile and Cowork —
+   they share the hosted-surface callback). Without Managed OAuth an unauthenticated
+   request gets a 302 to the Access login page; Claude needs a 401 carrying
+   WWW-Authenticate: Bearer resource_metadata="…" to discover the authorization
+   server, and a redirect-to-HTML surfaces as "Couldn't reach the MCP server". That
+   is the specific reason the earlier attempts failed.
+4. Copy the application's AUD tag into BOTH places it is read — MCP_CF_ACCESS_AUD on
+   the switchyard-mcp service and the mcp.zerogravity.industries entry in
+   CF_ACCESS_AUD_MAP on cf-access-guard. It is per-application and is NOT
+   switchyard's d3404fc3…; sharing that one would let a Switchyard session token
+   drive the MCP.
+5. Only now map the hostname to http://traefik:9080, same as every other tunneled app.
+6. Connect it in Cowork: Customize → Connectors → Add custom connector →
+   https://mcp.zerogravity.industries/mcp
+```
+
+**The AUD is what gates the merge, not a nice-to-have.** `MCP_CF_ACCESS_AUD` is
+required by the image — the process throws at boot rather than starting up unable to
+fail closed — so without a real value the container crash-loops and `assert-healthy.sh`
+fails the deploy. And a gated router whose host has no `CF_ACCESS_AUD_MAP` entry fails
+`check-edge-auth.sh`, which `deploy.yml` runs as a post-deploy gate. Both are the
+loud-failure direction, but they mean steps 1–4 above genuinely precede merging the
+SERV-99 diff, even though the ticket link reads SERV-99 → blocks → SERV-100.
+
+**Two checks are doing different jobs here, and neither is redundant.** `cf-access-jwt`
+on the router decides whether the request is served at all; the MCP server re-verifies
+the same assertion against its own AUD and exchanges it at `POST /v1/auth/sso/cloudflare`
+to decide *who* it is served as. That exchange is why there is no Switchyard token on
+the container: a tool call from Cowork lands in Switchyard attributed to the signed-in
+person, not to a shared service identity.
+
+**Not behind CrowdSec, deliberately.** Anthropic's egress is one narrow range
+(`160.79.104.0/21`) hitting one endpoint repeatedly — the exact shape a bouncer
+scenario reads as abuse — and a single decision against it would break every remote
+tool call at once. This needs no action to stay true: the bouncer is attached
+per-router on the `public` entrypoint only, and nothing tunneled carries it.
+
+**Verification is a request through the public path, and only that.** Internal
+container-to-container success proves nothing about Access:
+
+```bash
+# 401 with a resource_metadata pointer — NOT a 302, and not HTML.
+curl -si https://mcp.zerogravity.industries/mcp | head -20
+
+# The origin still refuses a spoofed Host, MCP host included.
+./scripts/check-edge-auth.sh
+```
 
 ### Verification (subset of SERV-30, run once the relay + tunnel exist)
 

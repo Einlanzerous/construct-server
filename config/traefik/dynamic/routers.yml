@@ -434,6 +434,45 @@ http:
       middlewares:
         - cf-access-jwt
 
+    # Remote MCP endpoint (SERV-99 / SWY-260) — the Switchyard tool surface for
+    # hosted Claude surfaces. `internal` ONLY, and the entrypoint is the guarantee:
+    # the public catch-all deny is defence in depth, but what actually makes this
+    # unreachable from the open WAN port is that no router for this host exists on
+    # that entrypoint at all. No tls block — internal is plain HTTP, Cloudflare
+    # terminates at the edge.
+    #
+    # GATED like every other tunneled app, and the two checks are not redundant:
+    # cf-access-jwt decides whether the request is served at all, and the MCP server
+    # decides WHO it is served as — it re-verifies the same assertion against its own
+    # per-application AUD and exchanges it for that user's Switchyard token. The
+    # server's own check is what SWY-260 built to fail closed; this one is what keeps
+    # the failure from ever being the server's to make.
+    #
+    # NOT behind crowdsec-bouncer, and it cannot drift into being: the bouncer is
+    # attached per-router on the public entrypoint only, and the entrypoint-level
+    # middleware list in traefik.yml is strip-identity-headers alone. That is worth
+    # stating rather than leaving implicit — Anthropic's egress is one narrow range
+    # (160.79.104.0/21) hitting one endpoint repeatedly, which is the exact traffic
+    # shape a bouncer scenario reads as abuse, and a single decision against that
+    # range would break every remote tool call at once.
+    #
+    # One thing to expect if OAuth discovery misbehaves at SERV-100: the MCP server
+    # serves RFC 9728 metadata at /.well-known/oauth-protected-resource/mcp
+    # unauthenticated by design, because a client reads it precisely when it has no
+    # credentials yet. With Managed OAuth, Cloudflare answers discovery at the edge
+    # and that path should never reach here — but if a client's discovery fetch does
+    # arrive, this middleware 403s it and the symptom is Claude's "Couldn't reach the
+    # MCP server". The fix then is a narrow exact-`Path()` exemption for that one
+    # path, argued for in check-edge-auth.sh's allowlist WITH the evidence — never a
+    # PathPrefix, and never pre-emptively.
+    switchyard-mcp:
+      entryPoints:
+        - internal
+      rule: "Host(`mcp.zerogravity.industries`)"
+      service: switchyard-mcp
+      middlewares:
+        - cf-access-jwt
+
     # THE SECOND EXEMPTION from origin auth (PCAD-5 / IDEA-22), whole-host where
     # the webhook's is exact-Path — so state plainly what that costs: everything
     # placard serves is reachable by anything that can reach the entrypoint.
@@ -500,6 +539,15 @@ http:
         # port exists, so this router is the only route to it.
         servers:
           - url: "http://wiki:80"
+
+    switchyard-mcp:
+      loadBalancer:
+        # The Streamable HTTP MCP transport on :4080 (SWY-260) — a sibling container
+        # to the backend, not the backend itself, so this is deliberately NOT the
+        # switchyard or switchyard-frontend address. No host port exists, so this
+        # router is the only route to it.
+        servers:
+          - url: "http://switchyard-mcp:4080"
 
     chronicle:
       loadBalancer:

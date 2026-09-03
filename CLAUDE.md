@@ -310,9 +310,10 @@ anything deploys or gets versioned.
   pulls and recreates only the services behind the pins that actually moved, `--no-deps`.
   **Every other deploy still pulls the whole stack**, deliberately: that is where the patch
   float is supposed to land. Three things this does *not* bound, and do not write that it
-  does: four of the thirteen pins cover two services each and recreate in pairs — `APERTURE_TAG`,
-  `CENTRIFUGE_TAG`, `SWITCHYARD_TAG` (backend + frontend) and `INTERLOCK_TAG` (web +
-  worker); the pin is still major.minor, so rolling back to `0.13` gets
+  does: four of the thirteen pins cover more than one service and recreate together —
+  `SWITCHYARD_TAG` covers **three** (backend, frontend and `switchyard-mcp`, SERV-99),
+  while `APERTURE_TAG`, `CENTRIFUGE_TAG` and `INTERLOCK_TAG` (web + worker) cover two
+  each; the pin is still major.minor, so rolling back to `0.13` gets
   the newest `0.13` patch and **not necessarily the image prod ran the last time it was on
   `0.13`**; and a version bump merged inside a larger PR is not a pure pin change, so it
   takes the whole-stack path. The script **refuses rather than guesses**, and every refusal
@@ -537,6 +538,29 @@ anything deploys or gets versioned.
   build, so a full cache hit still yields a new ID. Recreating on an ID difference would
   bounce the auth path on every deploy; recreating on a revision difference bounces it
   exactly when the source moved.
+- **The remote MCP endpoint is a tunneled host like any other, and its AUD variable is
+  deliberately not `CF_ACCESS_AUD`** (SERV-99 / SWY-260). `switchyard-mcp` serves
+  Switchyard's MCP tool surface over Streamable HTTP at `mcp.zerogravity.industries`, so
+  a **hosted** Claude surface can reach it — those connect from Anthropic's cloud, not
+  from the user's device, which is why the local stdio MCP cannot serve them. It reads
+  `MCP_CF_ACCESS_AUD`, because Access audiences are per-application and this endpoint is
+  its own application; a `CF_ACCESS_AUD` sitting beside it in the same env file is
+  ignored on purpose, and reusing switchyard's would let a Switchyard session drive the
+  MCP. **It holds no Switchyard token at all** — every session exchanges its own Access
+  assertion at `POST /v1/auth/sso/cloudflare` for the real person's token, so a tool call
+  lands attributed to them rather than to a shared identity, and the image refuses to
+  read a process-wide token. Two consequences that are easy to miss: it ships on
+  switchyard's release train, so `SWITCHYARD_TAG` now covers **three** services and
+  carries a **rollback floor of 4.18** (the mcp image's first release — `verify-tag.sh`
+  refuses anything below it rather than half-deploying); and it must never go behind
+  `crowdsec-bouncer`, since Anthropic's egress is one narrow range hitting one endpoint
+  repeatedly and a single decision against it breaks every remote tool call at once.
+  That last one needs no guarding — the bouncer is attached per-router on `public` only.
+  The Zero Trust half (the Access application, its **Managed OAuth**, the tunnel
+  hostname) is SERV-100 and no file here can make it; without Managed OAuth an
+  unauthenticated request gets a `302` to a login page where Claude needs a `401` with
+  `WWW-Authenticate: … resource_metadata="…"`, which is why the earlier attempts failed.
+  Runbook: `docs/zerogravity-edge.md` §4.
 - **There is ONE Cloudflare Access verifier, and it is `pkg/cfaccess`** (SERV-131).
   Do not hand-roll a second one, and do not copy this one into a service. There
   were three Go copies, written by copying, and they drifted: Lyceum's lacked the

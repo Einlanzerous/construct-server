@@ -593,6 +593,91 @@ services:
       switchyard:
         condition: service_healthy
 
+  # Remote MCP transport (SERV-99 / SWY-260). The same Switchyard tool surface the
+  # local stdio MCP serves, over Streamable HTTP, so a HOSTED Claude surface can
+  # reach it — those connect from Anthropic's cloud, not from the user's device, so
+  # a stdio server on this box is unreachable to them by construction.
+  #
+  # A SIBLING CONTAINER, not a second process in switchyard: one container, one
+  # process. It ships from switchyard's own repo as a third image on the SAME
+  # release train as backend and frontend, so it pins on SWITCHYARD_TAG and needs no
+  # variable of its own — the one-variable-per-source-repo convention in
+  # versions.env. Note what that now implies for rollback: verify-tag.sh checks
+  # EVERY image behind a pin, and the mcp image's floor is 4.18 (SWY-260 landed in
+  # 4.18.0). A promote of SWITCHYARD_TAG below that is refused rather than
+  # half-deployed, which is the correct direction but is a floor that did not exist
+  # before this service did.
+  #
+  # NO SWITCHYARD TOKEN HERE, deliberately, and it is the whole point of the design.
+  # Every HTTP session exchanges its own Cloudflare Access assertion at
+  # POST /v1/auth/sso/cloudflare (SWY-161) for the token of the real person behind
+  # it, so a tool call from Claude lands in Switchyard attributed to that user. A
+  # single shared service token would make every remote call anonymous-but-privileged
+  # — the god token PRINCIPLES.md §4 forbids — and the image refuses to read one at
+  # all (mcp/src/httpEnv.ts disables the env-client fallback).
+  #
+  # No published port, for the same reason as switchyard's backend and the wiki: the
+  # only route in is the tunneled Traefik router on the unpublished `internal`
+  # entrypoint, gated by Cloudflare Access at the edge AND by cf-access-guard at the
+  # origin. There is no host binding to bypass either with.
+  switchyard-mcp:
+    image: ghcr.io/einlanzerous/switchyard/mcp:${SWITCHYARD_TAG:-latest}
+    container_name: switchyard-mcp
+    restart: unless-stopped
+    environment:
+      - MCP_HTTP_PORT=4080
+      # The REST API, not the frontend: this speaks to /v1 directly, and the SSO
+      # exchange above is an API call. Same address switchyard's own agents use.
+      - SWITCHYARD_URL=http://switchyard:4002
+      # Public identifiers, not secrets — the same reasoning (and the same team
+      # domain) as the CF_ACCESS_* pairs switchyard, lyceum, chronicle and
+      # cf-access-guard already carry. Keeping them tracked makes an Access
+      # application change a reviewable diff.
+      - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      # THIS APPLICATION'S OWN AUD, and deliberately not named CF_ACCESS_AUD: Access
+      # audiences are per-application, every token on the team domain is signed by the
+      # same key, and this endpoint is its own application. Sharing an env file with
+      # the API server must not make the two collide — which is exactly why the image
+      # reads MCP_CF_ACCESS_AUD and would ignore a CF_ACCESS_AUD sitting beside it.
+      # Must match the mcp.zerogravity.industries entry in cf-access-guard's
+      # CF_ACCESS_AUD_MAP below; check-edge-auth.sh asserts every service-side AUD
+      # appears somewhere in that map.
+      #
+      # REQUIRED — the process throws at boot without it rather than starting up
+      # unable to fail closed, so an unset value crash-loops this container instead of
+      # serving the tool surface unauthenticated. That is the CLAUDE.md
+      # empty-variable invariant working as intended: skip loudly, never substitute.
+      - MCP_CF_ACCESS_AUD=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466
+      # Configured, never derived from the Host header. It feeds the
+      # `WWW-Authenticate: Bearer resource_metadata="…"` pointer a client follows to
+      # discover the authorization server, and Host is attacker-controlled on the
+      # internal entrypoint — deriving it would let a forged Host aim a client's
+      # OAuth discovery at someone else's origin. The /mcp path is part of it: it is
+      # the endpoint clients POST to and the path the router serves.
+      - MCP_PUBLIC_URL=https://mcp.zerogravity.industries/mcp
+    networks:
+      - construct_net
+    healthcheck:
+      # Probes the HTTP surface the container exists to serve, on the port it is
+      # actually serving on — not `bun --version` or any other new-process check that
+      # proves the binary is in the image and nothing about the server (SERV-156).
+      # /healthz is deliberately bare and unauthenticated: it leaks no subsystem
+      # detail, and a probe that needed a Cloudflare assertion could never pass.
+      # Mirrors the HEALTHCHECK the image already ships; restated here because compose
+      # is where this stack's health story is readable.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      # Ordering plus a health gate, mirroring switchyard-frontend: with the API down
+      # every session initialize would fail its token exchange anyway. Compose follows
+      # depends_on, so scope a single-service recreate with --no-deps (SERV-63) —
+      # `make recreate svc=switchyard-mcp` bakes that in.
+      switchyard:
+        condition: service_healthy
+
   # --- NEWSLETTER CURATION (Centrifuge) ---
   # Single image carrying the HTTP API and the decoupled scoring worker.
   # Migrations run in the entrypoint (`centrifuge migrate`) against the
@@ -1482,8 +1567,10 @@ services:
   # Wired in as a Traefik `forwardAuth` target (see config/traefik/dynamic/routers.yml),
   # not as a Traefik plugin. A plugin runs Yaegi-interpreted inside Traefik, so a fault in
   # it takes the whole edge down — including the public Argosy path, which this has nothing
-  # to do with. As a sidecar its worst failure is a 503 on the three tunneled hosts, and it
-  # can be tested with `go test` instead of by restarting the edge.
+  # to do with. As a sidecar its worst failure is a 503 on the tunneled hosts, and it
+  # can be tested with `go test` instead of by restarting the edge. (That said "three"
+  # until SERV-99; the count is derivable from routers.yml and was stale within weeks, so
+  # it is deliberately not restated here.)
   #
   # construct_edge_net ONLY, deliberately: Traefik is the sole caller, and the guard has no
   # business being reachable from the ~30 containers on construct_net. It does need egress,
@@ -1532,7 +1619,7 @@ services:
       # tunneled router that nobody mapped is unreachable, which is loud, rather than
       # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
       # and the routers agree, so they cannot drift apart silently.
-      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway — it exists so the cutover could be rehearsed against real traffic
       # before three live routers went fail-closed at once, and it is not a steady state.
@@ -1593,11 +1680,18 @@ services:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
       # construct_edge_net ONLY, deliberately (SERV-107). Every ingress rule on this
-      # tunnel points at http://traefik:9080 — verified from the running config, which is
-      # remotely managed and therefore not in this repo:
+      # tunnel points at http://traefik:9080 — read from the running config, which is
+      # remotely managed and therefore not in this repo, so treat this as a snapshot
+      # rather than a source of truth:
       #
-      #   switchyard|lyceum|wiki .zerogravity.industries -> http://traefik:9080
-      #   (catch-all)                                    -> http_status:404
+      #   <tunneled host>.zerogravity.industries -> http://traefik:9080
+      #   (catch-all)                            -> http_status:404
+      #
+      # The authoritative list of tunneled hosts is the `internal` routers in
+      # config/traefik/dynamic/routers.yml; this comment named three of them and was
+      # stale by three more before anyone noticed, which is why it no longer enumerates.
+      # SERV-99 adds mcp.zerogravity.industries, and its dashboard half — the ingress
+      # rule and the Access application — is the part no file here can make.
       #
       # so it needs nothing from construct_net. Keeping it off that network is half of
       # what makes the entrypoint's bind address meaningful: Traefik listens on one
