@@ -9,10 +9,17 @@
 # prod is already broken and a "rollback" that fails to pull leaves it broken with a bad
 # pin now committed.
 #
-# One pin can cover several images: a repo's backend and frontend ship from one release,
-# so SWITCHYARD_TAG covers two images and INTERLOCK_TAG covers two more. All of them are
+# One pin can cover several images: a repo's images all ship from one release, so
+# SWITCHYARD_TAG covers three (backend, frontend and the remote MCP transport — SERV-99)
+# while APERTURE_TAG, CENTRIFUGE_TAG and INTERLOCK_TAG cover two each. All of them are
 # checked. A version that exists for the backend but not the frontend is precisely the
 # half-deployed state worth refusing.
+#
+# That check also sets a ROLLBACK FLOOR wherever an image joined a pin later than the
+# others, and the newest one is worth knowing: the mcp image starts at 4.18 (SWY-260
+# landed in 4.18.0), so a promote of SWITCHYARD_TAG to 4.17 or below is refused here —
+# correctly, since two of the three images would deploy and the third would not exist —
+# but it is a floor that did not exist before SERV-99.
 #
 # The image list is derived from docker-compose.yml rather than hardcoded here, so
 # adding another service needs no edit to this script — and so this can never
