@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.29.0](https://github.com/Einlanzerous/construct-server/compare/v4.28.0...v4.29.0) (2026-09-03)
+
+
+### Features
+
+* **edge:** cross-check the MCP Access audience pair (SERV-161) ([#185](https://github.com/Einlanzerous/construct-server/issues/185)) ([901fb56](https://github.com/Einlanzerous/construct-server/commit/901fb566b1d7215941a006ae776e5fcdc3325fc7))
+* **edge:** switchyard-mcp container and internal-only router for mcp.zerogravity.industries (SERV-99) ([#182](https://github.com/Einlanzerous/construct-server/issues/182)) ([0e40f2a](https://github.com/Einlanzerous/construct-server/commit/0e40f2a80e196eb03aeeabb10708adf552af657e))
+
+
+### Bug Fixes
+
+* **switchyard:** accept the MCP application's Access audience in the SSO exchange (SERV-99) ([#184](https://github.com/Einlanzerous/construct-server/issues/184)) ([506ff2a](https://github.com/Einlanzerous/construct-server/commit/506ff2a8378ee84300aa74ba700e3c73a01fc72c))
+* **switchyard:** pass AMBER_EXCLUDE_PROJECT_PREFIXES, or the docket's first reading is 4.5x wrong (SWY-334) ([#180](https://github.com/Einlanzerous/construct-server/issues/180)) ([ba5fa55](https://github.com/Einlanzerous/construct-server/commit/ba5fa55119ffac92dc99e9f3523b7f419810f19a))
+
 ## [4.28.0](https://github.com/Einlanzerous/construct-server/compare/v4.27.0...v4.28.0) (2026-09-01)
 
 
