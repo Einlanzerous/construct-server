@@ -17,6 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildEstate, type Estate } from "./model.ts";
+import { renderArchitecture, type Diagram } from "./emit/architecture.ts";
 import { emitDev } from "./emit/dev.ts";
 import { emitHome } from "./emit/home.ts";
 import { emitReference } from "./emit/reference.ts";
@@ -54,21 +55,26 @@ function main(): void {
     buildRef: buildRef(),
   });
 
+  // Before the emitters, because it writes a page ASSET rather than a page: the
+  // maps land in docs/public/, which cleanDocs() has just emptied, and the repo
+  // pages need to know which of them rendered.
+  cleanDocs();
+  const diagrams = renderArchitecture(estate, DOCS_DIR);
+
   const pages: Page[] = [
     emitHome(estate),
     ...emitServices(estate),
     ...emitTopology(estate),
     emitVersions(estate),
     ...emitDev(estate),
-    ...emitRepos(estate),
+    ...emitRepos(estate, diagrams),
     ...emitReference(estate),
   ];
 
-  cleanDocs();
   for (const page of pages) writePage(page);
   writeSidebar(estate);
 
-  report(estate, pages, repoDocsCache);
+  report(estate, pages, diagrams, repoDocsCache);
 }
 
 // --- io --------------------------------------------------------------------
@@ -153,16 +159,33 @@ function warn(message: string): void {
   process.stderr.write(`warn: ${message}\n`);
 }
 
-function report(estate: Estate, pages: Page[], cacheDir: string): void {
+function indent(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `      ${line}`)
+    .join("\n");
+}
+
+function report(estate: Estate, pages: Page[], diagrams: Map<string, Diagram>, cacheDir: string): void {
   const missing = estate.repos.filter((r) => r.missing);
+  const drawn = [...diagrams.values()].filter((d) => d.ok).length;
 
   process.stdout.write(
     [
       `wiki: ${pages.length} pages from ${estate.prod.services.length} prod services, ` +
-        `${estate.repos.length} repos, ${estate.pins.length} pins (build ${estate.buildRef})`,
+        `${estate.repos.length} repos, ${estate.pins.length} pins, ` +
+        `${drawn}/${diagrams.size} architecture maps (build ${estate.buildRef})`,
       "",
     ].join("\n"),
   );
+
+  // Named, not just counted. A map that stops rendering is a page that quietly
+  // loses its diagram, and the warning block on that page is only seen by someone
+  // who visits it — the build log is where it gets noticed.
+  for (const [repo, diagram] of diagrams) {
+    if (diagram.ok) continue;
+    warn(`${repo}: architecture map not rendered — see the warning block on its page\n${indent(diagram.message)}`);
+  }
 
   if (missing.length > 0) {
     // A warning, not an error. A GitHub outage during the fetch step should degrade

@@ -18,13 +18,20 @@
 // on its page and the build carries on: a documentation fetch must never be able to
 // block shipping the stack.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  ARCHITECTURE_CACHE_FILE,
+  ARCHITECTURE_EVIDENCE_DIR,
+  ARCHITECTURE_IR_PATH,
+  parseArchitectureMeta,
+} from "./sources/architecture.ts";
 import { parseCompose } from "./sources/compose.ts";
 import { parseVersions } from "./sources/versions.ts";
-import { EXTRA_REPOS, GITHUB_OWNER, REPO_DOC_FILES, repoFromImage } from "./sources/repos.ts";
+import { EXTRA_REPOS, GITHUB_OWNER, REPO_DOC_FILES, repoFromImage, repoUrl } from "./sources/repos.ts";
 
 const WIKI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(WIKI_DIR, "..");
@@ -40,15 +47,16 @@ async function main(): Promise<void> {
   const token = process.env.WIKI_DOCS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "";
   if (!local && !token) {
     // Two distinct failures, and the rate limit is the one that actually bites.
-    // Ten of the twelve estate repos are public, so an unauthenticated run does
-    // not 404 its way to an empty cache — it succeeds until the 60/hour per-IP
-    // quota runs out partway through, then reports nothing for everything after
-    // that point. Only amber and switchyard are private. Naming both causes is
-    // the difference between a puzzling wiki and an actionable warning, and this
+    // Most of the estate's repos are public, so an unauthenticated run does not
+    // 404 its way to an empty cache — it succeeds until the 60/hour per-IP quota
+    // runs out partway through, then reports nothing for everything after that
+    // point. Only amber and switchyard are private. Naming both causes is the
+    // difference between a puzzling wiki and an actionable warning, and this
     // string is the copy someone actually hits when debugging an empty cache.
     warn(
       "no token in WIKI_DOCS_TOKEN / GH_TOKEN / GITHUB_TOKEN — unauthenticated requests get " +
-        "60/hour per IP and this fetch needs ~48, so it will run out partway through; " +
+        "60/hour per IP and this fetch makes one per repo per file " +
+        `(${REPO_DOC_FILES.length + 1} each), so it will run out partway through; ` +
         "the private repos (amber, switchyard) will also 404",
     );
   }
@@ -60,6 +68,7 @@ async function main(): Promise<void> {
 
   let cached = 0;
   let absent = 0;
+  let maps = 0;
   for (const repo of repos) {
     const dest = join(cacheDir, repo);
     mkdirSync(dest, { recursive: true });
@@ -95,9 +104,100 @@ async function main(): Promise<void> {
       writeFileSync(join(dest, file), body, "utf8");
       cached++;
     }
+
+    // The architecture IR (SERV-159), on the same three arms as the docs above and
+    // for the same reasons. Cached under its own flat name so the Markdown
+    // ingestion path — which escapes braces and rewrites links — cannot reach it.
+    const ir =
+      repo === SELF
+        ? readLocal(join(REPO_ROOT, ARCHITECTURE_IR_PATH))
+        : local
+          ? readLocal(join(localRoot, repo, ARCHITECTURE_IR_PATH))
+          : rateLimited
+            ? null
+            : await fetchFile(repo, ARCHITECTURE_IR_PATH, token);
+
+    if (ir === null) continue;
+    writeFileSync(join(dest, ARCHITECTURE_CACHE_FILE), ir, "utf8");
+    maps++;
+
+    // A pinned revision means the IR carries source evidence, and archify verifies
+    // that with git before it will render: the commit must exist locally and every
+    // `sources[]` path must be a blob at it. So the pinned commit has to be on disk
+    // by the time the generator runs. A malformed IR reaches the generator without
+    // an evidence store and archify reports it on the page — see loadArchitecture.
+    const { repository } = parseArchitectureMeta(ir);
+    if (repository) {
+      // In `--local` mode the objects come from the sibling checkout, which keeps
+      // that mode genuinely offline; otherwise from GitHub, including for this repo
+      // — `actions/checkout` is depth 1, so the pinned commit is usually not in the
+      // CI workspace even though this repo's own IR was read from it.
+      const objectSource = local ? (repo === SELF ? REPO_ROOT : join(localRoot, repo)) : repoUrl(repo);
+      cacheEvidence(repo, dest, repository.revision, objectSource, token);
+    }
   }
 
-  process.stdout.write(`fetch: ${cached} files cached, ${absent} absent\n`);
+  process.stdout.write(`fetch: ${cached} files cached, ${absent} absent, ${maps} architecture map(s)\n`);
+}
+
+/**
+ * Put the pinned commit on disk so archify can verify the IR's `sources[]` against
+ * it. An object store, not a checkout: archify reads every source with `git
+ * cat-file`, so `--depth 1` of the one commit is the whole requirement — 848 KB and
+ * half a second for this repo, against a full clone.
+ *
+ * `origin` is set to the CANONICAL url for the repo this page is about, not to the
+ * one the IR names. archify compares the two, and pointing origin at the IR's own
+ * value would make that check vacuous; as written it asserts that a repo's map
+ * actually describes that repo.
+ *
+ * NOT FATAL, like everything else in this file. A failure leaves no evidence
+ * directory, the generator renders without `--repo-root`, and archify puts the
+ * reason on the repo's page. A map must not be able to block shipping the stack.
+ */
+function cacheEvidence(repo: string, dest: string, revision: string, objectSource: string, token: string): void {
+  const root = join(dest, ARCHITECTURE_EVIDENCE_DIR);
+  mkdirSync(root, { recursive: true });
+
+  const steps: string[][] = [
+    ["init", "--quiet"],
+    ["remote", "add", "origin", repoUrl(repo)],
+    ["fetch", "--depth", "1", "--quiet", objectSource, revision],
+  ];
+
+  for (const args of steps) {
+    const result = spawnSync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      timeout: 120_000,
+      env: { ...process.env, ...gitAuthEnv(token) },
+    });
+    if (result.error || result.status !== 0) {
+      const reason = (result.error?.message ?? result.stderr ?? "").trim() || `git ${args[0]} exited ${result.status}`;
+      warn(`${repo}: could not cache evidence for ${revision.slice(0, 7)} — ${reason}`);
+      rmSync(root, { recursive: true, force: true });
+      return;
+    }
+  }
+}
+
+/**
+ * Credentials for a private repo's evidence fetch, as `GIT_CONFIG_*` rather than in
+ * the remote URL. Both alternatives leak: a URL passed on the command line shows up
+ * in `ps`, and one written with `remote add` is persisted in `.git/config` inside
+ * the workspace. This form is what `actions/checkout` uses, and it survives neither
+ * way. `GIT_TERMINAL_PROMPT` matters just as much — without it, a private repo and
+ * no token is a hung build rather than a warning.
+ */
+function gitAuthEnv(token: string): Record<string, string> {
+  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  if (!token) return env;
+
+  return {
+    ...env,
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+  };
 }
 
 /**

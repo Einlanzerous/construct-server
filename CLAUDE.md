@@ -607,6 +607,23 @@ anything deploys or gets versioned.
   **comments**, which are the best documentation in that file and which
   `docker compose config` discards. Build it in a container (`make wiki-build`), not
   against host node.
+  **A repo's system map is the one thing on a wiki page that a person authors, and
+  it is authored in that repo** (SERV-159). A repo that commits
+  `docs/architecture.archify.json` gets an interactive map on its page, rendered at
+  build time by the vendored archify in `wiki/vendor/archify` — pinned per SERV-91,
+  and vendored because it is `private: true`, is not on npm, and its repository root
+  has no `package.json`. That does not bend the rule above: the IR is a source file
+  in the repo it describes, the same category as that repo's `CLAUDE.md`, and the
+  render is the generator's job. Nothing hand-made reaches `wiki/docs/`.
+  Two consequences. **The build container is `node:22` and not `node:22-alpine`**,
+  because archify verifies each component's `SRC` links against the pinned commit
+  with `git cat-file` before it will render — alpine ships no git, and `apk add git`
+  is unavailable to a container deliberately running `--user $(id -u)`, besides
+  being the floating install SERV-91 exists to stop. And **a map can never fail the
+  build**: every failure becomes a warning block on that repo's page carrying
+  archify's own diagnostic, and is named in the build log. The IRs are written in
+  other repos, so the alternative is the estate wiki ceasing to publish because
+  somebody moved a node in switchyard. Design of record: `docs/estate-wiki.md`.
 - **The delivery ledger gets ONE host-side cron, whatever the producer count**
   (SERV-111). `delivery-prober.timer` runs `scripts/probe-delivery.sh` every 5
   minutes, which probes the **dev** tier over loopback and posts what it saw to
