@@ -665,6 +665,14 @@ services:
       # detail, and a probe that needed a Cloudflare assertion could never pass.
       # Mirrors the HEALTHCHECK the image already ships; restated here because compose
       # is where this stack's health story is readable.
+      #
+      # Proven to FAIL, which is the half you cannot learn from it passing (SERV-156):
+      # against mcp:4.29 this exact command exits 1 in a bare container with nothing
+      # listening on 4080, and 0 once the server is up. `wget` is /usr/bin/wget in the
+      # image, so the probe is not silently a shell no-op. Booting with no
+      # MCP_CF_ACCESS_AUD was checked at the same time and throws in loadHttpEnv
+      # rather than starting degraded, which is what makes the REQUIRED note above a
+      # statement about observed behaviour and not about intent.
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4080/healthz || exit 1"]
       interval: 30s
       timeout: 5s

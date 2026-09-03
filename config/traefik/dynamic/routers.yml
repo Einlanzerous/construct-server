@@ -465,6 +465,14 @@ http:
     # MCP server". The fix then is a narrow exact-`Path()` exemption for that one
     # path, argued for in check-edge-auth.sh's allowlist WITH the evidence — never a
     # PathPrefix, and never pre-emptively.
+    #
+    # That path is verified, not guessed (against mcp:4.29): an unauthenticated
+    # POST /mcp to the origin answers 401 with
+    #   WWW-Authenticate: Bearer resource_metadata="https://mcp.zerogravity.industries/.well-known/oauth-protected-resource/mcp"
+    # and that exact path answers 200 with the resource document naming the team
+    # domain as the authorization server. So the pointer is built from MCP_PUBLIC_URL
+    # rather than from the request's Host, which is the reason that variable is
+    # configured — a forged Host cannot aim a client's discovery elsewhere.
     switchyard-mcp:
       entryPoints:
         - internal

@@ -345,17 +345,23 @@ the ticket to **Verified**, or back to Blocked with the failing criteria as a co
     script refuses rather than guesses, and every refusal degrades to the old whole-stack
     pull — the dangerous direction is a scope narrowing to nothing, which would be a green
     deploy that shipped no change at all.*
-  - ***What is deliberately still unbounded:** four of the thirteen pins cover two images each and
-    recreate in pairs — `APERTURE_TAG`, `CENTRIFUGE_TAG`, `SWITCHYARD_TAG` (backend +
-    frontend) and `INTERLOCK_TAG` (web + worker), which ship from one release; and a rollback to
+  - ***What is deliberately still unbounded:** four of the thirteen pins cover more than one
+    image and recreate together — `SWITCHYARD_TAG` covers **three** (backend, frontend and
+    `switchyard-mcp`, SERV-99), while `APERTURE_TAG`, `CENTRIFUGE_TAG` and `INTERLOCK_TAG`
+    (web + worker) cover two each, each shipping from one release; and a rollback to
     `0.13` fetches the newest `0.13` patch rather than the digest prod ran the last time it
     was on `0.13`. Exact-version pins — SERV-109's option 2 — would close the second and cost
     the "a security fix lands without an edit" property, which was chosen on purpose and
     kept. Keeping it means "roll back to 0.13" is a statement about the version, not about
     the bytes; `make versions` and the `revision` label are what answer the bytes question.*
 - *It verifies the tag exists in the registry **before** committing, across every image
-  behind the pin — a repo's backend and frontend ship from one release, so a version
-  that published for one and not the other is refused rather than half-deployed.*
+  behind the pin — a repo ships one release however many images are in it, so a version
+  that published for some and not the others is refused rather than half-deployed. That
+  check also sets a **rollback floor** wherever an image joined a repo later than its
+  siblings: `switchyard/mcp` first published at 4.18, so `SWITCHYARD_TAG=4.17` is refused
+  outright. The floor is a consequence of the rule, not a separate list to maintain — it
+  moves on its own whenever an image is added, and it is better met at the tag check than
+  discovered halfway through a rollback.*
 
 *The `deployments` row is no longer outstanding. **SERV-117** wired the three call sites
 that actually deploy — `deploy.yml`, `deploy-dev.yml`, and `promote.yml` by way of the

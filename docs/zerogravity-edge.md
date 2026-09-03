@@ -239,7 +239,19 @@ is mapped, or the MCP is briefly open to anyone who finds the name:
 5. Only now map the hostname to http://traefik:9080, same as every other tunneled app.
 6. Connect it in Cowork: Customize → Connectors → Add custom connector →
    https://mcp.zerogravity.industries/mcp
+7. Register it in the delivery inventory, once it is deployed and reporting:
+   ./scripts/register-delivery-service.sh switchyard-mcp 4080
 ```
+
+**Step 7 is the one nothing will remind you about.** The delivery reconciler does not
+auto-discover services (SWY-284), and `register-delivery-service.sh` refuses until the
+service is deployed and reporting a version — so it cannot be done before the merge, and
+it is the step most likely to be dropped. Nothing goes red if it is: `delivery-reportable.sh`
+filters reports to services Switchyard already tracks, so an unregistered `switchyard-mcp`
+produces no `claimed_not_confirmed` row. That is precisely the problem — the estate gains a
+first-party prod service the delivery matrix will never show, and the failure mode is a
+silent gap in coverage rather than a red cell. Register **after** the release, never before,
+or the row is permanently red instead.
 
 **The AUD is what gates the merge, not a nice-to-have.** `MCP_CF_ACCESS_AUD` is
 required by the image — the process throws at boot rather than starting up unable to
