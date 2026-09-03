@@ -231,6 +231,26 @@ raw = open(compose_file).read()
 def env_values(var):
     return re.findall(rf"^\s*-\s*{var}=(.*)$", raw, re.M)
 
+# Parsed once, here, because two checks below need it: the entrypoint-bind check
+# and the SERV-161 audience pair. RAW compose deliberately — never
+# `docker compose config`, which interpolates every variable and would pull the
+# rendered .env into this script's view (the same rule the wiki generator
+# follows, SERV-101).
+compose_doc = yaml.safe_load(raw) or {}
+
+def service_env(service):
+    """A service's environment as a dict, whether compose spells it as a list
+    of KEY=VALUE strings or as a mapping. Returns {} for a service that is not
+    in the file, so a caller can ask about a service that may not be deployed."""
+    spec = ((compose_doc.get("services") or {}).get(service) or {}).get("environment") or {}
+    if isinstance(spec, dict):
+        return {k: "" if v is None else str(v) for k, v in spec.items()}
+    out = {}
+    for item in spec:
+        k, _, v = str(item).partition("=")
+        out[k.strip()] = v
+    return out
+
 aud_map_raw = env_values("CF_ACCESS_AUD_MAP")
 if len(aud_map_raw) != 1:
     bad(f"expected exactly one CF_ACCESS_AUD_MAP in the compose file, found {len(aud_map_raw)}")
@@ -287,11 +307,58 @@ for aud in service_auds:
 if service_auds and all(a.strip() in mapped_auds for a in service_auds if a.strip()):
     print(f"  ok    {len(service_auds)} service-side CF_ACCESS_AUD value(s) agree with the map")
 
+# The one Access audience the sweep above structurally CANNOT see (SERV-161).
+#
+# That pattern matches names ENDING in CF_ACCESS_AUD. `CF_ACCESS_MCP_AUD` does
+# not, so it was invisible — and widening the pattern is the wrong fix, because
+# `[A-Z0-9_]*CF_ACCESS_AUD[A-Z0-9_]*` also swallows CF_ACCESS_AUD_MAP and would
+# compare the guard's whole map string against itself. It is named here instead.
+#
+# It is also a DIFFERENT question from the sweep. Everything above asks whether
+# an audience is registered for a host — a routing fact. This asks whether the
+# API server will ACCEPT an assertion minted for the MCP application when
+# switchyard-mcp forwards it to POST /v1/auth/sso/cloudflare, which is an
+# application-level trust decision one hop past anything the edge inspects.
+#
+# Why it earns a check of its own rather than a line in a runbook: it is the only
+# Access misconfiguration in this estate that fails SILENTLY AND GREEN. Every
+# other one is loud — an unmapped host is refused by the guard, a router missing
+# cf-access-jwt fails above, an unset MCP_CF_ACCESS_AUD crash-loops the
+# container. When this one was wrong (SERV-99, fixed in #184) Access
+# authenticated the user, the guard passed the request, switchyard-mcp verified
+# the assertion against its own AUD, the container was healthy, this script
+# passed both halves and assert-healthy reported 19/0 — and every remote tool
+# call failed. The only evidence anywhere was a 401 in switchyard's request log.
+#
+# Gated on switchyard-mcp being IN the compose file, not on the variable being
+# present: deploying that container is what makes the exchange necessary, so
+# absence is a failure exactly when the container exists, and this stays quiet
+# for anyone who has not deployed it. Config-only — both values are tracked, so
+# no live probe can tell you anything this cannot.
+MCP_SVC, API_SVC = "switchyard-mcp", "switchyard"
+if MCP_SVC in (compose_doc.get("services") or {}):
+    mcp_side = service_env(MCP_SVC).get("MCP_CF_ACCESS_AUD", "").strip()
+    api_side = service_env(API_SVC).get("CF_ACCESS_MCP_AUD", "").strip()
+    if not api_side:
+        bad(f"{MCP_SVC} is deployed but {API_SVC} carries no CF_ACCESS_MCP_AUD")
+        print(f"        The SSO exchange accepts only CF_ACCESS_AUD without it, and the MCP")
+        print(f"        forwards assertions carrying the MCP application's audience — so every")
+        print(f"        remote tool call 401s on POST /v1/auth/sso/cloudflare while every other")
+        print(f"        check here passes. Set it on {API_SVC} to {MCP_SVC}'s MCP_CF_ACCESS_AUD.")
+    elif not mcp_side:
+        bad(f"{MCP_SVC} carries no MCP_CF_ACCESS_AUD to check {API_SVC}'s CF_ACCESS_MCP_AUD against")
+    elif api_side != mcp_side:
+        bad(f"{API_SVC} CF_ACCESS_MCP_AUD ({api_side[:16]}…) != {MCP_SVC} MCP_CF_ACCESS_AUD ({mcp_side[:16]}…)")
+        print("        These name the same Access application and must be byte-identical.")
+        print("        A mismatch fails exactly like the missing variable: silently, at the")
+        print("        SSO exchange, with nothing else red.")
+    else:
+        print(f"  ok    {API_SVC} accepts {MCP_SVC}'s Access audience (CF_ACCESS_MCP_AUD)")
+
 # The address Traefik binds `internal` to must be an address Traefik holds.
 static = yaml.safe_load(open(static_file)) or {}
 addr = ((static.get("entryPoints") or {}).get("internal") or {}).get("address", "")
 ip = addr.rsplit(":", 1)[0] if ":" in addr else ""
-compose_doc = yaml.safe_load(raw) or {}
 traefik_service, edge_net = os.environ["TRAEFIK_SERVICE"], os.environ["EDGE_NET"]
 traefik_nets = ((compose_doc.get("services") or {}).get(traefik_service) or {}).get("networks") or {}
 declared = ""
