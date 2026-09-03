@@ -26,27 +26,37 @@
 #      every router is exempt (placard) must NOT carry an AUD: an Access
 #      application on a host the origin serves openly means the edge and the
 #      origin disagree about whether it is open.
-#   3. Where a service validates the same assertion itself for SSO (switchyard,
-#      lyceum), its CF_ACCESS_AUD agrees with the guard's entry for its host.
-#      This is a regex sweep over variable names ENDING in CF_ACCESS_AUD, which
-#      is why 4 exists separately.
-#   4. When switchyard-mcp is in the compose file, switchyard's CF_ACCESS_MCP_AUD
-#      equals its MCP_CF_ACCESS_AUD (SERV-161). A different question from 3: that
+#   3. No two hosts in that map share an AUD (SERV-162). Every app on the team
+#      domain is signed by the same key, so a shared audience is the
+#      single-static-audience failure the per-host map exists to prevent — a wiki
+#      token opening Switchyard. Nothing asserted it until SERV-162.
+#   4. Where a service validates the same assertion itself for SSO (switchyard,
+#      lyceum, chronicle), its CF_ACCESS_AUD matches the map entry for ITS OWN
+#      HOST — not merely "appears somewhere in the map", which a real but
+#      wrong-host audience satisfies, i.e. exactly the case 3 is about. The link
+#      is router -> service -> loadBalancer url -> container. A routed container
+#      carrying no audience of its own is treated as a proxy and lends its host to
+#      the dependency that owns one (switchyard's host is routed at
+#      switchyard-frontend); one that carries its own audience is its own
+#      application and lends nothing, which is what keeps switchyard-mcp from
+#      lending its host to the backend it depends on.
+#   5. When switchyard-mcp is in the compose file, switchyard's CF_ACCESS_MCP_AUD
+#      equals its MCP_CF_ACCESS_AUD (SERV-161). A different question from 4: that
 #      one asks whether an audience is registered for a HOST, this asks whether
 #      the API server will ACCEPT an assertion minted for the MCP application when
 #      the MCP forwards it to POST /v1/auth/sso/cloudflare. It is here because it
 #      is the only Access misconfiguration in this estate that fails silently and
 #      green — see the block itself for what that looked like.
-#   5. traefik.yml's `internal` address matches Traefik's ipv4_address in the
+#   6. traefik.yml's `internal` address matches Traefik's ipv4_address in the
 #      compose file — if they disagree, Traefik binds an address it does not hold
 #      and every tunneled app goes dark.
-#   6. LIVE: the guard reports healthy and is in `enforce` mode.
-#   7. LIVE: a spoofed-Host request to the internal entrypoint returns 403, for
+#   7. LIVE: the guard reports healthy and is in `enforce` mode.
+#   8. LIVE: a spoofed-Host request to the internal entrypoint returns 403, for
 #      every tunneled host, from the HOST — which reaches container ports whether
 #      or not they are published, and is the probe angle SERV-107's review asked
 #      for.
-#   8. LIVE: a host with no router at all does not get a 200 either.
-#   9. LIVE: the entrypoint answers on its bound address and on NO OTHER address the
+#   9. LIVE: a host with no router at all does not get a 200 either.
+#  10. LIVE: the entrypoint answers on its bound address and on NO OTHER address the
 #      Traefik container holds. `address: "1.2.3.4:9080"` is the whole of what makes
 #      the entrypoint unreachable from the app network (SERV-107) — and until this
 #      check existed, nothing asserted it: every probe above aims at the bound
@@ -188,7 +198,12 @@ def bad(msg):
 # entry and dev has none.
 EXEMPT = json.loads(os.environ["EXEMPT_JSON"])
 
-routers = (yaml.safe_load(open(routers_file)) or {}).get("http", {}).get("routers", {}) or {}
+_routers_doc = (yaml.safe_load(open(routers_file)) or {}).get("http", {}) or {}
+routers = _routers_doc.get("routers", {}) or {}
+# The service backends, needed to answer WHICH host a given container is served
+# on (SERV-162). Without this the audience cross-check can only ask whether a
+# value appears somewhere in the map, which a wrong-but-real AUD satisfies.
+router_services = _routers_doc.get("services", {}) or {}
 internal = {n: r for n, r in routers.items() if "internal" in (r.get("entryPoints") or [])}
 
 if not internal:
@@ -311,23 +326,126 @@ if not unmapped and not dead and not misgated and aud_map:
     gated_hosts = len(hosts) - len(open_hosts)
     print(f"  ok    CF_ACCESS_AUD_MAP covers exactly the {gated_hosts} gated tunneled host(s)")
 
+# TWO HOSTS MUST NEVER SHARE AN AUDIENCE (SERV-162).
+#
+# This is the condition the per-host map exists to prevent, stated in CLAUDE.md:
+# every app on the team domain is signed by the same key, so a single static
+# audience would let a wiki token open Switchyard. Nothing asserted it — aud_map
+# is a host→AUD dict and the cross-check below compared against
+# set(aud_map.values()), so pointing two hosts at one tag was green.
+by_aud = {}
+for host, aud in aud_map.items():
+    by_aud.setdefault(aud, []).append(host)
+shared_auds = {a: sorted(hs) for a, hs in by_aud.items() if len(hs) > 1}
+for aud, sharers in sorted(shared_auds.items()):
+    bad(f"CF_ACCESS_AUD_MAP gives one AUD to {len(sharers)} hosts: {', '.join(sharers)}")
+    print(f"        aud: {aud}")
+    print("        Access audiences are per-application. Two hosts on one tag means an")
+    print("        assertion minted for either opens both, which is the single-static-")
+    print("        audience failure the per-host map exists to prevent. If sharing is ever")
+    print("        genuinely right it belongs in the exemption allowlist with an argument,")
+    print("        not in a loosened check.")
+if aud_map and not shared_auds:
+    print(f"  ok    all {len(aud_map)} mapped AUD(s) are distinct")
+
 # Cross-check against the AUDs the apps carry for their own SSO sign-in. A
 # mismatch means one of the two is stale, and the symptom would be "SSO works but
 # the page 403s" — a confusing failure worth catching as a config diff instead.
 # SERV-139: an OPTIONAL service prefix. Anchored on the literal name this missed
 # CHRONICLE_CF_ACCESS_AUD entirely — Chronicle verifies the assertion in-process
 # exactly as switchyard and lyceum do, so it is squarely in this check's scope,
-# and the agreement below read as satisfied on a value it never read.
-# CF_ACCESS_AUD_MAP stays excluded on its own: the trailing "=" in the pattern
-# does not match that line's "_MAP=".
-service_auds = env_values(r"[A-Z0-9_]*CF_ACCESS_AUD")
+# and the agreement read as satisfied on a value it never read.
+#
+# SERV-162: matched against THAT SERVICE'S OWN HOST rather than against the set
+# of all mapped values. "Appears somewhere in the map" is satisfied by a real but
+# WRONG audience — precisely the wiki-token-opens-Switchyard case — so the weaker
+# form could not catch the thing the map is for. The link is
+# router → service → loadBalancer url → container name, which is why the service
+# backends are parsed above.
+AUD_KEY = re.compile(r"^[A-Z0-9_]*CF_ACCESS_AUD$")   # excludes CF_ACCESS_AUD_MAP
+
+def backend_containers(service_name):
+    """Container names behind a traefik service, from its loadBalancer urls."""
+    lb = ((router_services.get(service_name) or {}).get("loadBalancer") or {})
+    out = set()
+    for server in (lb.get("servers") or []):
+        m = re.match(r"https?://([^:/]+)", (server or {}).get("url", ""))
+        if m:
+            out.add(m.group(1))
+    return out
+
+# container -> the GATED internal hosts it is served on.
+container_hosts = {}
+for name, r in internal.items():
+    if name in EXEMPT:
+        continue
+    for h in re.findall(r"Host\(`([^`]+)`\)", r.get("rule", "")):
+        for c in backend_containers(r.get("service", "")):
+            container_hosts.setdefault(c, set()).add(h.lower())
+
+# A routed container that carries NO audience of its own is a proxy in front of
+# something that does — switchyard's tunneled host is routed at
+# switchyard-frontend, which serves the SPA and passes /v1 to the backend, and it
+# is the BACKEND that verifies the assertion and holds CF_ACCESS_AUD. Lend the
+# proxy's host to the dependency that owns the audience, so switchyard's own AUD
+# is checked against its own host rather than falling back to the weak form.
+#
+# The "carries no audience of its own" condition is load-bearing, not incidental:
+# switchyard-mcp ALSO depends_on switchyard, and it is a separate Access
+# application with its own AUD. Lending its host too would demand that
+# switchyard's CF_ACCESS_AUD equal the MCP's — a confident, wrong FAIL. A
+# container holding its own audience represents its own application and lends
+# nothing.
+def has_own_aud(svc):
+    return any(AUD_KEY.match(k) and v for k, v in service_env(svc).items())
+
+for proxy in list(container_hosts):
+    if proxy not in (compose_doc.get("services") or {}) or has_own_aud(proxy):
+        continue
+    deps = ((compose_doc.get("services") or {}).get(proxy) or {}).get("depends_on") or {}
+    for dep in (deps if isinstance(deps, (list, dict)) else []):
+        if has_own_aud(dep):
+            container_hosts.setdefault(dep, set()).update(container_hosts[proxy])
+
+checked, unresolved = 0, []
+for svc_name in (compose_doc.get("services") or {}):
+    for key, value in service_env(svc_name).items():
+        if not AUD_KEY.match(key) or value is None:
+            continue
+        aud = value.strip()
+        if not aud:
+            continue
+        own = container_hosts.get(svc_name, set())
+        if not own:
+            # No gated internal router points at this container. Fall back to the
+            # old, weaker question rather than failing: a service may verify an
+            # assertion in-process without being served through this edge at all.
+            unresolved.append((svc_name, key, aud))
+            continue
+        for h in sorted(own):
+            expected = aud_map.get(h)
+            if expected is None:
+                continue          # already reported as an unmapped host above
+            if aud != expected:
+                bad(f"{svc_name} {key} does not match the map entry for {h}")
+                print(f"        {svc_name}: {aud}")
+                print(f"        map[{h}]: {expected}")
+                print("        A value that is real but belongs to ANOTHER host is the failure")
+                print("        this compares per-host to catch: it would satisfy \"appears")
+                print("        somewhere in the map\" while letting that host's token open this one.")
+            else:
+                checked += 1
+
 mapped_auds = set(aud_map.values())
-for aud in service_auds:
-    aud = aud.strip()
-    if aud and aud not in mapped_auds:
-        bad(f"a service carries CF_ACCESS_AUD={aud[:16]}… which is in no CF_ACCESS_AUD_MAP entry")
-if service_auds and all(a.strip() in mapped_auds for a in service_auds if a.strip()):
-    print(f"  ok    {len(service_auds)} service-side CF_ACCESS_AUD value(s) agree with the map")
+for svc_name, key, aud in unresolved:
+    if aud not in mapped_auds:
+        bad(f"{svc_name} carries {key} which is in no CF_ACCESS_AUD_MAP entry")
+if checked:
+    print(f"  ok    {checked} service-side AUD(s) match the map entry for their own host")
+if unresolved:
+    names = ", ".join(sorted(f"{s}.{k}" for s, k, _ in unresolved))
+    print(f"  ok    {len(unresolved)} service-side AUD(s) with no gated router checked against the")
+    print(f"        map as a whole ({names}) — no internal router names their container")
 
 # The one Access audience the sweep above structurally CANNOT see (SERV-161).
 #
