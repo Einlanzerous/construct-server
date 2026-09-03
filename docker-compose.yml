@@ -435,6 +435,31 @@ services:
       # Trust dashboard. A CF-verified email must match a switchyard user's email.
       - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
       - CF_ACCESS_AUD=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de
+      # The REMOTE MCP endpoint's audience, accepted here in ADDITION to the web
+      # app's (SWY-260 / SERV-99). switchyard-mcp holds no token of its own and
+      # forwards each caller's Cf-Access-Jwt-Assertion here verbatim
+      # (mcp/src/http.ts) to exchange it for that person's API token — and those
+      # JWTs carry the MCP application's AUD, because Access audiences are
+      # per-application. Without this the exchange 401s on every remote tool call
+      # while the whole edge looks correct: Access authenticates, the guard passes
+      # the request, the MCP server verifies the assertion against its own AUD,
+      # and only this last hop rejects it. The symptom is Claude reporting
+      # "Authorization with Switchyard failed", and the only place it is visible
+      # is a 401 on POST /v1/auth/sso/cloudflare in switchyard's log.
+      #
+      # It WIDENS and never enables: cfAccessConfig() returns null unless
+      # CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD are both set, so this alone turns
+      # nothing on. Must equal MCP_CF_ACCESS_AUD on the switchyard-mcp service —
+      # the third place this one tag appears, after that variable and the
+      # mcp.zerogravity.industries entry in cf-access-guard's CF_ACCESS_AUD_MAP.
+      # check-edge-auth.sh cross-checks the other two against each other; it does
+      # NOT know about this one, because it reasons about routers and hosts and
+      # this is an application-level trust decision. Its sweep matches names
+      # ENDING in CF_ACCESS_AUD, which this one does not — so a typo here fails
+      # exactly as silently as the missing variable did, with every edge signal
+      # green and only a 401 in switchyard's log. Tracked as SERV-161; until that
+      # lands, this pair is checked by reading it.
+      - CF_ACCESS_MCP_AUD=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466
       # Signet connector (SWY-165 / SERV-44). Signet is a host daemon, not a
       # container — reach it via host.docker.internal (see extra_hosts below).
       # Both vars absent => connector self-disables (Admin › Credentials hidden,
