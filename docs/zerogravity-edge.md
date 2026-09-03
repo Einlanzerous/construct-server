@@ -238,11 +238,19 @@ is mapped, or the MCP is briefly open to anyone who finds the name:
    WWW-Authenticate: Bearer resource_metadata="…" to discover the authorization
    server, and a redirect-to-HTML surfaces as "Couldn't reach the MCP server". That
    is the specific reason the earlier attempts failed.
-4. Copy the application's AUD tag into BOTH places it is read — MCP_CF_ACCESS_AUD on
-   the switchyard-mcp service and the mcp.zerogravity.industries entry in
-   CF_ACCESS_AUD_MAP on cf-access-guard. It is per-application and is NOT
-   switchyard's d3404fc3…; sharing that one would let a Switchyard session token
-   drive the MCP.
+4. Copy the application's AUD tag into all THREE places it is read:
+     - MCP_CF_ACCESS_AUD on the switchyard-mcp service
+     - the mcp.zerogravity.industries entry in CF_ACCESS_AUD_MAP on cf-access-guard
+     - CF_ACCESS_MCP_AUD on the SWITCHYARD service (SERV-99) — this is the one that
+       is easy to miss and fails silently. switchyard-mcp forwards each caller's
+       assertion to switchyard to exchange for that person's token, and those JWTs
+       carry the MCP application's audience, so without it every remote tool call
+       401s on POST /v1/auth/sso/cloudflare while Access, the guard, the container
+       and check-edge-auth.sh all stay green. check-edge-auth.sh cross-checks the
+       first two and CANNOT see the third (SERV-161), so on a rotation this one is
+       verified by reading it.
+   The tag is per-application and is NOT switchyard's d3404fc3…; sharing that one
+   would let a Switchyard session token drive the MCP.
 5. Only now add the tunnel route — Networks > Tunnels > the PROD tunnel (not the
    dev one, SERV-93) > "published application routes" in the current UI, "public
    hostnames" in older ones. Type HTTP, URL traefik:9080, no path. Same as every
@@ -250,7 +258,7 @@ is mapped, or the MCP is briefly open to anyone who finds the name:
    step 2; both are required.
 6. Connect it in Cowork: Customize → Connectors → Add custom connector →
    https://mcp.zerogravity.industries/mcp
-7. Register it in the delivery inventory — BLOCKED UPSTREAM today, see below:
+7. Register it in the delivery inventory — BLOCKED UPSTREAM on SWY-399, see below:
    ./scripts/register-delivery-service.sh switchyard-mcp 4080
 ```
 
@@ -261,7 +269,9 @@ Verified against the deployed 4.29 container: `switchyard-mcp`'s `/healthz` answ
 refuses, correctly. The data is not missing, only unexposed: the image carries
 `org.opencontainers.image.version=4.29.3` and the matching revision label. That makes it
 an upstream fix in switchyard's repo — the PRINCIPLES.md §4 / SWY-192 reporting contract,
-which §4 says new services adopt on day one — and nothing this repo can do.
+which §4 says new services adopt on day one — and nothing this repo can do. **Tracked as
+SWY-399**, which is how to answer "has it shipped yet?": nothing here reddens to prompt
+the question, so the ticket is the only handle on it.
 
 **Do NOT reach for `--allow-no-version` to get past it.** That flag is the one move that
 converts a visible gap into an invisible one. A `no_version` probe updates the pair's
@@ -331,8 +341,14 @@ anything here:
   `Path()` exemption the router comment describes is not needed. Do not add one.
 - **A `302` to a login page is the failure that matters**, and it is an Access
   application problem rather than an origin one: Managed OAuth is not applying. The
-  origin's own 401 (verifiable with `docker exec`, see the router comment) is already
-  correct and is not what a client sees.
+  origin's own 401 is already correct and is not what a client sees — confirm that
+  before touching anything at the edge:
+
+  ```bash
+  docker exec switchyard-mcp sh -c \
+    'wget -qS -O- --post-data="{}" --header="Content-Type: application/json" \
+     http://localhost:4080/mcp 2>&1 | head -3'
+  ```
 
 ### Verification (subset of SERV-30, run once the relay + tunnel exist)
 
