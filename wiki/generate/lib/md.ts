@@ -56,7 +56,16 @@ export function table(headers: string[], rows: (string | null)[][]): string {
 }
 
 export function fence(lang: string, body: string): string {
-  return ["```" + lang, body, "```", ""].join("\n");
+  // The delimiter is sized to the body, not fixed at three backticks. A closing
+  // fence only closes one at least as long as the opening, and a body CAN carry a
+  // line-initial ``` — a reproduced document, or a diagnostic interpolating strings
+  // authored in another repo. Fixed at three, such a body closes the block early and
+  // its remainder is handed to Vue as Markdown, where one angle bracket fails the
+  // whole build. Sizing up leaves the text byte-for-byte intact, where escaping it
+  // would not, and every existing call site is unaffected.
+  const runs = [...body.matchAll(/^[ \t]*(`{3,})/gm)].map((m) => m[1]?.length ?? 0);
+  const delim = "`".repeat(Math.max(3, ...runs.map((n) => n + 1)));
+  return [delim + lang, body, delim, ""].join("\n");
 }
 
 export function section(title: string, body: string, level = 2): string {

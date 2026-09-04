@@ -619,7 +619,9 @@ anything deploys or gets versioned.
   because archify verifies each component's `SRC` links against the pinned commit
   with `git cat-file` before it will render — alpine ships no git, and `apk add git`
   is unavailable to a container deliberately running `--user $(id -u)`, besides
-  being the floating install SERV-91 exists to stop. And **a map can never fail the
+  being the floating install SERV-91 exists to stop. Note that the Debian image
+  *carries* git rather than pinning it: `node:22` is a moving tag, so the git behind
+  it changes with no edit here — the same trap as `traefik:v3.3`. And **a map can never fail the
   build**: every failure becomes a warning block on that repo's page carrying
   archify's own diagnostic, and is named in the build log. The IRs are written in
   other repos, so the alternative is the estate wiki ceasing to publish because

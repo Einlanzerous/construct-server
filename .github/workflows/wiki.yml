@@ -73,8 +73,9 @@ jobs:
         #
         # `node:22`, not `node:22-alpine`: the architecture maps (SERV-159) verify
         # their source evidence with git in both the fetch and the generate step, and
-        # the Debian image pins git in the same tag as node. See the note in the
-        # Makefile for why `apk add git` is not the cheaper option it looks like.
+        # the Debian image carries git in its base where alpine does not. See the
+        # note in the Makefile for why `apk add git` is not the cheaper option it
+        # looks like — and for why this is not a git PIN, since `node:22` moves.
         #
         # Two tokens, because they solve different halves of the problem, and the
         # first run after merge proved the rate limit is the bigger half.

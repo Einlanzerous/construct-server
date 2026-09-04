@@ -14,7 +14,8 @@
 // corpus is emitted unchanged.
 
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,12 +50,32 @@ export function renderArchitecture(estate: Estate, docsDir: string): Map<string,
   const results = new Map<string, Diagram>();
   const outDir = join(docsDir, "public", "architecture");
 
+  // archify renders into a scratch directory OUTSIDE docs/, and only a finished map
+  // is copied in. It stages its candidate inside whatever output directory it is
+  // given and removes it in a `finally` — which does not run when the timeout below
+  // kills it. Pointed straight at docs/public/, a timed-out render therefore leaves a
+  // partial artifact where VitePress copies `public/` verbatim, and the wiki
+  // PUBLISHES its own wreckage. Sweeping the leftovers afterwards nearly works and
+  // still races an orphaned renderer grandchild; keeping archify out of docs/
+  // altogether has no such window.
+  const scratch = mkdtempSync(join(tmpdir(), "wiki-archify-"));
+
+  try {
+    renderInto(estate, outDir, scratch, results);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  return results;
+}
+
+function renderInto(estate: Estate, outDir: string, scratch: string, results: Map<string, Diagram>): void {
   for (const repo of estate.repos) {
     const ir = repo.architecture;
     if (!ir) continue;
 
     const file = `${slug(repo.name)}.html`;
-    mkdirSync(outDir, { recursive: true });
+    const candidate = join(scratch, file);
 
     // No `--quality`: the IR's own `meta.quality_profile` decides, and the CLI flag
     // OVERRIDES it. Which profile a map is authored to is the author's call — a
@@ -65,7 +86,7 @@ export function renderArchitecture(estate: Estate, docsDir: string): Map<string,
     // `deliver` rather than `validate` then `deliver`: deliver runs the full
     // validation, checks the rendered artifact, and only commits the output file if
     // both pass. Validating first would double the render for no extra signal.
-    const args = [ARCHIFY, "deliver", "architecture", ir.irPath, join(outDir, file), "--json"];
+    const args = [ARCHIFY, "deliver", "architecture", ir.irPath, candidate, "--json"];
     if (ir.evidenceRoot) args.push("--repo-root", ir.evidenceRoot);
 
     const result = spawnSync(process.execPath, args, {
@@ -75,14 +96,16 @@ export function renderArchitecture(estate: Estate, docsDir: string): Map<string,
     });
 
     if (!result.error && result.status === 0) {
+      // Copied rather than renamed: the scratch directory is under the system tmpdir
+      // and a rename across filesystems is EXDEV. The map is under a megabyte.
+      mkdirSync(outDir, { recursive: true });
+      copyFileSync(candidate, join(outDir, file));
       results.set(repo.name, { ok: true, href: `/architecture/${file}` });
       continue;
     }
 
     results.set(repo.name, { ok: false, message: diagnose(repo.name, ir, result) });
   }
-
-  return results;
 }
 
 /**
@@ -134,5 +157,8 @@ function diagnose(repo: string, ir: Architecture, result: SpawnSyncReturns<strin
     );
   }
 
+  // Whatever this says goes into a code fence on the page. It is multi-line and it
+  // interpolates strings authored in ANOTHER repo's IR, so it can carry a fence of
+  // its own; `fence()` sizes its delimiter to the body for exactly that reason.
   return readable.join("\n");
 }

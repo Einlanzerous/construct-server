@@ -87,6 +87,17 @@ and it lives in the repo it describes, which puts it in exactly the category
 owned by the people who would notice it going wrong. The *render* is the generator's
 job. Nothing hand-made lands in `wiki/docs/`, which is still wiped on every run.
 
+**The maps are the one thing on this site that is framed, and the origin has to
+allow it.** `config/wiki/nginx.conf` sets `X-Frame-Options: DENY` at the server
+level, which — unlike `SAMEORIGIN` — has no same-origin exception, so the repo page
+would render its heading, provenance line and a working full-screen link around an
+*empty frame*, with the build, the log and the page structure all green. A
+`location /architecture/` block relaxes it to `SAMEORIGIN` for the maps alone. Note
+what could not have caught this: `vitepress build` sends no such header, so a map
+verified in the build output is still broken through nginx. Only a request through
+the deployed path answers it, which is what `REVIEW.md` already says about anything
+at the edge.
+
 It also answers the reviewer note on #108 asking for a code-level layer. An authored
 map per repo is the estate-level shape of that layer — unlike
 `graphify-out/graph.json`, which is symbol-level, single-repo, and still deferred
@@ -183,6 +194,18 @@ diagnostic and its suggested fix, and the rest of the corpus is emitted unchange
 The same failures are named in the build log, because a warning block is only seen by
 someone who visits the page.
 
+**"Leaves nothing but a warning block" is load-bearing, and a timeout nearly broke
+it.** archify stages its candidate *inside* the output directory it is given and
+removes it in a `finally`, which does not run when the render timeout kills it. Aimed
+straight at `docs/public/`, a timed-out map would leave a partial artifact exactly
+where VitePress copies `public/` verbatim — the wiki publishing its own wreckage.
+The generator therefore renders into a scratch directory under the system tmpdir and
+copies only a finished map in. Sweeping the leftovers afterwards was tried first and
+is *nearly* right: it still loses to an orphaned renderer grandchild that recreates
+the staging tree after the sweep, which is observable — kill a render early enough and
+the scratch directory reappears in `/tmp` after the generator has already deleted it.
+Keeping archify out of `docs/` has no such window.
+
 The diagnostic is rewritten to name `docs/architecture.archify.json` rather than the
 path inside the build's cache: the person who can fix it is in the other repo.
 
@@ -224,8 +247,14 @@ archify will render one, so both the fetch and the generate step need a git bina
 Alpine ships none, and `apk add git` is not the cheaper option it looks like: the
 container runs `--user $(id -u)` so that what it writes into the mounted checkout
 belongs to the invoker, and that user cannot install packages. It would also be a
-floating install of exactly the kind SERV-91 exists to stop, where the Debian tag
-pins git and node together.
+floating install of exactly the kind SERV-91 exists to stop.
+
+Be precise about what that buys, though: `node:22` **carries** git in its base image,
+it does not **pin** it. The tag is rebuilt on every 22.x patch and every Debian base
+refresh, so the git version behind it moves with no edit here — the same
+stable-looking-tag trap `CLAUDE.md` records for `traefik:v3.3` and
+`postgres:16.15-alpine`. The `--user` argument is the one that decides this; SERV-91
+is no more satisfied here than it was by `node:22-alpine`.
 
 ## How it deploys
 

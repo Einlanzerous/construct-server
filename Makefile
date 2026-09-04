@@ -277,8 +277,13 @@ db-check: deploy-root
 # need a git binary. Alpine ships none, and `apk add git` is not available to us
 # here: the container runs `--user $(id -u)` so that what it writes into the mounted
 # checkout is owned by the invoker, and that user cannot install packages. Adding it
-# would also be a floating install of exactly the kind SERV-91 exists to stop —
-# where the Debian image pins git alongside node, in the same tag.
+# would also be a floating install of exactly the kind SERV-91 exists to stop.
+# Note what this does NOT buy: `node:22` carries git in its base image, but it is a
+# moving tag rebuilt on every 22.x patch and Debian refresh, so the git behind it
+# changes with no edit here. That is the same "a stable-looking tag is not a pin"
+# trap as `traefik:v3.3`. The argument for Debian is the `--user` one above, which
+# stands on its own; SERV-91 is not satisfied by this image any more than it was by
+# `node:22-alpine`.
 WIKI_NODE_IMAGE ?= node:22
 # Every flag has to precede the image name — docker treats the first argument after
 # it as the container command, so a trailing `-e FOO` becomes an attempt to exec a
