@@ -185,12 +185,23 @@ anything deploys or gets versioned.
   Worse, a **single-file** bind mount cannot be fixed by reloading either: `rsync
   -a` renames a temp file over the target, so the inode the container is bound to
   is replaced and the container keeps reading the old one — measured, not
-  reasoned. `config/wiki/nginx.conf` is the case that found this, and it is the
-  one such file in the stack whose consumer neither watches it (Traefik's file
-  provider does) nor is recreated for other reasons; `deploy.yml` recreates
-  `wiki` when a commit touches `config/wiki/`. Every gate is green in the failure
-  — `check-compose-drift.sh` included, since it compares mount *sources* and the
-  project root, neither of which changed.
+  reasoned. Every gate is green in that failure — `check-compose-drift.sh`
+  included, since it compares mount *sources* and the project root, neither of
+  which changed.
+  **The test is "a single-file bind mount whose consumer reads at startup", and
+  FIVE files pass it** — `config/wiki/nginx.conf`, `config/traefik/traefik.yml`,
+  `config/crowdsec/acquis.yaml`, `config/copyparty.conf` and
+  `aperture/config.yaml`. Do not read Traefik as an exception: its file provider
+  watches the `dynamic/` **directory**, while `traefik.yml` is *static* config
+  with no reload path at all. Only `wiki` is handled — `deploy.yml` recreates it
+  when a commit touches `config/wiki/` — because it is the only leaf, with no
+  `depends_on` and no dependents. The rest are **SERV-164**, and traefik is the
+  one that matters: an unapplied edit there passes `assert-healthy`,
+  `check-compose-drift.sh` *and* `check-edge-auth.sh`, the last because it probes
+  the live edge and the live edge is still enforcing the old config. They are in
+  sync today only because none has been edited since its container was created;
+  `traefik.yml`'s last edit landed only because the same PR also changed
+  traefik's compose `environment`. Coincidence, not a mechanism.
 - **Scope a single-service recreate with `--no-deps`.** Compose follows
   `depends_on`, and every service with a database depends on `postgres` — so an
   action aimed at one container reaches the shared database and bounces every

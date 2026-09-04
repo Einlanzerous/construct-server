@@ -111,6 +111,13 @@ old one. The result without the recreate is the correct config sitting at
 green, `assert-healthy` green, and `check-compose-drift.sh` reporting nothing —
 it compares mount *sources* and the project root, neither of which changed.
 
+`wiki` is handled here because it is a **leaf** — no `depends_on`, no dependents —
+so recreating it reaches exactly one container. It is not the only file with this
+property: `config/traefik/traefik.yml`, `config/crowdsec/acquis.yaml`,
+`config/copyparty.conf` and `aperture/config.yaml` are the same shape and are
+**not** covered, which is SERV-164. Do not generalise this fix to them from here;
+traefik in particular is not a leaf and recreating it is a blast-radius decision.
+
 It also answers the reviewer note on #108 asking for a code-level layer. An authored
 map per repo is the estate-level shape of that layer — unlike
 `graphify-out/graph.json`, which is symbol-level, single-repo, and still deferred
