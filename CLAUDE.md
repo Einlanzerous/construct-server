@@ -178,6 +178,19 @@ anything deploys or gets versioned.
   never take effect — the SERV-8 `/media-ssd` drift incident (2026-06-29). Use
   `make recreate svc=<svc>`. `scripts/check-compose-drift.sh` exists to catch
   the drift after the fact; it is not a substitute for getting it right.
+  **The same invariant has a second direction: an UNCHANGED spec holding an OLD
+  FILE** (SERV-159). Editing a bind-mounted config changes nothing on its own —
+  `up -d` recreates only what drifted, and a spec whose mount paths and pinned
+  image are unchanged does not drift, on the full path as much as the scoped one.
+  Worse, a **single-file** bind mount cannot be fixed by reloading either: `rsync
+  -a` renames a temp file over the target, so the inode the container is bound to
+  is replaced and the container keeps reading the old one — measured, not
+  reasoned. `config/wiki/nginx.conf` is the case that found this, and it is the
+  one such file in the stack whose consumer neither watches it (Traefik's file
+  provider does) nor is recreated for other reasons; `deploy.yml` recreates
+  `wiki` when a commit touches `config/wiki/`. Every gate is green in the failure
+  — `check-compose-drift.sh` included, since it compares mount *sources* and the
+  project root, neither of which changed.
 - **Scope a single-service recreate with `--no-deps`.** Compose follows
   `depends_on`, and every service with a database depends on `postgres` — so an
   action aimed at one container reaches the shared database and bounces every

@@ -98,6 +98,19 @@ verified in the build output is still broken through nginx. Only a request throu
 the deployed path answers it, which is what `REVIEW.md` already says about anything
 at the edge.
 
+**And editing that file is not enough to change the origin** — `deploy.yml` now
+recreates the `wiki` container when a commit touches `config/wiki/`, because
+neither half of the obvious reasoning holds. `up -d` does not recreate `wiki`: its
+spec does not drift (digest-pinned image, unchanged mount paths), so compose
+correctly leaves it alone on the full path as much as the scoped one, and nginx
+reads its config once at startup. A reload would not help either: the config is a
+**single-file** bind mount and `rsync -a` renames a temp file over the target, so
+the inode the container is bound to is replaced and the container keeps reading the
+old one. The result without the recreate is the correct config sitting at
+`$DEPLOY_ROOT` two directories from the process that needs it, with the deploy
+green, `assert-healthy` green, and `check-compose-drift.sh` reporting nothing —
+it compares mount *sources* and the project root, neither of which changed.
+
 It also answers the reviewer note on #108 asking for a code-level layer. An authored
 map per repo is the estate-level shape of that layer — unlike
 `graphify-out/graph.json`, which is symbol-level, single-repo, and still deferred
