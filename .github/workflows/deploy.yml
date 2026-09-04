@@ -387,7 +387,20 @@ jobs:
             echo "This run has no push range (workflow_dispatch or repository_dispatch)."
             echo "A dispatch can be for anything, so it deploys the whole stack."
             echo "DEPLOY_SCOPE=FULL" >> "$GITHUB_ENV"
+            # Same fallback direction as the scope itself: a dispatch is how you converge
+            # a box you are unsure about, so it recreates the wiki too. See the note in
+            # Deploy Stack for why that needs saying at all.
+            echo "WIKI_CONFIG_CHANGED=1" >> "$GITHUB_ENV"
             exit 0
+          fi
+
+          # config/wiki/nginx.conf is the one bind-mounted config in the stack whose
+          # consumer neither watches its file nor gets recreated for any other reason
+          # (SERV-159). Decided here because this is the step with the commit range and a
+          # git history to ask; acted on in Deploy Stack.
+          if [ -n "$(git diff --name-only "$BASE" "$GITHUB_SHA" -- config/wiki/ 2>/dev/null)" ]; then
+            echo "=> config/wiki/ changed: the wiki container will be recreated."
+            echo "WIKI_CONFIG_CHANGED=1" >> "$GITHUB_ENV"
           fi
           if scope="$(./scripts/deploy-scope.sh "$BASE" "$GITHUB_SHA")"; then
             if [ -z "$scope" ]; then
@@ -617,6 +630,34 @@ jobs:
               docker compose pull && docker compose up -d --remove-orphans
               ;;
           esac
+
+          # ── nginx read its config at startup, and nothing here would have changed it ──
+          #
+          # `config/wiki/nginx.conf` is mounted as a SINGLE FILE, and neither half of the
+          # obvious reasoning holds for it.
+          #
+          # `up -d` does not recreate `wiki`: its spec does not drift — digest-pinned
+          # image, unchanged mount paths — so compose correctly leaves it alone, on the
+          # FULL path as much as the scoped one. And a reload would not help either,
+          # because `rsync -a` writes a temp file and renames over the target: the inode
+          # the container is bound to is REPLACED, so the container keeps reading the old
+          # one. Measured, not inferred — the file survives the rsync inside the container
+          # with its old contents and a new inode on the host.
+          #
+          # So the correct config lands at $DEPLOY_ROOT two directories from the process
+          # that needs it, `assert-healthy` passes, and `check-compose-drift.sh` reports
+          # nothing because it compares mount SOURCES and the project root, neither of
+          # which changed. Every gate green, the edit unapplied. This is CLAUDE.md's
+          # "recreate, never restart" invariant arriving from the direction it does not
+          # cover: not an old spec, but an unchanged spec holding an old FILE.
+          #
+          # `--force-recreate` because there is nothing for compose to notice. `--no-deps`
+          # for the SERV-63 reason, though `wiki` is genuinely a leaf: it has no
+          # depends_on and nothing depends on it, so this reaches one container.
+          if [ "${WIKI_CONFIG_CHANGED:-0}" = "1" ]; then
+            echo "config/wiki/ changed — recreating wiki so nginx re-reads its config."
+            docker compose up -d --no-deps --force-recreate wiki
+          fi
 
       - name: Ensure databases exist
         # Idempotent — creates any missing users/databases without affecting existing ones

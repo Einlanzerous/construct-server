@@ -178,6 +178,30 @@ anything deploys or gets versioned.
   never take effect — the SERV-8 `/media-ssd` drift incident (2026-06-29). Use
   `make recreate svc=<svc>`. `scripts/check-compose-drift.sh` exists to catch
   the drift after the fact; it is not a substitute for getting it right.
+  **The same invariant has a second direction: an UNCHANGED spec holding an OLD
+  FILE** (SERV-159). Editing a bind-mounted config changes nothing on its own —
+  `up -d` recreates only what drifted, and a spec whose mount paths and pinned
+  image are unchanged does not drift, on the full path as much as the scoped one.
+  Worse, a **single-file** bind mount cannot be fixed by reloading either: `rsync
+  -a` renames a temp file over the target, so the inode the container is bound to
+  is replaced and the container keeps reading the old one — measured, not
+  reasoned. Every gate is green in that failure — `check-compose-drift.sh`
+  included, since it compares mount *sources* and the project root, neither of
+  which changed.
+  **The test is "a single-file bind mount whose consumer reads at startup", and
+  FIVE files pass it** — `config/wiki/nginx.conf`, `config/traefik/traefik.yml`,
+  `config/crowdsec/acquis.yaml`, `config/copyparty.conf` and
+  `aperture/config.yaml`. Do not read Traefik as an exception: its file provider
+  watches the `dynamic/` **directory**, while `traefik.yml` is *static* config
+  with no reload path at all. Only `wiki` is handled — `deploy.yml` recreates it
+  when a commit touches `config/wiki/` — because it is the only leaf, with no
+  `depends_on` and no dependents. The rest are **SERV-164**, and traefik is the
+  one that matters: an unapplied edit there passes `assert-healthy`,
+  `check-compose-drift.sh` *and* `check-edge-auth.sh`, the last because it probes
+  the live edge and the live edge is still enforcing the old config. They are in
+  sync today only because none has been edited since its container was created;
+  `traefik.yml`'s last edit landed only because the same PR also changed
+  traefik's compose `environment`. Coincidence, not a mechanism.
 - **Scope a single-service recreate with `--no-deps`.** Compose follows
   `depends_on`, and every service with a database depends on `postgres` — so an
   action aimed at one container reaches the shared database and bounces every
@@ -607,6 +631,25 @@ anything deploys or gets versioned.
   **comments**, which are the best documentation in that file and which
   `docker compose config` discards. Build it in a container (`make wiki-build`), not
   against host node.
+  **A repo's system map is the one thing on a wiki page that a person authors, and
+  it is authored in that repo** (SERV-159). A repo that commits
+  `docs/architecture.archify.json` gets an interactive map on its page, rendered at
+  build time by the vendored archify in `wiki/vendor/archify` — pinned per SERV-91,
+  and vendored because it is `private: true`, is not on npm, and its repository root
+  has no `package.json`. That does not bend the rule above: the IR is a source file
+  in the repo it describes, the same category as that repo's `CLAUDE.md`, and the
+  render is the generator's job. Nothing hand-made reaches `wiki/docs/`.
+  Two consequences. **The build container is `node:22` and not `node:22-alpine`**,
+  because archify verifies each component's `SRC` links against the pinned commit
+  with `git cat-file` before it will render — alpine ships no git, and `apk add git`
+  is unavailable to a container deliberately running `--user $(id -u)`, besides
+  being the floating install SERV-91 exists to stop. Note that the Debian image
+  *carries* git rather than pinning it: `node:22` is a moving tag, so the git behind
+  it changes with no edit here — the same trap as `traefik:v3.3`. And **a map can never fail the
+  build**: every failure becomes a warning block on that repo's page carrying
+  archify's own diagnostic, and is named in the build log. The IRs are written in
+  other repos, so the alternative is the estate wiki ceasing to publish because
+  somebody moved a node in switchyard. Design of record: `docs/estate-wiki.md`.
 - **The delivery ledger gets ONE host-side cron, whatever the producer count**
   (SERV-111). `delivery-prober.timer` runs `scripts/probe-delivery.sh` every 5
   minutes, which probes the **dev** tier over loopback and posts what it saw to

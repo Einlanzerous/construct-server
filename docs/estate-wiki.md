@@ -37,6 +37,7 @@ Everything was already present; the gap this closes is that nothing assembled it
 | `versions.env` | what version of what is live, and what each pin does on a pull |
 | `docker-compose.dev.yml` | the dev tier, rendered as a diff against prod |
 | each repo's `CLAUDE.md` / `README.md` | intent and invariants, reproduced verbatim |
+| each repo's `docs/architecture.archify.json` | its own system map, rendered onto its repo page |
 | `docs/*.md`, `PRINCIPLES.md`, `CLAUDE.md` | the design documents, reproduced verbatim |
 
 The repo list is **derived from the first-party images in compose**, so adding a
@@ -72,6 +73,162 @@ assembled from the resolved model would be a table dump with the documentation
 stripped out. Comments are lifted onto the service and env-var they sit above and
 rendered as quoted material.
 
+## Architecture maps (SERV-159)
+
+A repo can commit **`docs/architecture.archify.json`** — a typed JSON IR — and its
+wiki page grows an **Architecture** section: an interactive system map with pan and
+zoom, search, guided views, and `SRC` chips on each component that deep-link to the
+code the component is a claim about. A repo without the file simply has no map, the
+same degrade-don't-fail posture as a repo with no `CLAUDE.md`.
+
+**This keeps the load-bearing rule rather than bending it.** The IR is the source
+and it lives in the repo it describes, which puts it in exactly the category
+`CLAUDE.md` is already in: maintained next to the code, reviewed in that repo's PRs,
+owned by the people who would notice it going wrong. The *render* is the generator's
+job. Nothing hand-made lands in `wiki/docs/`, which is still wiped on every run.
+
+**The maps are the one thing on this site that is framed, and the origin has to
+allow it.** `config/wiki/nginx.conf` sets `X-Frame-Options: DENY` at the server
+level, which — unlike `SAMEORIGIN` — has no same-origin exception, so the repo page
+would render its heading, provenance line and a working full-screen link around an
+*empty frame*, with the build, the log and the page structure all green. A
+`location /architecture/` block relaxes it to `SAMEORIGIN` for the maps alone. Note
+what could not have caught this: `vitepress build` sends no such header, so a map
+verified in the build output is still broken through nginx. Only a request through
+the deployed path answers it, which is what `REVIEW.md` already says about anything
+at the edge.
+
+**And editing that file is not enough to change the origin** — `deploy.yml` now
+recreates the `wiki` container when a commit touches `config/wiki/`, because
+neither half of the obvious reasoning holds. `up -d` does not recreate `wiki`: its
+spec does not drift (digest-pinned image, unchanged mount paths), so compose
+correctly leaves it alone on the full path as much as the scoped one, and nginx
+reads its config once at startup. A reload would not help either: the config is a
+**single-file** bind mount and `rsync -a` renames a temp file over the target, so
+the inode the container is bound to is replaced and the container keeps reading the
+old one. The result without the recreate is the correct config sitting at
+`$DEPLOY_ROOT` two directories from the process that needs it, with the deploy
+green, `assert-healthy` green, and `check-compose-drift.sh` reporting nothing —
+it compares mount *sources* and the project root, neither of which changed.
+
+`wiki` is handled here because it is a **leaf** — no `depends_on`, no dependents —
+so recreating it reaches exactly one container. It is not the only file with this
+property: `config/traefik/traefik.yml`, `config/crowdsec/acquis.yaml`,
+`config/copyparty.conf` and `aperture/config.yaml` are the same shape and are
+**not** covered, which is SERV-164. Do not generalise this fix to them from here;
+traefik in particular is not a leaf and recreating it is a blast-radius decision.
+
+It also answers the reviewer note on #108 asking for a code-level layer. An authored
+map per repo is the estate-level shape of that layer — unlike
+`graphify-out/graph.json`, which is symbol-level, single-repo, and still deferred
+above for the same reasons.
+
+The `<REPO>_TAG` pin on the same page says **what** is running. The map says **how
+it is put together**, and the `SRC` chips say **where that claim comes from** — at a
+pinned commit, so the links stay true as the code moves, and go visibly stale rather
+than silently wrong.
+
+### The convention
+
+`schema_version: 1`, `diagram_type: architecture`, and a `meta.repository` of
+`{ url, revision }` pinned to a **full 40-character SHA**, with components carrying
+`sources[]`. `meta.quality_profile` is the author's call and the wiki does not
+override it: archify's `showcase` profile treats a crossed edge, a shared corridor
+or a label overlapping a node as an *error*, which is most of why the maps are worth
+reading — but a shape that genuinely cannot be drawn planar is entitled to
+`standard`, and forcing the stricter profile from here would fail a map for a
+decision made in another repo.
+
+Authoring an IR is per-repo work and belongs in that repo's project, not here. What
+this repo owns is the pipeline: cache the file, put the pinned commit on disk,
+render, and put the result on the page.
+
+### Evidence needs a git object store, and that is why the build container changed
+
+archify does not take the `sources[]` on trust. It verifies them **locally with
+git** before it will render: the checkout must have a remote literally named
+`origin` whose slug matches `meta.repository.url`, `git cat-file -e <sha>` must
+succeed, and every source path must be a blob at that revision. Without a
+`--repo-root` it refuses the diagram outright.
+
+The chosen answer is to **shallow-fetch the pinned commit**, in `fetch.ts`, into
+`.repo-docs/<repo>/.evidence`:
+
+```
+git init                                   # in the evidence directory
+git remote add origin https://github.com/Einlanzerous/<repo>
+git fetch --depth 1 <url-or-local-path> <sha>
+```
+
+Three things about that recipe are deliberate.
+
+- **An object store, not a checkout.** archify reads every source with `git
+  cat-file`, so nothing needs a working tree. For this repo the pinned commit costs
+  848 KB and about half a second.
+- **`origin` is set to the canonical URL for the repo the page is about, not to the
+  one the IR names.** archify compares the two; pointing `origin` at the IR's own
+  value would make that check vacuous. As written it asserts that a repo's map
+  actually describes that repo.
+- **The token never touches the URL or `.git/config`.** A URL on the command line
+  shows up in `ps`, and one written with `remote add` is persisted inside the
+  workspace. Credentials go in `GIT_CONFIG_*` as an `http.<url>.extraheader`, which
+  is the form `actions/checkout` uses. `GIT_TERMINAL_PROMPT=0` goes with it —
+  without that, a private repo and no token is a hung build rather than a warning.
+
+The alternative was to strip `sources` and `meta.repository` before rendering, which
+needs no git at all. It was rejected: the evidence links are most of what a map has
+over the Mermaid the wiki already renders, and a map that cannot say where its claims
+come from is a picture rather than documentation.
+
+Because both the fetch and the generate step now need git, the build container is
+`node:22` rather than `node:22-alpine` — see *Working on it* below for why `apk add
+git` is not the cheaper option it looks like.
+
+### archify is vendored, and pinned
+
+`wiki/vendor/archify/`, at the release named in `vendor/archify/skill-release.json`
+(MIT, [tt-a1i/archify](https://github.com/tt-a1i/archify)). Vendored rather than
+installed because it is `private: true`, is not on npm, and its repository root has
+no `package.json`, so neither a dependency nor a git dep can reach it. Pinned to one
+release per SERV-91 — never a floating checkout.
+
+It has **no runtime dependencies**, which is what makes vendoring cheap: `npm ci`
+never sees it and the pin cannot drift underneath the build.
+
+**To bump it:** clone the new tag, copy `archify/` over `wiki/vendor/archify/`, and
+drop `test/` and `examples/` — those two directories are 5 MB of the 7.5 MB and
+nothing at runtime reaches them. Do **not** trim further by intuition: `scripts/` is
+half development tooling and half the artifact checker the CLI shells out to on every
+render, and dropping it produces the maximally unhelpful `Artifact checker failed
+without a parseable receipt`. `wiki/vendor/` rather than `wiki/tools/` so the
+pre-push lint gate prunes it — `vendor` is already on its list of directories that
+never hold source we own (SERV-58).
+
+### A map must never be able to fail the build
+
+archify is strict, the IRs are written in other repos, and the wiki must not become
+the thing that stops publishing because someone moved a node in switchyard. So every
+failure — malformed JSON, a layout error, a pinned commit that a force-push removed,
+a timeout — becomes a `::: warning` block on that repo's page carrying archify's own
+diagnostic and its suggested fix, and the rest of the corpus is emitted unchanged.
+The same failures are named in the build log, because a warning block is only seen by
+someone who visits the page.
+
+**"Leaves nothing but a warning block" is load-bearing, and a timeout nearly broke
+it.** archify stages its candidate *inside* the output directory it is given and
+removes it in a `finally`, which does not run when the render timeout kills it. Aimed
+straight at `docs/public/`, a timed-out map would leave a partial artifact exactly
+where VitePress copies `public/` verbatim — the wiki publishing its own wreckage.
+The generator therefore renders into a scratch directory under the system tmpdir and
+copies only a finished map in. Sweeping the leftovers afterwards was tried first and
+is *nearly* right: it still loses to an orphaned renderer grandchild that recreates
+the staging tree after the sweep, which is observable — kill a render early enough and
+the scratch directory reappears in `/tmp` after the generator has already deleted it.
+Keeping archify out of `docs/` has no such window.
+
+The diagnostic is rewritten to name `docs/architecture.archify.json` rather than the
+path inside the build's cache: the person who can fix it is in the other repo.
+
 ## Layout
 
 ```
@@ -81,9 +238,10 @@ wiki/
     index.ts            # entry point; wipes docs/ and writes the corpus
     fetch.ts            # fills .repo-docs/ from the GitHub API (or ~/projects)
     model.ts            # assembles the sources into one model
-    sources/            # compose.ts, versions.ts, repos.ts — reading
+    sources/            # compose.ts, versions.ts, repos.ts, architecture.ts — reading
     emit/               # one module per page family — writing
     lib/md.ts           # Markdown helpers
+  vendor/archify/       # the diagram renderer, pinned (SERV-159)
   docs/                 # GENERATED. Wiped every run.
     .vitepress/config.ts  # the only hand-maintained file under docs/
 config/wiki/nginx.conf  # static server config, mounted into the container
@@ -98,10 +256,25 @@ make wiki-serve         # hot-reloading preview on http://localhost:5173
 make wiki-build         # full static build, exactly as deploy.yml does it
 ```
 
-`wiki-build` runs in a `node:22-alpine` container. That is deliberate: it pins the
+`wiki-build` runs in a `node:22` container. That is deliberate: it pins the
 toolchain so a host node upgrade cannot change what gets built, and it means the
 deploy runner needs only docker — which matters because that runner is a systemd
 service with a bare system PATH and no login shell (the trap SERV-62 hit twice).
+
+**The Debian image rather than `node:22-alpine`, and the reason is git.** The
+architecture maps below verify their source evidence with `git cat-file` before
+archify will render one, so both the fetch and the generate step need a git binary.
+Alpine ships none, and `apk add git` is not the cheaper option it looks like: the
+container runs `--user $(id -u)` so that what it writes into the mounted checkout
+belongs to the invoker, and that user cannot install packages. It would also be a
+floating install of exactly the kind SERV-91 exists to stop.
+
+Be precise about what that buys, though: `node:22` **carries** git in its base image,
+it does not **pin** it. The tag is rebuilt on every 22.x patch and every Debian base
+refresh, so the git version behind it moves with no edit here — the same
+stable-looking-tag trap `CLAUDE.md` records for `traefik:v3.3` and
+`postgres:16.15-alpine`. The `--user` argument is the one that decides this; SERV-91
+is no more satisfied here than it was by `node:22-alpine`.
 
 ## How it deploys
 

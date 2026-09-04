@@ -13,6 +13,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import type { Architecture } from "./architecture.ts";
+
 /** Files worth ingesting from a service repo, in the order they should appear. */
 export const REPO_DOC_FILES = ["CLAUDE.md", "README.md", "PRINCIPLES.md", "REVIEW.md"] as const;
 
@@ -34,6 +36,8 @@ export interface Repo {
   docs: RepoDoc[];
   /** Set when the repo is known but no docs were cached for it. */
   missing: boolean;
+  /** The repo's own architecture map (SERV-159), when it commits one. */
+  architecture: Architecture | null;
 }
 
 export const GITHUB_OWNER = "Einlanzerous";

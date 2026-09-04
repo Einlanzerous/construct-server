@@ -39,10 +39,29 @@ Or directly, from this directory: `npm run fetch:local`, `npm run generate`,
 | `generate/index.ts` | entry point: wipes `docs/`, writes the corpus and the sidebar |
 | `generate/fetch.ts` | fills `.repo-docs/` from the GitHub API, or `~/projects` with `--local` |
 | `generate/model.ts` | assembles the sources into one model; nothing downstream reads a file |
-| `generate/sources/` | `compose.ts`, `versions.ts`, `repos.ts` — parsing |
+| `generate/sources/` | `compose.ts`, `versions.ts`, `repos.ts`, `architecture.ts` — parsing |
 | `generate/emit/` | one module per page family — rendering |
 | `generate/lib/md.ts` | Markdown helpers, including the escaping the renderer needs |
+| `vendor/archify/` | the diagram renderer, vendored and pinned — version in `skill-release.json` |
 | `docs/.vitepress/config.ts` | VitePress config; imports the generated sidebar |
+
+## Architecture maps
+
+A repo that commits `docs/architecture.archify.json` gets an interactive system map
+on its wiki page, rendered from that IR by the vendored archify. The IR is the
+source and lives in the repo it describes; `emit/architecture.ts` renders it into
+`docs/public/architecture/<repo>.html` and `emit/repos.ts` embeds it.
+
+Two things to know before touching it, both in `docs/estate-wiki.md` in full:
+
+- **The build container is `node:22`, not alpine, because of this.** archify
+  verifies each component's `SRC` links against the pinned commit with `git
+  cat-file` before it will render, so `fetch.ts` shallow-fetches that commit into
+  `.repo-docs/<repo>/.evidence` and both steps need a git binary.
+- **A map can never fail the build.** Any failure becomes a warning block on that
+  repo's page carrying archify's diagnostic, and is named in the build log. Keep it
+  that way: the IRs are written in other repos, and the wiki must not stop
+  publishing because someone moved a node in switchyard.
 
 ## Adding a page family
 

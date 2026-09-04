@@ -53,10 +53,10 @@ export default withMermaid(
 
     // Off deliberately. VitePress derives "last updated" from each page's git
     // history, and these pages have none — they are generated into a gitignored
-    // directory, so every timestamp would be empty. It also shells out to git,
-    // which the build container does not have. The build stamp on the home page is
-    // the honest answer to "how current is this": it names the commit the wiki was
-    // generated from.
+    // directory, so every timestamp would be empty. The build stamp on the home
+    // page is the honest answer to "how current is this": it names the commit the
+    // wiki was generated from. (The build container does now carry git, for the
+    // architecture maps' evidence checks — that is not a reason to turn this on.)
     lastUpdated: false,
     cleanUrls: true,
 

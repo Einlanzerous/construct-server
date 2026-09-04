@@ -1,6 +1,7 @@
 // Assemble the sources into one model. Everything downstream renders from this;
 // nothing downstream reads a file.
 
+import { loadArchitecture } from "./sources/architecture.ts";
 import { parseCompose, type ComposeFile, type ComposeService } from "./sources/compose.ts";
 import { parseVersions, type VersionPin } from "./sources/versions.ts";
 import {
@@ -70,6 +71,7 @@ function deriveRepos(prod: ComposeFile, pins: VersionPin[], cacheDir: string): R
         tagVariable: null,
         docs: [],
         missing: false,
+        architecture: null,
       };
       byName.set(name, repo);
     }
@@ -100,6 +102,9 @@ function deriveRepos(prod: ComposeFile, pins: VersionPin[], cacheDir: string): R
   for (const repo of byName.values()) {
     repo.docs = loadRepoDocs(cacheDir, repo.name);
     repo.missing = repo.docs.length === 0;
+    // Paths only. The IR is archify's input, so nothing here reads its body beyond
+    // the `meta` the page's provenance line needs.
+    repo.architecture = loadArchitecture(cacheDir, repo.name);
   }
 
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
