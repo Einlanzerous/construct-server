@@ -325,6 +325,22 @@ services:
       # shape as amber: the placard repo is the source of truth for every mark;
       # the DB holds URL-check observations and staged uploads.
       - PLACARD_DB_PASSWORD=${PLACARD_DB_PASSWORD}
+      # Chronicle (SERV-169) — DB/user provisioned by db/init-db.sh, which also
+      # revokes PUBLIC on both databases. Unlike amber and placard above, this one
+      # is NOT derived data: tier 2 holds memos, transcripts and notes, which are
+      # authored and rebuild from nothing. The role is `chronicle`, not
+      # `chronicle_user` — see the note in db/init-db.sh before renaming it.
+      #
+      # `chronicle_tier1` is deliberately absent. It is CHRN-52's to create, and
+      # init-db.sh must not provision it: ensure_db's unconditional GRANT ALL
+      # PRIVILEGES ON DATABASE would hand the tier-1 role CREATE on the tier-2
+      # database on every deploy.
+      - CHRONICLE_DB_PASSWORD=${CHRONICLE_DB_PASSWORD}
+      # ASR (SERV-169) — DB/user provisioned by db/init-db.sh. Role is `asr`.
+      # Without this line the script's asr lines are inert: init-db.sh reads role
+      # passwords from the postgres container's own environment, and its empty
+      # password guard skips loudly rather than blanking the role.
+      - ASR_DB_PASSWORD=${ASR_DB_PASSWORD}
     networks:
       - construct_net
 
