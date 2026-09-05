@@ -23,11 +23,13 @@ anything deploys or gets versioned.
   second edge in the dev compose project, not a leg of prod's.
 - `caddy/`, edge routing — public 443 paths and Cloudflare Access.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
-  **Two services opt out and provision from their own repo**: chronicle (two roles
-  plus the tier-1/tier-2 grant) and `asr` (its own database and role on the shared
-  Postgres, not a schema inside Chronicle's — CHRN-25). Both run once by hand as
-  superuser, so a cold host rebuild does **not** self-heal them and both crash-loop
-  until it is done.
+  **Three services opt out and provision from their own repo**: chronicle (two roles
+  plus the tier-1/tier-2 grant), `asr` (its own database and role on the shared
+  Postgres, not a schema inside Chronicle's — CHRN-25), and catenary (`deploy/provision.sql`
+  in its own repo — CANT-13 Ruling 3 makes it deliberately not a migration, because
+  migrations run as the `catenary` role and a role cannot create itself). All three run
+  once by hand as superuser, so a cold host rebuild does **not** self-heal them and all
+  three crash-loop until it is done.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).

@@ -382,8 +382,11 @@ http:
     #
     # Unlike chronicle and lyceum, the catenary service carries no AUD of its own:
     # it has no code that reads one, so cf-access-guard is the only thing verifying
-    # the assertion and the audience lives only in CF_ACCESS_AUD_MAP. check-edge-auth.sh
-    # check 4 treats a service with no audience as a proxy, so this is supported.
+    # the assertion and the audience lives solely in CF_ACCESS_AUD_MAP. check-edge-auth
+    # check 4 iterates services carrying an AUD env and catenary carries none, so it is
+    # never examined — nothing is "lent" to it either, since the proxy loop only lends a
+    # host to a depends_on that HOLDS an audience and postgres holds none. CANT-28 makes
+    # it a real per-host comparison (SERV-162). Full note on the compose block.
     catenary:
       entryPoints:
         - internal

@@ -1552,9 +1552,17 @@ services:
   #
   # It also carries no CATENARY_CF_ACCESS_AUD of its own, unlike chronicle and lyceum.
   # Those verify the Access JWT in-process; Catenary has no code that reads an audience
-  # yet, so cf-access-guard does the verifying and the AUD lives only in its map.
-  # check-edge-auth.sh check 4 treats a service with no audience of its own as a proxy,
-  # so this is a supported shape rather than an omission.
+  # yet, so cf-access-guard is the only thing verifying it and the AUD lives solely in
+  # that map.
+  #
+  # Precisely, because the loose version of this is misleading: check-edge-auth.sh's
+  # check 4 iterates services carrying an AUD_KEY env, and catenary carries none, so it
+  # is never examined. The proxy-lending loop beside it walks depends_on for a
+  # dependency that DOES hold an audience — catenary's only dependency is postgres,
+  # which holds none, so nothing is lent and nothing stands in for it. When CANT-28 adds
+  # CATENARY_CF_ACCESS_AUD the value starts being compared PER HOST against
+  # CF_ACCESS_AUD_MAP[catenary.zerogravity.industries] (SERV-162) — a stricter test than
+  # "appears somewhere in the map", and not a continuation of this.
   #
   # What is deployed today answers /healthz and /readyz and nothing else. That is on
   # purpose: it proves the image pulls, the DSN parses, the healthcheck matches the
@@ -1571,14 +1579,42 @@ services:
     # No `ports:`. Reached through Traefik on the internal entrypoint, never from the
     # host. Publishing one would put a listener on the host that bypasses the edge —
     # and until CANT-22/CANT-28 there is no in-process authentication behind it.
+    #
+    # NOT provisioned by db/init-db.sh, and deliberately never will be: CANT-13 Ruling 3
+    # keeps this out of a migration because migrations run AS the `catenary` role and a
+    # role cannot create itself, so catenary/deploy/provision.sql is run once by hand as
+    # superuser. Catenary is the THIRD service to opt out this way, after chronicle and
+    # asr. Consequence worth knowing and identical to theirs: a cold host rebuild does
+    # NOT self-heal this the way init-db.sh does for everything else, and catenary
+    # crash-loops on an unreachable database until the script is run.
     environment:
       - CATENARY_PORT=4012
       # KEYWORD/VALUE, not a URL. The URL form misparses a Signet-generated password
       # containing @ / # ? or % — `@` splits the authority, so the failure names the
       # wrong HOST rather than the password. config.Load hands this to pgx untouched,
-      # so nothing upstream would catch it. CANT-78's smoke job exercises this exact
-      # form against the shipped image.
-      - CATENARY_DATABASE_URL=host=postgres port=5432 user=catenary password=${CATENARY_DB_PASSWORD} dbname=catenary sslmode=disable
+      # so nothing upstream would catch it. CANT-78's smoke job exercises this form
+      # against the shipped image.
+      #
+      # The password is SINGLE-QUOTED because keyword/value is SPACE-DELIMITED. Without
+      # quotes this form only trades the URL form's problem for a different one. Measured
+      # against pgxpool.ParseConfig rather than assumed:
+      #
+      #   password=has space          -> dbname "", password "has"     SILENTLY WRONG
+      #   password='has space'        -> dbname "catenary"             ok
+      #   password='at@slash/hash#q?pct%' -> dbname "catenary"         ok
+      #   password='back\slash'       -> dbname "catenary"             ok
+      #   password='has'quote'        -> dbname "", password "has"     STILL WRONG
+      #
+      # So quoting closes the space and @ / # ? % classes, and an embedded SINGLE QUOTE
+      # is the one it does not — and it fails the bad way, parsing to an empty dbname
+      # rather than erroring, so pgx would connect to the default database name instead
+      # of refusing. libpq's escape for that is \' inside the quotes, which compose
+      # cannot apply to an interpolated value.
+      #
+      # Signet mints a random 32-char value and its alphabet is not documented here;
+      # if it can emit `'`, this line needs the escape or the alphabet needs narrowing.
+      # Worth confirming before rotation rather than after.
+      - CATENARY_DATABASE_URL=host=postgres port=5432 user=catenary password='${CATENARY_DB_PASSWORD}' dbname=catenary sslmode=disable
       - CATENARY_LOG_LEVEL=${CATENARY_LOG_LEVEL:-info}
       - CATENARY_LOG_FORMAT=${CATENARY_LOG_FORMAT:-json}
       - CATENARY_SHUTDOWN_GRACE=${CATENARY_SHUTDOWN_GRACE:-20s}
