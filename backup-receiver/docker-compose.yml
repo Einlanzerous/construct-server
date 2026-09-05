@@ -1,0 +1,115 @@
+# A backup destination for the construct-server estate (SERV-43 / SERV-167).
+#
+# Two containers, one network namespace:
+#
+#   tailscale    joins this host to the tailnet as its own node
+#   rest-server  restic's HTTP receiver, running INSIDE tailscale's namespace
+#
+# `network_mode: service:tailscale` is the whole security design. rest-server
+# publishes no ports and has no network of its own, so it is reachable at the
+# tailnet address and NOWHERE ELSE — not on the host's LAN, not on localhost of
+# the machine you are reading this on. On the desktop that matters twice over:
+# WSL2 sits behind a NAT'd virtual NIC, so a service bound on the WSL2 side is
+# invisible from the network anyway. Joining the tailnet from inside the
+# namespace sidesteps that entirely rather than fighting it with portproxy
+# rules that break every time WSL2's IP is reassigned.
+#
+# THIS FILE IS COPIED TO OTHER PEOPLE'S MACHINES. It must stay standalone —
+# no relative paths out of this directory, no reference to anything else in
+# construct-server. Someone standing up a receiver should never need access to
+# the estate's infrastructure repo.
+
+services:
+  tailscale:
+    # Digest-pinned per the estate's third-party invariant: a "stable-looking"
+    # tag is not a pin. Nothing here is watchtower-managed, so there is no
+    # update mechanism a digest would disable.
+    #
+    # This MUST be the multi-arch INDEX digest, not a per-platform manifest
+    # digest. `docker manifest inspect -v` returns one entry per platform and
+    # taking the first pins arm64 — which fails on every amd64 destination with
+    # "the requested image's platform does not match the detected host
+    # platform". Get the right one with:
+    #   docker buildx imagetools inspect <image>:<tag>   # the "Digest:" line
+    image: tailscale/tailscale:v1.102.3@sha256:8c42c4574ab066384fcb72f69e086a2ff1dd3652eb6f56856cee34bcf0d2f680
+    container_name: backup-tailscale
+    # The name this receiver takes on the tailnet. Set it per host in .env —
+    # it is how the construct server addresses this destination.
+    hostname: ${TS_HOSTNAME:?set TS_HOSTNAME in .env}
+    environment:
+      # Only needed on FIRST run. Once authenticated, the node's identity lives
+      # in the tailscale_state volume and this can go back to empty.
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_STATE_DIR=/var/lib/tailscale
+      # Kernel networking, not userspace. The sidecar pattern needs a real
+      # interface in the shared namespace for rest-server to be reachable on
+      # the tailnet address. install.sh preflights /dev/net/tun for this reason
+      # and refuses to continue without it, rather than silently degrading to a
+      # mode nobody tested.
+      - TS_USERSPACE=false
+      # e.g. --advertise-tags=tag:backup-receiver, for scoping ACLs later.
+      - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:-}
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+  rest-server:
+    image: restic/rest-server:0.14.0@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5
+    container_name: backup-rest-server
+    # No ports, no networks — this container lives in tailscale's namespace.
+    # If you ever find yourself adding `ports:` here, stop: that publishes the
+    # repository on the host's LAN, which is the one thing this arrangement is
+    # for preventing.
+    network_mode: service:tailscale
+    environment:
+      # --append-only is the reason this design is worth the trouble. The
+      # construct server can WRITE backups here and cannot DELETE them, so a
+      # compromise or a bad script on the box cannot destroy its own history.
+      #
+      # The cost, which is real and is documented in README.md: the box can
+      # never prune remotely either. This repository grows until somebody does
+      # a deliberate maintenance pass with the flag off.
+      #
+      # install.sh PROVES this is in effect rather than trusting the string —
+      # see the append-only probe there, and note why the obvious probe does
+      # not work.
+      - OPTIONS=--append-only ${REST_EXTRA_OPTIONS:-}
+    volumes:
+      - repo:/data
+    depends_on:
+      - tailscale
+    restart: unless-stopped
+
+volumes:
+  # Both volumes carry an explicit `name:` so they do not inherit the compose
+  # project name from whatever this directory happens to be called. install.sh
+  # addresses them by these names; renaming the directory must not orphan the
+  # repository.
+  #
+  # The tailnet node identity. Losing this means re-authenticating the node.
+  tailscale_state:
+    name: backup_receiver_tailscale_state
+  # The restic repository itself.
+  #
+  # A named volume, so it lives on the Docker storage driver's filesystem. On
+  # WSL2 with Docker Desktop that is the distro's ext4 VHDX — a real Linux
+  # filesystem, which is what a restic repository wants. Do NOT casually point
+  # this at a bind mount under /mnt/c or /mnt/d: those cross the 9p/drvfs
+  # boundary, which is slow and does not carry POSIX permissions or locking
+  # semantics faithfully. See README.md if the VHDX needs to live on another
+  # physical disk; that is a Docker Desktop setting, not a change to this file.
+  #
+  # `external: true` is a SAFETY choice, not a packaging one. A compose-managed
+  # volume is destroyed by `docker compose down -v`, and that is one mistyped
+  # flag between a person tidying up containers and the deletion of every
+  # backup this host holds — the exact loss the append-only receiver exists to
+  # prevent, arriving from the other direction. External means compose will
+  # never remove it; install.sh creates it if it is missing.
+  repo:
+    external: true
+    name: backup_receiver_repo
