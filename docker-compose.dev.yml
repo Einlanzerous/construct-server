@@ -70,8 +70,10 @@ services:
       #
       # Only the four dev services are listed. The prod-only roles the shared
       # script also tries to create (cook_book, centrifuge, authentik, interlock,
-      # amber) have no password here and are skipped loudly — correct, since they
-      # are not part of the dev slice.
+      # amber, placard, and — since SERV-169 — chronicle and asr) have no password
+      # here and are skipped loudly. That is correct: they are not part of the dev
+      # slice. Expect one SKIPPING line per name in every dev deploy log; the count
+      # grows whenever init-db.sh gains a prod-only role, and that is not a fault.
       - SWITCHYARD_DB_PASSWORD=${SWITCHYARD_DB_PASSWORD}
       - ARGOSY_DB_PASSWORD=${ARGOSY_DB_PASSWORD}
       - LYCEUM_DB_PASSWORD=${LYCEUM_DB_PASSWORD}
