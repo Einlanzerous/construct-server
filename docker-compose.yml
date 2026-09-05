@@ -335,6 +335,17 @@ services:
       # init-db.sh must not provision it: ensure_db's unconditional GRANT ALL
       # PRIVILEGES ON DATABASE would hand the tier-1 role CREATE on the tier-2
       # database on every deploy.
+      #
+      # BUDGET FOR A RECREATE WHEN THESE TWO LINES LAND. An `environment:` edit
+      # moves compose's config hash exactly as an image-string edit does, so the
+      # next `up -d` recreates postgres; and because this change also touches
+      # db/init-db.sh it is not the pure-versions.env shape deploy-scope.sh
+      # narrows on, so the deploy takes the FULL path. Compose does not recreate
+      # dependants, so switchyard and interlock-worker keep the dead address —
+      # run `make force-recreate svc=switchyard` and `svc=interlock-worker`
+      # immediately after this deploy, and expect the post-deploy health gate to
+      # fail that run, correctly. Same mechanism as the postgres pin above
+      # (SERV-102 / SWY-267 / ITLK-30); be at a terminal when it lands.
       - CHRONICLE_DB_PASSWORD=${CHRONICLE_DB_PASSWORD}
       # ASR (SERV-169) — DB/user provisioned by db/init-db.sh. Role is `asr`.
       # Without this line the script's asr lines are inert: init-db.sh reads role
@@ -882,10 +893,11 @@ services:
   # Half of this block is a property of THIS MACHINE rather than of the service —
   # which render node, which group, where the models live — settled by CHRN-24.
   #
-  # NOT provisioned by db/init-db.sh, the same exception chronicle above carries:
-  # its role and database come from asr/deploy/provision-db.sh in chronicle's
-  # repo, run once as superuser under `signet exec`. A cold host rebuild does not
-  # self-heal it and asr will crash-loop until that script is run.
+  # Provisioned by db/init-db.sh since SERV-169 — role `asr`, databases `asr` and
+  # `asr_test`, PUBLIC revoked. It used to opt out and come from
+  # asr/deploy/provision-db.sh in chronicle's repo, run once by hand as superuser;
+  # that is no longer the path, and a cold host rebuild now self-heals this the way
+  # it does every other service.
   asr:
     image: ghcr.io/einlanzerous/estate-asr:${ASR_TAG:-latest}
     container_name: asr
@@ -1006,12 +1018,17 @@ services:
   #
   # No `ports:`. Reached only through Traefik; publishing a port here would put a
   # listener on the host and bypass the edge entirely.
-  # NOT provisioned by db/init-db.sh. Chronicle's database needs TWO roles
-  # (chronicle, chronicle_tier1) and the grant that enforces its tier-1/tier-2
-  # boundary, so it is created by deploy/provision-db.sh in chronicle's own repo —
-  # run once, by hand, as superuser. Consequence worth knowing: a cold host rebuild
-  # does NOT self-heal this the way init-db.sh does for everything else, and
-  # chronicle will crash-loop until that script is run.
+  # PARTLY provisioned by db/init-db.sh since SERV-169: role `chronicle` and the
+  # `chronicle`/`chronicle_test` databases, PUBLIC revoked. What that script
+  # deliberately does NOT create is the SECOND role — `chronicle_tier1` — and the
+  # grant enforcing the tier-1/tier-2 boundary, because ensure_db's unconditional
+  # GRANT ALL PRIVILEGES ON DATABASE would hand that role CREATE on the tier-2
+  # database on every deploy. It still comes from deploy/provision-db.sh in
+  # chronicle's own repo, run once by hand as superuser, until CHRN-52 lands.
+  #
+  # So a cold host rebuild now gets chronicle most of the way and still needs that
+  # one step: without chronicle_tier1, migration 0001 raises `role
+  # "chronicle_tier1" does not exist` and the service does not boot.
   # See github.com/Einlanzerous/chronicle (deploy/README.md is the runbook).
   chronicle:
     image: ghcr.io/einlanzerous/chronicle:${CHRONICLE_TAG:-latest}
@@ -1599,10 +1616,18 @@ services:
     # NOT provisioned by db/init-db.sh, and deliberately never will be: CANT-13 Ruling 3
     # keeps this out of a migration because migrations run AS the `catenary` role and a
     # role cannot create itself, so catenary/deploy/provision.sql is run once by hand as
-    # superuser. Catenary is the THIRD service to opt out this way, after chronicle and
-    # asr. Consequence worth knowing and identical to theirs: a cold host rebuild does
-    # NOT self-heal this the way init-db.sh does for everything else, and catenary
-    # crash-loops on an unreachable database until the script is run.
+    # superuser.
+    #
+    # Catenary used to be the third service to opt out this way, after chronicle and
+    # asr. SERV-169 moved those two into init-db.sh, so it is now the ONLY service that
+    # opts out whole — and the comparison to theirs no longer holds either: what is left
+    # manual for chronicle is one ROLE (`chronicle_tier1`, until CHRN-52), not its
+    # database. Catenary's opt-out is also the permanent one; chronicle's is pending a
+    # ticket.
+    #
+    # Consequence worth knowing: a cold host rebuild does NOT self-heal this the way
+    # init-db.sh does for everything else, and catenary crash-loops on an unreachable
+    # database until the script is run.
     environment:
       - CATENARY_PORT=4012
       # KEYWORD/VALUE, not a URL. The URL form misparses a Signet-generated password

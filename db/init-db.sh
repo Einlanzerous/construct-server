@@ -108,7 +108,7 @@ ensure_db placard_user "$PLACARD_DB_PASSWORD" placard_test
 # tier split exists to keep out, silently undoing any manual revoke. Chronicle's
 # TestTier1RoleCannotReachCredentials asserts TABLE access and would stay green.
 #
-# SEQUENCING: chronicle/migrations/0001_init.up.sql:30 grants to chronicle_tier1
+# SEQUENCING: chronicle/migrations/0001_init.up.sql:46 grants to chronicle_tier1
 # unconditionally. On a rebuilt data directory with this landed and CHRN-52 not,
 # Chronicle's first migration raises `role "chronicle_tier1" does not exist` and the
 # service does not boot. That is not worse than today — nothing recreates anything
