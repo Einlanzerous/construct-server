@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.30.0](https://github.com/Einlanzerous/construct-server/compare/v4.29.0...v4.30.0) (2026-09-04)
+
+
+### Features
+
+* **edge:** audiences must be distinct, and match the map entry for their own host (SERV-162) ([#186](https://github.com/Einlanzerous/construct-server/issues/186)) ([0bd4fb5](https://github.com/Einlanzerous/construct-server/commit/0bd4fb5001b508467163a50b05d4bb81ccdebc0c))
+* **wiki:** render each repo's archify system map from a committed IR (SERV-159) ([#188](https://github.com/Einlanzerous/construct-server/issues/188)) ([51695a0](https://github.com/Einlanzerous/construct-server/commit/51695a02ba288b106204a33a563bcda42a0f99a2))
+
 ## [4.29.0](https://github.com/Einlanzerous/construct-server/compare/v4.28.0...v4.29.0) (2026-09-03)
 
 
