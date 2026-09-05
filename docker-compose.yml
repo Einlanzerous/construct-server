@@ -1539,6 +1539,107 @@ services:
     networks:
       - construct_net
 
+  # --- CATENARY (self-hosted chat for a small trusted group) — SERV-168 / CANT-16 ---
+  # One static Go binary. Text, images and voice notes over an append-only log with a
+  # sync protocol; the clients are web, Linux desktop and Android.
+  #
+  # TUNNELED ONLY, and that is the whole shape of this block today. There is
+  # deliberately NO public router: the bar for the `public` entrypoint on this estate
+  # is that the endpoint authenticates with something Access cannot express, and
+  # Catenary does not authenticate AT ALL yet — the socket is CANT-22 and the token
+  # model CANT-28. A public router today would put a service that will hold everyone's
+  # messages, unauthenticated, on the open 443.
+  #
+  # It also carries no CATENARY_CF_ACCESS_AUD of its own, unlike chronicle and lyceum.
+  # Those verify the Access JWT in-process; Catenary has no code that reads an audience
+  # yet, so cf-access-guard is the only thing verifying it and the AUD lives solely in
+  # that map.
+  #
+  # Precisely, because the loose version of this is misleading: check-edge-auth.sh's
+  # check 4 iterates services carrying an AUD_KEY env, and catenary carries none, so it
+  # is never examined. The proxy-lending loop beside it walks depends_on for a
+  # dependency that DOES hold an audience — catenary's only dependency is postgres,
+  # which holds none, so nothing is lent and nothing stands in for it. When CANT-28 adds
+  # CATENARY_CF_ACCESS_AUD the value starts being compared PER HOST against
+  # CF_ACCESS_AUD_MAP[catenary.zerogravity.industries] (SERV-162) — a stricter test than
+  # "appears somewhere in the map", and not a continuation of this.
+  #
+  # What is deployed today answers /healthz and /readyz and nothing else. That is on
+  # purpose: it proves the image pulls, the DSN parses, the healthcheck matches the
+  # image and the Access gate is right, while nothing depends on any of it. The
+  # alternative is discovering all four at once on the deploy that first carries
+  # traffic.
+  #
+  # Decisions are catenary/deploy/README.md's, which is decisions rather than a copy of
+  # this block — CHRN-89 removed Chronicle's copy after it drifted from here.
+  catenary:
+    image: ghcr.io/einlanzerous/catenary:${CATENARY_TAG:-latest}
+    container_name: catenary
+    restart: unless-stopped
+    # No `ports:`. Reached through Traefik on the internal entrypoint, never from the
+    # host. Publishing one would put a listener on the host that bypasses the edge —
+    # and until CANT-22/CANT-28 there is no in-process authentication behind it.
+    #
+    # NOT provisioned by db/init-db.sh, and deliberately never will be: CANT-13 Ruling 3
+    # keeps this out of a migration because migrations run AS the `catenary` role and a
+    # role cannot create itself, so catenary/deploy/provision.sql is run once by hand as
+    # superuser. Catenary is the THIRD service to opt out this way, after chronicle and
+    # asr. Consequence worth knowing and identical to theirs: a cold host rebuild does
+    # NOT self-heal this the way init-db.sh does for everything else, and catenary
+    # crash-loops on an unreachable database until the script is run.
+    environment:
+      - CATENARY_PORT=4012
+      # KEYWORD/VALUE, not a URL. The URL form misparses a Signet-generated password
+      # containing @ / # ? or % — `@` splits the authority, so the failure names the
+      # wrong HOST rather than the password. config.Load hands this to pgx untouched,
+      # so nothing upstream would catch it. CANT-78's smoke job exercises this form
+      # against the shipped image.
+      #
+      # The password is SINGLE-QUOTED because keyword/value is SPACE-DELIMITED. Without
+      # quotes this form only trades the URL form's problem for a different one. Measured
+      # against pgxpool.ParseConfig rather than assumed:
+      #
+      #   password=has space          -> dbname "", password "has"     SILENTLY WRONG
+      #   password='has space'        -> dbname "catenary"             ok
+      #   password='at@slash/hash#q?pct%' -> dbname "catenary"         ok
+      #   password='back\slash'       -> dbname "catenary"             ok
+      #   password='has'quote'        -> dbname "", password "has"     STILL WRONG
+      #
+      # So quoting closes the space and @ / # ? % classes, and an embedded SINGLE QUOTE
+      # is the one it does not — and it fails the bad way, parsing to an empty dbname
+      # rather than erroring, so pgx would connect to the default database name instead
+      # of refusing. libpq's escape for that is \' inside the quotes, which compose
+      # cannot apply to an interpolated value.
+      #
+      # Signet mints a random 32-char value and its alphabet is not documented here;
+      # if it can emit `'`, this line needs the escape or the alphabet needs narrowing.
+      # Worth confirming before rotation rather than after.
+      - CATENARY_DATABASE_URL=host=postgres port=5432 user=catenary password='${CATENARY_DB_PASSWORD}' dbname=catenary sslmode=disable
+      - CATENARY_LOG_LEVEL=${CATENARY_LOG_LEVEL:-info}
+      - CATENARY_LOG_FORMAT=${CATENARY_LOG_FORMAT:-json}
+      - CATENARY_SHUTDOWN_GRACE=${CATENARY_SHUTDOWN_GRACE:-20s}
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    # /healthz, NEVER /readyz. /healthz takes no dependencies; /readyz pings Postgres,
+    # and restarting the container is the wrong remedy for a database blip — worse here
+    # than elsewhere, because every restart severs every open WebSocket at once and the
+    # clients all reconnect together.
+    #
+    # wget is available: the runtime stage is alpine:3.23 with busybox, chosen in
+    # CANT-78 precisely so this check can pass. A scratch/distroless image would leave
+    # the container `unhealthy` for ever and stall anything gating on service_healthy.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4012/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Must EXCEED CATENARY_SHUTDOWN_GRACE (20s); Docker's own default is 10s, which
+    # would kill the process while it is still draining in-flight sends.
+    stop_grace_period: 30s
+
   # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
   # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
   # ONLY Argosy + a deny-all catch-all; `internal` (:9080 HTTP, deliberately NOT
@@ -1670,7 +1771,7 @@ services:
       # tunneled router that nobody mapped is unreachable, which is loud, rather than
       # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
       # and the routers agree, so they cannot drift apart silently.
-      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway — it exists so the cutover could be rehearsed against real traffic
       # before three live routers went fail-closed at once, and it is not a steady state.

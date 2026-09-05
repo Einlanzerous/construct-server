@@ -365,6 +365,37 @@ http:
       # No TLS: internal is plain HTTP (Cloudflare terminates TLS at the edge and
       # the tunnel encrypts the wire).
 
+    # Catenary (SERV-168 / CANT-16). Access-gated like every router here.
+    #
+    # THIS IS THE ONLY CATENARY ROUTER, and the absence of a public one is the
+    # decision rather than an omission. Catenary does not authenticate at all yet —
+    # the socket is CANT-22, the token model CANT-28 — and the bar for the `public`
+    # entrypoint is an endpoint that authenticates with something Access cannot
+    # express. Until then a public router would put a service that will hold
+    # everyone's messages, unauthenticated, on the open 443.
+    #
+    # When that router does eventually land it CANNOT be a Host-only match: /admin
+    # would then be served from the public host too, which is exactly what CANT-16's
+    # Done-when forbids. It needs its own higher-priority router pointed at the
+    # blackhole + deny-all pair, the way chronicle-public-admin above does — that
+    # router exists because Chronicle hit this.
+    #
+    # Unlike chronicle and lyceum, the catenary service carries no AUD of its own:
+    # it has no code that reads one, so cf-access-guard is the only thing verifying
+    # the assertion and the audience lives solely in CF_ACCESS_AUD_MAP. check-edge-auth
+    # check 4 iterates services carrying an AUD env and catenary carries none, so it is
+    # never examined — nothing is "lent" to it either, since the proxy loop only lends a
+    # host to a depends_on that HOLDS an audience and postgres holds none. CANT-28 makes
+    # it a real per-host comparison (SERV-162). Full note on the compose block.
+    catenary:
+      entryPoints:
+        - internal
+      rule: "Host(`catenary.zerogravity.industries`)"
+      service: catenary
+      middlewares:
+        - cf-access-jwt
+      # No TLS: internal is plain HTTP, as above.
+
     # THE ONE EXEMPTION from origin auth, and the only router on this entrypoint
     # without cf-access-jwt (SERV-106).
     #
@@ -575,6 +606,14 @@ http:
         # and the direct WAN one. Backend for three routers above.
         servers:
           - url: "http://chronicle:4009"
+
+    catenary:
+      loadBalancer:
+        # One Go binary on :4012 — the next free slot in the estate's 40xx block.
+        # Serves /healthz and /readyz today; the WebSocket upgrade (CANT-22) and
+        # /sync (CANT-18) land on this same address and port.
+        servers:
+          - url: "http://catenary:4012"
 
     placard:
       loadBalancer:
