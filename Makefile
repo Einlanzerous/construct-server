@@ -245,9 +245,22 @@ db-up: deploy-root network
 db-shell: deploy-root
 	$(COMPOSE) exec postgres psql -U postgres
 
-# Run init-db.sh against a running postgres (idempotent — safe to re-run)
+# Run init-db.sh against a running postgres (idempotent — safe to re-run).
+#
+# PIPED OVER STDIN RATHER THAN EXEC'D FROM THE MOUNT, and the difference is a
+# silent no-op (SERV-172). docker-compose.yml mounts ./db/init-db.sh as a
+# SINGLE FILE, and a single-file bind mount is bound to the inode it was
+# created with. deploy.yml rsyncs ./db/ with -a, and rsync renames a temp file
+# over the target — a new inode — so after a deploy that changed only this
+# script, the container still serves the old one. Exec'ing the in-container
+# path would then run the OLD script, provision nothing, and exit 0: no error
+# to notice, and the exit code is the operator's only evidence it ran.
+#
+# Reading the host file makes the target independent of when the container was
+# created. This is what deploy.yml:665 and the dev twin (dev-db-init) already
+# do; prod's db-init was the odd one out. -T is required for the redirect.
 db-init: deploy-root
-	$(COMPOSE) exec postgres bash /docker-entrypoint-initdb.d/init-db.sh
+	$(COMPOSE) exec -T -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres postgres bash < $(DEPLOY_ROOT)/db/init-db.sh
 
 # Verify databases and users were created correctly
 db-check: deploy-root
