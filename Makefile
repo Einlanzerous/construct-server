@@ -100,6 +100,18 @@ drift-check:
 health-check:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-healthy.sh $(svc)
 
+# SERV-135: which node do the self-hosted runners run? Each runner's `.path` is
+# captured from the shell that ran config.sh, and an fnm shell writes a tmpfs
+# multishell directory that dies on reboot — after which node falls through to the
+# EOL system v18. This pins every ~/runners/*/.path to fnm's `default` alias and
+# reports the LIVE listener PATH beside the file, since runsvc.sh reads it only at
+# start. Re-run the bare form after a reboot; it should not change.
+# Usage: make runner-node-path            (check every runner; exit 1 on any defect)
+#        make runner-node-path fix=1      (rewrite every .path, then check)
+#        make runner-node-path restart=1  (restart idle runners on an old .path; sudo)
+runner-node-path:
+	./scripts/runner-node-path.sh $(if $(restart),--restart,$(if $(fix),--fix))
+
 # The SERV-58 push gate: run this repo's own format/lint checks the way the pre-push hook
 # would. Useful on its own, and the fastest way to see what the gate sees.
 # Usage: make lint-gate            (check this repo)

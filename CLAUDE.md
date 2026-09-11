@@ -229,6 +229,18 @@ anything deploys or gets versioned.
   shims — is invisible to it. Add it via `$GITHUB_PATH` in a step and check for
   it explicitly so failures read as "not on PATH" rather than `command not
   found` from three layers down. SERV-62 hit this twice (#85).
+  **The one deliberate exception is `node`, and it is pinned by
+  `scripts/runner-node-path.sh`** (SERV-135). Each runner's `.path` is whatever PATH
+  the shell that ran `config.sh` had, and an fnm shell's PATH names a per-shell
+  `/run/user/…/fnm_multishells/` directory — tmpfs, gone on reboot, after which node
+  silently falls through to the system v18 (EOL April 2025). Nine of thirteen runners
+  carried one; five had already flipped. Every `~/runners/*/.path` now names fnm's
+  `default` alias instead, so all thirteen resolve the same node and the answer was
+  chosen rather than inherited. `runsvc.sh` reads `.path` **once, at unit start**, so a
+  rewrite changes nothing until the runner restarts; the script reports the live
+  listener's PATH beside the file for that reason. **Never copy another runner's
+  `.path`** when adding one — run the script, which is what `~/runners/POOL-README.md`
+  now says.
 - **The stack deploys from `/opt/construct-server`, and no other path** (SERV-76).
   Neither checkout on this box is what runs: `~/construct-server` is a plain git
   working copy, and the runner's `_work/…` directory is CI scratch that
@@ -822,6 +834,11 @@ There is no test suite — this repo is configuration, so validation is mostly
   the service landing in `failed` while the timer keeps cheerfully firing it.
   `make probe-delivery` runs one probe now, using the deployed credential rather
   than one you exported by hand.
+- `make runner-node-path` after a reboot, after registering a runner, or after
+  `fnm default` moves — it prints which node every self-hosted runner resolves and
+  whether the running listener has loaded the file it sits beside (SERV-135). `fix=1`
+  rewrites the `.path` files; `restart=1` bounces only idle runners whose live PATH
+  is stale, and skips any with a job in flight rather than killing it.
 - `make versions` / `make dev-versions` to answer *what is actually running* — the
   image ref, the resolved digest, and the commit each image was built from. **Read
   the revision column, not the digest**: the publish workflow builds the same source
