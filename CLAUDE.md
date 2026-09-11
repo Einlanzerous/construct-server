@@ -43,6 +43,11 @@ anything deploys or gets versioned.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).
 - `scripts/check-compose-drift.sh` — the SERV-8 guardrail (see Invariants).
+- `scripts/check-base-images.sh` — the base-image guard (SERV-170): every first-party
+  `FROM` must name a supported cycle, to cycle precision, checked against endoflife.date.
+  `base-images.yml` runs it across every repo's default branch every Monday. Design of
+  record in `docs/base-images.md`, including the decision that bump PRs belong to
+  Renovate and not to a new service.
 - `scripts/lint-gate.sh` — the pre-push lint gate (SERV-58): a Claude Code hook
   that runs a repo's own format/lint checks before `git push` and blocks on
   failure. Installed once at the user level by `make lint-gate-install`, so it
@@ -726,6 +731,18 @@ anything deploys or gets versioned.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.
+- **A base image names a supported cycle, to cycle precision, in every first-party
+  Dockerfile** (SERV-170). `alpine:3.23`, `node:24-alpine`, `golang:1.26-bookworm`;
+  never `alpine:3`, `nginx:alpine` or `latest`. On 2026-09-05 four repos were on an
+  Alpine five months past EOL, two on a Node four months past, and three nginx runtimes
+  fifteen months past — including this repo's wiki — and nothing surfaced any of it,
+  because an EOL base builds, deploys and reports healthy. `base-images.yml` sweeps every
+  repo's default branch each Monday against endoflife.date and goes red; it is
+  deliberately **not a deploy gate**. Two traps. A new Dockerfile written by copying an
+  old one inherits its base, which is how catenary got `alpine:3.20` in 2026-09 (CANT-78).
+  And `cf-access-guard` is built **here**, so its `golang:` pin is this repo's to keep
+  current — a toolchain bump there is validated by the `--target test` build, the same
+  one CI runs. `docs/base-images.md` is the rule and the decision of record.
 - **Render config files from templates, not copied content.** A sudoers rule
   written with `copy: content=` silently loses validation and ownership
   semantics that `template:` gives you (#84). This generalizes: if a file has a
@@ -744,6 +761,12 @@ There is no test suite — this repo is configuration, so validation is mostly
   than at your edit. **Shell comments inside the block count**, so a comment-only
   change can break CI, and `actionlint` accepts the file either way. Prose belongs
   in a YAML comment *above* the step, which is free.
+- `make base-images-check dir=~/projects` after editing any Dockerfile in any estate repo,
+  and `make base-images-check` to ask what is merged (SERV-170). `make base-images-test`
+  proves the check can still fail — it fails closed, so unlike the lint gate a broken
+  check and a clean estate do not look alike, but the fixture run is still what shows the
+  EOL and floating verdicts actually fire. An `UNMAPPED` row is fixed by adding the
+  product to `PRODUCT_MAP`, never by an exemption.
 - `docker compose config` catches compose syntax and interpolation errors.
 - The two Go modules are the only real test suites here. After touching either,
   `docker build --build-context cfaccess=./pkg/cfaccess --target test -f

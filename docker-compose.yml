@@ -1571,7 +1571,7 @@ services:
   # inside the container does not survive and could not be written in the first
   # place.
   wiki:
-    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    image: nginx:1.30-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
     container_name: wiki
     restart: unless-stopped
     volumes:

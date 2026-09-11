@@ -86,6 +86,23 @@ force-recreate: deploy-root network
 workflow-size:
 	./scripts/check-run-expression-size.sh
 
+# Fail on a first-party base image that is past end-of-life or floating (SERV-170). The
+# default sweep reads every Dockerfile on every first-party repo's default branch through
+# `gh api` and checks each FROM against endoflife.date — the same thing base-images.yml
+# does every Monday. `dir=` checks local checkouts instead, which is the form to run
+# before pushing a Dockerfile change. Exit 2 (not 0) when endoflife.date is unreachable.
+# Usage: make base-images-check                (the estate, as GitHub has it)
+#        make base-images-check dir=~/projects (every Dockerfile under a tree)
+base-images-check:
+	@if [ -n "$(dir)" ]; then ./scripts/check-base-images.sh --dir "$(dir)"; \
+	else ./scripts/check-base-images.sh --estate docker-compose.yml; fi
+
+# Prove the base-image check still FAILS on an EOL tag, a floating tag and an unmapped
+# image, against a fixture policy. A guard that cannot fail is indistinguishable from a
+# clean estate; base-images.yml runs this before the real sweep for the same reason.
+base-images-test:
+	@./scripts/check-base-images.sh --self-test
+
 # Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
 # Usage: make drift-check            (check every service)
 #        make drift-check svc=argosy (check a single service)

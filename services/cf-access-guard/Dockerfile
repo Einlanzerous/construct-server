@@ -9,10 +9,10 @@
 # picked up on the next deploy the same way a config change is.
 #
 # Digest-pinned for the same reason every third-party image in docker-compose.yml is
-# (SERV-105): `golang:1.25-alpine` is a moving tag, and this image is rebuilt on every
+# (SERV-105): `golang:1.26-alpine` is a moving tag, and this image is rebuilt on every
 # deploy — so without the pin the compiler behind the estate's auth gate can change
 # with no diff anywhere. The tag is provenance, the digest is the pin.
-FROM golang:1.25-alpine@sha256:1e0126852075c9c60731c8ba49088448b91f63e2aed97ca9d1a9791622a05946 AS build
+FROM golang:1.26-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS build
 # The repo layout is mirrored inside the image — the guard at
 # services/cf-access-guard, the module at pkg/cfaccess — so the `../../pkg/cfaccess`
 # replace in go.mod resolves to the same place here as in a checkout. Flattening it
