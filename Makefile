@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check workflow-size health-check edge-auth-check versions assert-tokens env-ownership-check promote-dispatch-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check versions assert-tokens env-ownership-check promote-dispatch-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
