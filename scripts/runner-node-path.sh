@@ -27,15 +27,24 @@
 # the file, and --restart bounces exactly the idle runners whose two disagree. A busy
 # runner (a Runner.Worker in flight) is skipped, never killed — re-run later.
 #
+# A runner is "a directory holding a .path", not "a child of ~/runners": the ansible
+# github_runner role writes one at ~/actions-runner, and that directory exists on the
+# box with a half-finished registration whose .path is the bare system PATH — node 18
+# again, one completed playbook run from being a live unit (SERV-181). A check that
+# walked only ~/runners would print "every .path resolves…" over it, in green. So the
+# role's path is walked too, whether or not anything is registered there.
+#
 # Usage:
 #   ./scripts/runner-node-path.sh            check: per-runner table, exit 1 on any defect
 #   ./scripts/runner-node-path.sh --fix      rewrite every .path, then check
 #   ./scripts/runner-node-path.sh --restart  restart idle runners whose live PATH != .path (sudo)
-#   RUNNERS_ROOT   where the runner directories live      (default: $HOME/runners)
-#   NODE_BIN_DIR   the directory node must resolve from   (default: fnm's default alias)
+#   RUNNERS_ROOT   parent of the runner directories        (default: $HOME/runners)
+#   RUNNER_DIRS    extra runner directories, colon-separated (default: $HOME/actions-runner)
+#   NODE_BIN_DIR   the directory node must resolve from     (default: fnm's default alias)
 set -euo pipefail
 
 RUNNERS_ROOT="${RUNNERS_ROOT:-$HOME/runners}"
+RUNNER_DIRS="${RUNNER_DIRS-$HOME/actions-runner}"
 NODE_BIN_DIR="${NODE_BIN_DIR:-$HOME/.local/share/fnm/aliases/default/bin}"
 MULTISHELL_RE='^/run/user/[0-9]+/fnm_multishells/'
 SYSTEM_DIR_RE='^/(usr|bin|sbin)(/|$)'
@@ -45,7 +54,7 @@ case "${1:-}" in
   "" ) ;;
   --fix ) mode=fix ;;
   --restart ) mode=restart ;;
-  -h|--help ) sed -n '2,36p' "$0"; exit 0 ;;
+  -h|--help ) sed -n '2,/^set -euo/{/^set -euo/!p;}' "$0"; exit 0 ;;
   * ) echo "unknown argument: $1" >&2; exit 2 ;;
 esac
 
@@ -58,6 +67,10 @@ runner_dirs() {
   local d
   for d in "$RUNNERS_ROOT"/*/; do
     [ -f "$d.path" ] && printf '%s\n' "${d%/}"
+  done
+  local IFS=':'
+  for d in $RUNNER_DIRS; do
+    [ -n "$d" ] && [ -f "$d/.path" ] && printf '%s\n' "${d%/}"
   done
 }
 
@@ -156,12 +169,16 @@ check() {
 
 case "$mode" in
   fix )
+    # A refusal is loud and leaves that file alone; it must not also leave the other
+    # twelve unprocessed and the table unprinted.
+    rc=0
     for dir in $(runner_dirs); do
       echo "$(basename "$dir"):"
-      rewrite "$dir/.path"
+      rewrite "$dir/.path" || rc=1
     done
     echo
-    check
+    check || exit 1
+    exit "$rc"
     ;;
   restart )
     rc=0
