@@ -313,10 +313,38 @@ check_dockerfile() {
     # isEol is endoflife.date's own verdict, but it is computed against ITS clock; the
     # date comparison below is what makes BASE_IMAGE_TODAY meaningful and what catches
     # a cycle whose eolFrom has passed since the JSON was cached.
+    # Go and nginx publish no EOL date: a cycle is supported until the second-next one
+    # ships, and endoflife.date carries eolFrom: null for every supported cycle of both.
+    # A date-only warning would therefore never fire for two of the estate's commonest
+    # base products and the guard would go straight from OK to EOL. So with no date, the
+    # OLDEST supported cycle gets an ESTIMATED retirement: the newest cycle's release date
+    # plus one release cadence, and warns inside the window. The cadence is the gap
+    # between the oldest supported cycle and the one it replaced — NOT the gap to the
+    # newest, because nginx ships its stable and mainline weeks apart (1.30 in April,
+    # 1.31 in May) and that gap would put 1.30's retirement in the past. An estimate,
+    # labelled as one; it is what makes "see it coming" true for Go.
+    local est_eol=""
+    if [ -z "$eol_from" ]; then
+      local oldest_supported newest_rel oldest_rel prev_rel
+      oldest_supported="$(jq -r '[.result.releases[] | select(.isEol == false)] | last | .name' "$pf")"
+      if [ "$cycle" = "$oldest_supported" ] && [ "$cycle" != "$newest" ]; then
+        newest_rel="$(jq -r --arg c "$newest" '.result.releases[] | select(.name == $c) | .releaseDate // empty' "$pf")"
+        oldest_rel="$(jq -r --arg c "$cycle" '.result.releases[] | select(.name == $c) | .releaseDate // empty' "$pf")"
+        prev_rel="$(jq -r --arg c "$cycle" '.result.releases as $r | ($r | map(.name) | index($c)) as $i | if $i != null and ($i + 1) < ($r | length) then ($r[$i + 1].releaseDate // empty) else empty end' "$pf")"
+        if [ -n "$newest_rel" ] && [ -n "$oldest_rel" ] && [ -n "$prev_rel" ]; then
+          local cadence
+          cadence=$(( ( $(date -u -d "$oldest_rel" +%s) - $(date -u -d "$prev_rel" +%s) ) / 86400 ))
+          est_eol="$(date -u -d "$newest_rel + $cadence days" +%F)"
+        fi
+      fi
+    fi
+
     if [ "$is_eol" = "true" ] || { [ -n "$eol_from" ] && [ "$(days_until "$eol_from")" -lt 0 ]; }; then
       report EOL "$where" "$ref" "$product $cycle reached end-of-life ${eol_from:-(unknown date)}; newest supported is $newest"
     elif [ -n "$eol_from" ] && [ "$(days_until "$eol_from")" -le "$WARN_DAYS" ]; then
       report SOON "$where" "$ref" "$product $cycle reaches end-of-life $eol_from ($(days_until "$eol_from") days); newest supported is $newest"
+    elif [ -n "$est_eol" ] && [ "$(days_until "$est_eol")" -le "$WARN_DAYS" ]; then
+      report SOON "$where" "$ref" "$product $cycle is the oldest supported cycle and publishes no EOL date; the next release retires it, estimated ~$est_eol from the release cadence; newest supported is $newest"
     else
       report OK "$where" "$ref" "$product $cycle supported${eol_from:+ until $eol_from}"
     fi
@@ -399,7 +427,16 @@ self_test() {
  {"name":"3.20","codename":null,"isEol":true,"eolFrom":"2026-04-01"}]}}
 JSON
   cat >"$t/policy/nginx.json" <<'JSON'
-{"result":{"name":"nginx","releases":[{"name":"1.30","codename":null,"isEol":false,"eolFrom":null}]}}
+{"result":{"name":"nginx","releases":[
+ {"name":"1.31","codename":null,"isEol":false,"eolFrom":null,"releaseDate":"2026-05-01"},
+ {"name":"1.30","codename":null,"isEol":false,"eolFrom":null,"releaseDate":"2026-04-01"},
+ {"name":"1.29","codename":null,"isEol":true,"eolFrom":"2026-05-13","releaseDate":"2025-11-01"}]}}
+JSON
+  cat >"$t/policy/go.json" <<'JSON'
+{"result":{"name":"go","releases":[
+ {"name":"1.27","codename":null,"isEol":false,"eolFrom":null,"releaseDate":"2026-08-19"},
+ {"name":"1.26","codename":null,"isEol":false,"eolFrom":null,"releaseDate":"2026-02-10"},
+ {"name":"1.25","codename":null,"isEol":true,"eolFrom":"2026-08-19","releaseDate":"2025-08-12"}]}}
 JSON
   cat >"$t/policy/debian.json" <<'JSON'
 {"result":{"name":"debian","releases":[{"name":"13","codename":"Trixie","isEol":false,"eolFrom":"2030-06-30"},{"name":"12","codename":"Bookworm","isEol":false,"eolFrom":"2028-06-30"}]}}
@@ -452,6 +489,19 @@ FROM alpine:3.22
 EOF
   run_case codename-pinned 0 OK <<'EOF'
 FROM debian:trixie-slim
+EOF
+  # No EOL date published (go, nginx): the oldest supported cycle warns once its
+  # estimated retirement (newest release + the cadence between the oldest supported
+  # cycle and its predecessor) is inside the window — nginx 1.30 here lands
+  # ~2026-09-29, 18 days out; go 1.26 lands ~2027-02-17, so it stays OK.
+  run_case no-date-oldest-in-window-warns 0 SOON <<'EOF'
+FROM nginx:1.30-alpine
+EOF
+  run_case no-date-oldest-far-ok 0 OK <<'EOF'
+FROM golang:1.26-bookworm
+EOF
+  run_case no-date-newest-ok 0 OK <<'EOF'
+FROM nginx:1.31-alpine
 EOF
   run_case arg-resolved 0 OK <<'EOF'
 ARG UBUNTU=24.04

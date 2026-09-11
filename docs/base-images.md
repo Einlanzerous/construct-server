@@ -48,7 +48,13 @@ so `oven/bun:1.3-alpine` passes; pin it tighter when a repo has a reason to (lyc
 LYCM-71), but the rule does not demand it.
 
 A cycle inside the 90-day warning window is reported and does not fail. That is the
-window in which to bump on your own schedule instead of the guard's.
+window in which to bump on your own schedule instead of the guard's. Go and nginx publish
+no EOL date — a cycle is supported until the second-next one ships — so for those the
+guard **estimates** it: the oldest supported cycle is retired by the next release, whose
+date is taken as the newest cycle's release date plus one release cadence (the gap between
+the oldest supported cycle and the one it replaced). `golang:1.26`
+warns about 90 days before 1.28 is due and fails the day it ships. It is an estimate and
+the row says so; without it the guard would go straight from OK to EOL for Go.
 
 ## The guard
 
