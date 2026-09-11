@@ -58,7 +58,8 @@ window in which to bump on your own schedule instead of the guard's.
   through `gh api`, so it sees what is merged rather than what is checked out. The repo
   list is derived from `docker-compose.yml`'s `ghcr.io/einlanzerous/*` images the same
   way `verify-tag.sh` and the wiki derive theirs, plus `EXTRA_REPOS` for repos that ship
-  no image here (this repo, cta-watch). A new service needs no edit.
+  no image here (this repo, signet, cta-watch). A new service needs no edit, and a
+  derivation that matches nothing is exit 2 rather than a sweep of `EXTRA_REPOS` alone.
 - `--dir ~/projects` does the same for local checkouts — the form to run before pushing
   a Dockerfile change.
 - `--self-test` proves the script can **fail**: fixture policy, fixture Dockerfiles, and
@@ -95,8 +96,11 @@ Locally: `make base-images-check` (the estate), `make base-images-check dir=~/pr
   Traefik supports only its newest minor), `redis:7-alpine` names a major where Redis
   cycles are `major.minor`, and the four watchtower leaves float by design (SERV-75).
   That is a different sweep with a different exemption list — it is SERV-105's domain and
-  has its own ticket. The one third-party image this repo *builds from* rather than runs,
-  the wiki's nginx, was fixed alongside because it is the same class as the service repos'.
+  has its own ticket. The wiki's nginx was bumped alongside because the sweep that found
+  the service repos' nginx found it too — but it is a compose `image:`, not a `FROM`, so
+  **its pin stays manual until SERV-179**; when 1.30 goes EOL, Monday's run will not say so.
+- **sextant.** It has a Dockerfile (`golang:1.26-alpine` → distroless, clean) but its
+  checkout has no git remote, so `--estate` cannot read it; only `--dir ~/projects` does.
 - **Vulnerabilities.** A supported base can still ship a CVE. That is a scanner's question
   (Trivy or Grype in the publish workflows), not this one's, and it is worth its own
   ticket rather than being bolted on here.

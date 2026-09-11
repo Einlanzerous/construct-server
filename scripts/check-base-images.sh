@@ -98,9 +98,11 @@ declare -A PRODUCT_MAP=(
 )
 
 # Repos with no first-party image in the compose file, which therefore cannot be
-# discovered from it. Mirrors EXTRA_REPOS in wiki/generate/sources/repos.ts, plus
-# cta-watch, which is first-party but not deployed on this stack.
-EXTRA_REPOS=(construct-server cta-watch)
+# discovered from it: the two the wiki names in EXTRA_REPOS (wiki/generate/sources/
+# repos.ts — this repo, and signet, a host binary with no Dockerfile today), plus
+# cta-watch, which is first-party but not deployed on this stack. sextant is NOT here:
+# its checkout has no remote, so only `--dir ~/projects` can reach it.
+EXTRA_REPOS=(construct-server signet cta-watch)
 
 # Images whose ghcr.io name is not the repo that builds them.
 declare -A IMAGE_REPO_OVERRIDES=(
@@ -326,11 +328,16 @@ check_dockerfile() {
 # Every first-party repo: the ghcr.io images in the compose file map onto repos the same
 # way verify-tag.sh and the wiki derive them, so a new service needs no edit here.
 estate_repos() {
-  local compose="$1"
+  local compose="$1" derived
+  # Case-insensitive and quote-tolerant, because a compose file accepts both and a
+  # pattern that silently stopped matching would shrink the sweep to EXTRA_REPOS with
+  # nothing going red — the one place this script could narrow to nothing. So the
+  # derived list is asserted: matching no image at all is exit 2, not an empty result.
+  derived="$(grep -oiE 'image: *["'"'"']?ghcr\.io/einlanzerous/[a-z0-9_-]+' "$compose" \
+      | sed -E 's#.*[Ee][Ii][Nn][Ll][Aa][Nn][Zz][Ee][Rr][Oo][Uu][Ss]/##' | tr 'A-Z' 'a-z' || true)"
+  [ -n "$derived" ] || die "no ghcr.io/einlanzerous images found in $compose — the repo list would be EXTRA_REPOS alone, refusing"
   {
-    grep -oE 'image: *ghcr\.io/einlanzerous/[a-z0-9_-]+' "$compose" \
-      | sed -E 's#.*ghcr\.io/einlanzerous/##' \
-      | while read -r img; do printf '%s\n' "${IMAGE_REPO_OVERRIDES[$img]:-$img}"; done
+    while read -r img; do printf '%s\n' "${IMAGE_REPO_OVERRIDES[$img]:-$img}"; done <<<"$derived"
     printf '%s\n' "${EXTRA_REPOS[@]}"
   } | sort -u
 }
@@ -406,7 +413,9 @@ JSON
     local file="$t/$name.Dockerfile"
     cat >"$file"
     set +e
-    out="$(BASE_IMAGE_POLICY_DIR="$t/policy" BASE_IMAGE_TODAY=2026-09-11 GITHUB_ACTIONS= "$0" "$file" 2>&1)"; rc=$?
+    # GITHUB_STEP_SUMMARY is cleared as well as GITHUB_ACTIONS: the children would
+    # otherwise append eleven fixture tables above the real sweep's in the run summary.
+    out="$(BASE_IMAGE_POLICY_DIR="$t/policy" BASE_IMAGE_TODAY=2026-09-11 GITHUB_ACTIONS= GITHUB_STEP_SUMMARY= "$0" "$file" 2>&1)"; rc=$?
     set -e
     if [ "$rc" = "$expect" ] && { [ -z "$expect_status" ] || grep -q "^$expect_status " <<<"$out"; }; then
       printf '  ok    %-28s exit %s%s\n' "$name" "$rc" "${expect_status:+ ($expect_status)}"
@@ -456,7 +465,7 @@ FROM --platform=linux/amd64 alpine:3.23@sha256:000000000000000000000000000000000
 EOF
   # Missing policy must be exit 2, never 0.
   set +e
-  BASE_IMAGE_POLICY_DIR="$t/nowhere" "$0" "$t/clean.Dockerfile" >/dev/null 2>&1; rc=$?
+  BASE_IMAGE_POLICY_DIR="$t/nowhere" GITHUB_ACTIONS= GITHUB_STEP_SUMMARY= "$0" "$t/clean.Dockerfile" >/dev/null 2>&1; rc=$?
   set -e
   if [ "$rc" = 2 ]; then printf '  ok    %-28s exit 2\n' "policy-unavailable"; else printf '  FAIL  policy-unavailable expected exit 2, got %s\n' "$rc"; fails=$((fails + 1)); fi
 
