@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check workflow-size health-check edge-auth-check versions assert-tokens env-ownership-check promote-dispatch-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check versions assert-tokens env-ownership-check promote-dispatch-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
@@ -99,6 +99,18 @@ drift-check:
 #        make health-check svc=switchyard (one service)
 health-check:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-healthy.sh $(svc)
+
+# SERV-135: which node do the self-hosted runners run? Each runner's `.path` is
+# captured from the shell that ran config.sh, and an fnm shell writes a tmpfs
+# multishell directory that dies on reboot — after which node falls through to the
+# EOL system v18. This pins every ~/runners/*/.path to fnm's `default` alias and
+# reports the LIVE listener PATH beside the file, since runsvc.sh reads it only at
+# start. Re-run the bare form after a reboot; it should not change.
+# Usage: make runner-node-path            (check every runner; exit 1 on any defect)
+#        make runner-node-path fix=1      (rewrite every .path, then check)
+#        make runner-node-path restart=1  (restart idle runners on an old .path; sudo)
+runner-node-path:
+	./scripts/runner-node-path.sh $(if $(restart),--restart,$(if $(fix),--fix))
 
 # The SERV-58 push gate: run this repo's own format/lint checks the way the pre-push hook
 # would. Useful on its own, and the fastest way to see what the gate sees.
