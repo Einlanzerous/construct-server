@@ -234,9 +234,12 @@ anything deploys or gets versioned.
   the shell that ran `config.sh` had, and an fnm shell's PATH names a per-shell
   `/run/user/…/fnm_multishells/` directory — tmpfs, gone on reboot, after which node
   silently falls through to the system v18 (EOL April 2025). Nine of thirteen runners
-  carried one; five had already flipped. Every `~/runners/*/.path` now names fnm's
-  `default` alias instead, so all thirteen resolve the same node and the answer was
-  chosen rather than inherited. `runsvc.sh` reads `.path` **once, at unit start**, so a
+  carried one; five had already flipped. Every `.path` on the box now names fnm's
+  `default` alias instead — the thirteen under `~/runners/` and the one the ansible
+  `github_runner` role left half-registered at `~/actions-runner` (SERV-181), which the
+  script walks precisely because a check scoped to `~/runners/` printed green over it —
+  so all fourteen resolve the same node and the answer was chosen rather than
+  inherited. `runsvc.sh` reads `.path` **once, at unit start**, so a
   rewrite changes nothing until the runner restarts; the script reports the live
   listener's PATH beside the file for that reason. **Never copy another runner's
   `.path`** when adding one — run the script, which is what `~/runners/POOL-README.md`
