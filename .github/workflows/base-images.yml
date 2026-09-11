@@ -1,0 +1,95 @@
+name: Base Images
+
+# Fail when any first-party service builds FROM a base image that is past end-of-life
+# or referenced by a floating tag (SERV-170).
+#
+# The 2026-09-05 survey found four repos on an Alpine that had been out of support for
+# five months, two on a Node that had been for four, Go builders two releases behind,
+# and nginx runtimes fifteen months past EOL — none of it visible from anywhere, because
+# an EOL base image builds, deploys and reports healthy. The Dockerfiles live in the
+# service repos and only change when someone edits them, so a check that ran on their
+# CI would run exactly when nobody is looking at the base image. This one runs on a
+# CLOCK: every Monday it reads every Dockerfile on every first-party repo's default
+# branch, asks endoflife.date whether each cycle is still supported, and goes red if
+# not. The next answer to "how many repos are on an EOL base" is this run, not a survey.
+#
+# ── WHY IT LIVES HERE, ON A SCHEDULE, ON A HOSTED RUNNER ─────────────────────────────
+#
+# Here, because this repo already derives the list of first-party repos from
+# docker-compose.yml (verify-tag.sh, the wiki) and one sweep with one policy is the
+# SERV-111 shape — many per-repo checks with their own copies of the rule would drift
+# the same way the Dockerfiles did. On a schedule, because a base image goes EOL with
+# no commit anywhere. On ubuntu-latest, because it needs only curl, jq and gh, has no
+# reason to touch the stack, and should still report when the box is busy or down.
+#
+# ── WHAT A RED RUN MEANS ─────────────────────────────────────────────────────────────
+#
+# Read the step summary: one row per FROM line, with the repo path, the cycle, when it
+# ended, and the newest supported cycle. Fix it in the service repo (bump the tag, build,
+# release), then re-run this from the Actions tab. A scheduled run that fails emails the
+# repo owner; that is the alarm, and it is deliberately not gated on any deploy, since a
+# stale base image is a rotation-class problem and not a "stop the deploy" one.
+#
+# A run that cannot reach endoflife.date fails too (exit 2). "Could not check" must never
+# come out green — see the note in scripts/check-base-images.sh.
+
+on:
+  schedule:
+    # Mondays 07:00 UTC — after the weekend's upstream releases, before the week's work.
+    - cron: '0 7 * * 1'
+  pull_request:
+    paths:
+      - 'scripts/check-base-images.sh'
+      - '.github/workflows/base-images.yml'
+  push:
+    branches: ["main"]
+    paths:
+      - 'scripts/check-base-images.sh'
+      - '.github/workflows/base-images.yml'
+      - 'docker-compose.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A guard that fails closed is only worth having if it is known to fail at all,
+      # and the fixture run is the only way to see that without an EOL image in the
+      # estate. It runs first so a broken script reads as "the script is broken" and
+      # not as "the estate is clean".
+      - name: Prove the check can fail
+        run: ./scripts/check-base-images.sh --self-test
+
+      # Two tokens, same split as wiki.yml. GITHUB_TOKEN reads the public repos, which
+      # is most of them. WIKI_DOCS_TOKEN reads the private ones (amber, switchyard);
+      # without it those two are reported as UNREADABLE and the run fails, because a
+      # sweep that silently skipped repos would be green on an estate it only half
+      # examined. The script prefers GH_TOKEN, so the private-capable one goes there.
+      - name: Sweep every first-party Dockerfile
+        env:
+          GH_TOKEN: ${{ secrets.WIKI_DOCS_TOKEN || secrets.GITHUB_TOKEN }}
+        run: ./scripts/check-base-images.sh --estate docker-compose.yml
+
+      - name: Explain a failure
+        if: failure()
+        run: |
+          {
+            echo "## A first-party service builds from an unsupported or floating base image"
+            echo
+            echo "Each row above names the repo, file and line. The fix lives in that repo:"
+            echo "bump the tag to the newest supported cycle the row names, build, and release."
+            echo "Then re-run this workflow from the Actions tab."
+            echo
+            echo "An \`UNMAPPED\` row means the image's product is not in \`PRODUCT_MAP\` in"
+            echo "\`scripts/check-base-images.sh\` — add the mapping rather than an exemption."
+            echo "An \`UNRESOLVED\` row on a whole repo means the token could not read it."
+            echo
+            echo "Locally: \`make base-images-check\` (this sweep) or"
+            echo "\`make base-images-check dir=~/projects\` (your checkouts)."
+            echo "Design of record: \`docs/base-images.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"

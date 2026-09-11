@@ -69,6 +69,7 @@ default is a common-but-wrong instinct worth pushing back on explicitly.
 | Auth | Per-actor bearer tokens | Switchyard-style: one token per service. |
 | Secrets | Signet | The vault is the intended source of truth, and `signet render` writes the env files it manages. It does not yet cover every path — a deploy-time secret can legitimately live only in a GitHub Environment. Check `signet status` before assuming. |
 | Containers | Docker Compose, `construct-server` | All services on `construct_net`. |
+| Base images | A **supported** cycle, named to cycle precision | `alpine:3.23`, `node:24-alpine`, `golang:1.26-bookworm` — never `alpine:3`, `nginx:alpine` or `latest`, and never a cycle endoflife.date lists as EOL. Checked every Monday by construct-server's `base-images.yml` across every repo; `docs/base-images.md` there is the rule. A new Dockerfile written from an older one inherits its base — check before copying. |
 | CI | GitHub Actions | Deploys and the reviewer run on self-hosted runners (`~/runners/<repo>/`); release-please and lint run on `ubuntu-latest`. |
 
 When deviating, say so out loud and explain why — usually the deviation is the
