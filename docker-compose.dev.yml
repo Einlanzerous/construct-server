@@ -70,7 +70,8 @@ services:
       #
       # Only the four dev services are listed. The prod-only roles the shared
       # script also tries to create (cook_book, centrifuge, authentik, interlock,
-      # amber, placard, and — since SERV-169 — chronicle and asr) have no password
+      # amber, placard, since SERV-169 chronicle and asr, and since SERV-182
+      # chronicle_tier1) have no password
       # here and are skipped loudly. That is correct: they are not part of the dev
       # slice. Expect one SKIPPING line per name in every dev deploy log; the count
       # grows whenever init-db.sh gains a prod-only role, and that is not a fault.
