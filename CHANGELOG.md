@@ -1,5 +1,22 @@
 # Changelog
 
+## [4.31.0](https://github.com/Einlanzerous/construct-server/compare/v4.30.0...v4.31.0) (2026-09-12)
+
+
+### Features
+
+* **db:** provision chronicle and asr in init-db.sh, PUBLIC revoked (SERV-169) ([#189](https://github.com/Einlanzerous/construct-server/issues/189)) ([79dd6a7](https://github.com/Einlanzerous/construct-server/commit/79dd6a7094a2479bb564066e3401629aabb8e098))
+* **db:** provision chronicle_tier1 in init-db.sh and hand chronicle its tier-1 DSN (SERV-182) ([#195](https://github.com/Einlanzerous/construct-server/issues/195)) ([3421871](https://github.com/Einlanzerous/construct-server/commit/3421871c0bad96efb12069ad363d54b53f9400a9))
+* **deploy:** gate every deploy on chronicle tier1-audit (SERV-183) ([#196](https://github.com/Einlanzerous/construct-server/issues/196)) ([bae52ec](https://github.com/Einlanzerous/construct-server/commit/bae52ec930b3c39060f56f588a2caa769630026a))
+* **deploy:** guard every first-party base image against EOL and floating tags (SERV-170) ([#194](https://github.com/Einlanzerous/construct-server/issues/194)) ([871dbf0](https://github.com/Einlanzerous/construct-server/commit/871dbf02d6c2c3106a812645eaf8b0478a228bba))
+* **deploy:** pass GITHUB_DISPATCH_TOKEN through to switchyard (SERV-178) ([96e8481](https://github.com/Einlanzerous/construct-server/commit/96e8481149e445a5b35bd915b932b87f18ee7994))
+
+
+### Bug Fixes
+
+* **db:** db-init reads the host init-db.sh, not the container's stale copy (SERV-172) ([#192](https://github.com/Einlanzerous/construct-server/issues/192)) ([0853130](https://github.com/Einlanzerous/construct-server/commit/0853130e869a805cebface47c054218ea0eea17a))
+* **runner:** pin every self-hosted runner's node to fnm's default alias (SERV-135) ([#193](https://github.com/Einlanzerous/construct-server/issues/193)) ([9ee12d1](https://github.com/Einlanzerous/construct-server/commit/9ee12d1921ca954c21163fa6cccecb6b4a713449))
+
 ## [4.30.0](https://github.com/Einlanzerous/construct-server/compare/v4.29.0...v4.30.0) (2026-09-04)
 
 
