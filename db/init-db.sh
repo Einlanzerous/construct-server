@@ -98,21 +98,8 @@ ensure_db placard_user "$PLACARD_DB_PASSWORD" placard_test
 # ~10 failures reading `FATAL: database "asr_test" does not exist`. One line ends
 # that permanently.
 #
-# NOTHING HERE MAY TOUCH chronicle_tier1, AND THIS SCRIPT MUST NOT CREATE IT.
-# That role is CHRN-52's — one of Chronicle's five full-diff tickets — and it needs
-# a shape ensure_db cannot express: LOGIN with CONNECT and nothing else, its schema
-# and table grants coming from Chronicle's own migrations, where the tier doctrine
-# is tested. Running it through ensure_db would reach the unconditional
-# `GRANT ALL PRIVILEGES ON DATABASE` above, re-applied on EVERY deploy, turning the
-# deliberate `c` into `CTc` — CREATE on the tier-2 database for the very role the
-# tier split exists to keep out, silently undoing any manual revoke. Chronicle's
-# TestTier1RoleCannotReachCredentials asserts TABLE access and would stay green.
-#
-# SEQUENCING: chronicle/migrations/0001_init.up.sql:46 grants to chronicle_tier1
-# unconditionally. On a rebuilt data directory with this landed and CHRN-52 not,
-# Chronicle's first migration raises `role "chronicle_tier1" does not exist` and the
-# service does not boot. That is not worse than today — nothing recreates anything
-# today — but it is partial provisioning that LOOKS complete. See SERV-169.
+# chronicle_tier1 — Chronicle's SECOND role — is provisioned BELOW, in its own
+# block, and deliberately not through ensure_db. See there (SERV-182 / CHRN-52).
 ensure_db chronicle "$CHRONICLE_DB_PASSWORD" chronicle
 ensure_db chronicle "$CHRONICLE_DB_PASSWORD" chronicle_test
 ensure_db asr "$ASR_DB_PASSWORD" asr
@@ -122,3 +109,82 @@ revoke_public chronicle
 revoke_public chronicle_test
 revoke_public asr
 revoke_public asr_test
+
+# --- chronicle_tier1 (CHRN-52 / SERV-182) ---
+#
+# Chronicle's SECOND role: the one derived work (the Scribe today, tier-1 reads
+# next) connects as. Its whole point is to hold LESS than `chronicle` — here,
+# CONNECT on the database and nothing else. Its schema and table grants come
+# from Chronicle's own migrations (0001 for tier1, 0007 for two tier-2 reads),
+# where the tier doctrine is tested; this script gives it a way in and no more.
+#
+# NEVER ensure_db FOR THIS ROLE. ensure_db ends in an unconditional
+# `GRANT ALL PRIVILEGES ON DATABASE`, re-applied every deploy, which would turn
+# the deliberate `c` into `CTc` — CREATE on the tier-2 database for the very role
+# the tier split exists to keep out. Chronicle's boot audit (CHRN-52) would then
+# refuse to serve, correctly, and the deploy gate that runs `chronicle
+# tier1-audit` would go red. This block is what keeps that from being how
+# anyone finds out.
+#
+# These statements MIRROR chronicle/deploy/tier1-role.sql — the single
+# definition Chronicle's provision-db.sh and its CI apply. Change them together.
+# The audit running under chronicle/verify.sh against chronicle_test, which THIS
+# script provisions, is what catches the two drifting.
+#
+# Same empty-password guard as ensure_db, for the same reason: an unset
+# CHRONICLE_TIER1_DB_PASSWORD must skip loudly, never blank the role.
+#
+# WHAT A RE-RUN PUTS BACK, exactly: the five privilege attributes (superuser,
+# createdb, createrole, replication, bypassrls — each stated NO rather than left
+# to the default), LOGIN, the password, and the database-level ACL. NOT role
+# memberships: a hand-issued `GRANT chronicle TO chronicle_tier1` survives this
+# block. Chronicle's boot audit checks pg_auth_members and refuses to serve on
+# any membership, so that escalation is caught at the next boot and by the
+# deploy gate; it is not silently undone here.
+#
+# SEQUENCING, stated so a rebuild's log reads as expected rather than broken:
+# deploy.yml runs this script AFTER `up -d`, and chronicle/migrations/0001 grants
+# to chronicle_tier1 unconditionally. So on a rebuilt data directory Chronicle
+# boots once against a cluster without the role, fails migration 0001 with
+# `role "chronicle_tier1" does not exist`, this block then creates it, and
+# `restart: unless-stopped` brings Chronicle up clean on the next cycle. One
+# crash cycle, by construction — not a fault to chase.
+ensure_chronicle_tier1() {
+    local pass=$1; shift
+    local psql_cmd="psql --username ${POSTGRES_USER:-postgres} --dbname ${POSTGRES_DB:-postgres}"
+
+    if [ -z "$pass" ]; then
+        echo "ensure_chronicle_tier1: SKIPPING — CHRONICLE_TIER1_DB_PASSWORD is empty/unset; refusing to blank the role" >&2
+        return 0
+    fi
+
+    local attrs="LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+    if $psql_cmd -tAc "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'chronicle_tier1'" | grep -q 1; then
+        $psql_cmd -c "ALTER ROLE chronicle_tier1 WITH $attrs PASSWORD '$pass';"
+    else
+        $psql_cmd -c "CREATE ROLE chronicle_tier1 WITH $attrs PASSWORD '$pass';"
+    fi
+
+    # Per database: CONNECT and nothing else, and no way into schema public
+    # (PUBLIC keeps USAGE there by default; Postgres 15 dropped only CREATE).
+    # Skipped when the database does not exist, so an ensure_db that bailed on
+    # an empty password does not become a hard failure under `set -e`.
+    local db
+    for db in "$@"; do
+        if ! $psql_cmd -tAc "SELECT 1 FROM pg_database WHERE datname = '$db'" | grep -q 1; then
+            echo "ensure_chronicle_tier1: SKIPPING '$db' — database does not exist" >&2
+            continue
+        fi
+        $psql_cmd -c "REVOKE ALL ON DATABASE $db FROM chronicle_tier1;"
+        $psql_cmd -c "GRANT CONNECT ON DATABASE $db TO chronicle_tier1;"
+        # -v ON_ERROR_STOP=1 because this is the one call in the file with two -c
+        # flags: without it psql runs on past a failed first statement and exits
+        # with the LAST statement's status, so `set -e` would not fire and a
+        # deploy could go green having left PUBLIC with USAGE on the schema.
+        psql --username "${POSTGRES_USER:-postgres}" --dbname "$db" -v ON_ERROR_STOP=1 \
+            -c "REVOKE ALL ON SCHEMA public FROM PUBLIC;" \
+            -c "REVOKE ALL ON SCHEMA public FROM chronicle_tier1;"
+    done
+}
+
+ensure_chronicle_tier1 "$CHRONICLE_TIER1_DB_PASSWORD" chronicle chronicle_test

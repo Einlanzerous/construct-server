@@ -25,20 +25,24 @@ anything deploys or gets versioned.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
   Since SERV-169 it provisions chronicle and `asr` too (`asr` keeps its own database
   and role on the shared Postgres, not a schema inside Chronicle's — CHRN-25), with
-  PUBLIC revoked on all four so the hand-built hygiene survives a rebuild.
-  **Two things still opt out, for different reasons and with different lifespans:**
+  PUBLIC revoked on all four so the hand-built hygiene survives a rebuild. Since
+  SERV-182 it also provisions chronicle's second role, `chronicle_tier1`, in a
+  **dedicated block that never goes through `ensure_db`**: that helper ends in an
+  unconditional `GRANT ALL PRIVILEGES ON DATABASE`, which would give the tier-1 role
+  CREATE on the tier-2 database on every deploy — and Chronicle's boot audit (CHRN-52)
+  would then refuse to serve. The block mirrors `chronicle/deploy/tier1-role.sql`;
+  change them together. One cost, by construction: on a cold rebuild Chronicle
+  crash-cycles once, because this script runs after `up -d` and migration 0001
+  needs the role.
+  **One thing still opts out:**
   - **catenary** — `deploy/provision.sql` in its own repo, and deliberately never a
     migration: CANT-13 Ruling 3, because migrations run **as** the `catenary` role and
     a role cannot create itself. Permanent, not pending a ticket.
-  - **chronicle's second role**, `chronicle_tier1`, and the grant enforcing its
-    tier-1/tier-2 boundary — from chronicle's own `deploy/provision-db.sh`, until
-    CHRN-52 lands. `init-db.sh` must not create it: `ensure_db` ends in an
-    unconditional `GRANT ALL PRIVILEGES ON DATABASE`, which would give the tier-1 role
-    CREATE on the tier-2 database on every deploy.
 
-  Both are run once by hand as superuser, so a cold host rebuild does **not** self-heal
-  them: catenary crash-loops on an unreachable database until `provision.sql` is run,
-  and chronicle's migration 0001 fails on the missing role rather than booting.
+  It is run once by hand as superuser, so a cold host rebuild does **not** self-heal
+  it: catenary crash-loops on an unreachable database until `provision.sql` is run.
+  (Chronicle used to be in this sentence; since SERV-182 its one crash cycle on a
+  rebuild is the script's ordering, not a missing hand-run step, and it recovers.)
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).

@@ -331,12 +331,18 @@ services:
       # authored and rebuild from nothing. The role is `chronicle`, not
       # `chronicle_user` — see the note in db/init-db.sh before renaming it.
       #
-      # `chronicle_tier1` is deliberately absent. It is CHRN-52's to create, and
-      # init-db.sh must not provision it: ensure_db's unconditional GRANT ALL
-      # PRIVILEGES ON DATABASE would hand the tier-1 role CREATE on the tier-2
-      # database on every deploy.
+      # `chronicle_tier1` (SERV-182 / CHRN-52) is provisioned by the same script
+      # in its OWN block, never through ensure_db: that helper's unconditional
+      # GRANT ALL PRIVILEGES ON DATABASE would hand the tier-1 role CREATE on the
+      # tier-2 database on every deploy, and Chronicle's boot audit would then
+      # refuse to serve. The role's password has to be here as well as in the
+      # chronicle service's DSN below — init-db.sh reads it from THIS container's
+      # environment, and its empty-password guard skips the role loudly without
+      # it, leaving the DSN below to connect with an empty password and Chronicle
+      # to refuse to start.
       #
-      # BUDGET FOR A RECREATE WHEN THESE TWO LINES LAND. An `environment:` edit
+      # BUDGET FOR A RECREATE WHEN ANY OF THESE LINES LAND (the two SERV-169 lines
+      # did; the SERV-182 line does again). An `environment:` edit
       # moves compose's config hash exactly as an image-string edit does, so the
       # next `up -d` recreates postgres; and because this change also touches
       # db/init-db.sh it is not the pure-versions.env shape deploy-scope.sh
@@ -347,6 +353,7 @@ services:
       # fail that run, correctly. Same mechanism as the postgres pin above
       # (SERV-102 / SWY-267 / ITLK-30); be at a terminal when it lands.
       - CHRONICLE_DB_PASSWORD=${CHRONICLE_DB_PASSWORD}
+      - CHRONICLE_TIER1_DB_PASSWORD=${CHRONICLE_TIER1_DB_PASSWORD}
       # ASR (SERV-169) — DB/user provisioned by db/init-db.sh. Role is `asr`.
       # Without this line the script's asr lines are inert: init-db.sh reads role
       # passwords from the postgres container's own environment, and its empty
@@ -1026,17 +1033,18 @@ services:
   #
   # No `ports:`. Reached only through Traefik; publishing a port here would put a
   # listener on the host and bypass the edge entirely.
-  # PARTLY provisioned by db/init-db.sh since SERV-169: role `chronicle` and the
-  # `chronicle`/`chronicle_test` databases, PUBLIC revoked. What that script
-  # deliberately does NOT create is the SECOND role — `chronicle_tier1` — and the
-  # grant enforcing the tier-1/tier-2 boundary, because ensure_db's unconditional
-  # GRANT ALL PRIVILEGES ON DATABASE would hand that role CREATE on the tier-2
-  # database on every deploy. It still comes from deploy/provision-db.sh in
-  # chronicle's own repo, run once by hand as superuser, until CHRN-52 lands.
+  # Provisioned by db/init-db.sh: role `chronicle` and the `chronicle`/
+  # `chronicle_test` databases since SERV-169, PUBLIC revoked; and since SERV-182
+  # the SECOND role, `chronicle_tier1`, in a block of its own that never goes
+  # through ensure_db (whose unconditional GRANT ALL PRIVILEGES ON DATABASE would
+  # hand that role CREATE on the tier-2 database every deploy). The grants INSIDE
+  # the schemas — tier1 outright, SELECT on two tier-2 tables — are Chronicle's
+  # migrations', where the tier doctrine is tested.
   #
-  # So a cold host rebuild now gets chronicle most of the way and still needs that
-  # one step: without chronicle_tier1, migration 0001 raises `role
-  # "chronicle_tier1" does not exist` and the service does not boot.
+  # A cold host rebuild crash-cycles chronicle ONCE, by construction: init-db.sh
+  # runs after `up -d`, so the first boot fails migration 0001 with `role
+  # "chronicle_tier1" does not exist`, the script creates the role, and
+  # `restart: unless-stopped` brings the service up clean. Not a fault to chase.
   # See github.com/Einlanzerous/chronicle (deploy/README.md is the runbook).
   chronicle:
     image: ghcr.io/einlanzerous/chronicle:${CHRONICLE_TAG:-latest}
@@ -1045,6 +1053,16 @@ services:
     environment:
       - CHRONICLE_PORT=4009
       - CHRONICLE_DATABASE_URL=postgres://chronicle:${CHRONICLE_DB_PASSWORD}@postgres:5432/chronicle?sslmode=disable
+      # The pool derived work runs on (the Scribe; CHRN-100's tier-1 reads), as
+      # chronicle_tier1: SAME database, a role migration 0007 lets read two tier-2
+      # tables and write none. REQUIRED (CHRN-52): chronicle refuses to serve when
+      # this is unset, when it connects as any other role, or when it is
+      # unreachable — and never falls back to the DSN above, because a tier-1
+      # pool quietly running as `chronicle` is a tier boundary that is granted
+      # with nothing standing behind it, which is how production ran from E4 to
+      # SERV-182. Sync CHRONICLE_TIER1_DB_PASSWORD into PROD_ENV_FILE before this
+      # lands, or it substitutes empty and the service crash-loops, correctly.
+      - CHRONICLE_TIER1_DATABASE_URL=postgres://chronicle_tier1:${CHRONICLE_TIER1_DB_PASSWORD}@postgres:5432/chronicle?sslmode=disable
       - CHRONICLE_LOG_LEVEL=${CHRONICLE_LOG_LEVEL:-info}
       - CHRONICLE_LOG_FORMAT=${CHRONICLE_LOG_FORMAT:-json}
       - CHRONICLE_SHUTDOWN_GRACE=${CHRONICLE_SHUTDOWN_GRACE:-20s}
