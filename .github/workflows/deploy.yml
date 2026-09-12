@@ -683,6 +683,28 @@ jobs:
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: ./scripts/assert-healthy.sh --timeout 300
 
+      - name: Assert chronicle_tier1 holds only what the tier boundary allows
+        id: tier1-audit
+        # CHRN-52 step 3 (SERV-183). `Ensure databases exist` runs init-db.sh AFTER
+        # `up -d`, so on the deploy that edits that script to widen chronicle_tier1,
+        # chronicle has already booted against the old grants, its boot audit was
+        # clean, and the widened role would serve until chronicle's next unrelated
+        # restart. The boot audit's cadence is chronicle restarts; the threat's
+        # cadence is init-db.sh runs, and only a step here sits at that cadence.
+        #
+        # `chronicle tier1-audit` (chronicle >= 1.11) is the same audit the service
+        # runs at boot: read-only, walks the catalogue, prints one line per privilege
+        # the role holds outside its allow-list with the REVOKE that clears it, exit 1
+        # on any. A red here means "the role was widened, go revoke" — it detects, it
+        # does not recover, like the health assertion above it.
+        #
+        # AFTER the health assertion, not straight after init-db, on purpose: on a
+        # cold rebuild chronicle crash-cycles once (the role does not exist until
+        # init-db.sh runs), and `exec` into a restarting container is a false red.
+        # The health assertion waits out that cycle.
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: docker compose exec -T chronicle chronicle tier1-audit
+
       - name: Assert the origin still rejects a spoofed Host
         id: edge-auth
         # SERV-106. The config half of this runs against files and would pass in a
