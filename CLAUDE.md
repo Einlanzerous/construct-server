@@ -33,7 +33,15 @@ anything deploys or gets versioned.
   would then refuse to serve. The block mirrors `chronicle/deploy/tier1-role.sql`;
   change them together. One cost, by construction: on a cold rebuild Chronicle
   crash-cycles once, because this script runs after `up -d` and migration 0001
-  needs the role.
+  needs the role. And because this script runs AFTER `up -d`, a deploy that widened
+  the role would do so after chronicle had booted and audited the old grants — so
+  since SERV-183 **`deploy.yml` gates every deploy on `chronicle tier1-audit`**, last
+  of its three assertions (after `assert-healthy` and `check-edge-auth`, so a
+  chronicle problem can never take the edge gate offline). That subcommand exists
+  from chronicle 1.11, which makes **1.11 a rollback floor for `CHRONICLE_TAG`**:
+  `versions.env` declares it once as `CHRONICLE_TIER1_AUDIT_FLOOR`, `promote.yml`
+  refuses a lower pin before committing it, and the gate step re-checks the running
+  version so a hand-edited pin fails with a sentence rather than a usage error.
   **One thing still opts out:**
   - **catenary** — `deploy/provision.sql` in its own repo, and deliberately never a
     migration: CANT-13 Ruling 3, because migrations run **as** the `catenary` role and

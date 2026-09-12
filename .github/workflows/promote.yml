@@ -324,6 +324,50 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: ./scripts/verify-tag.sh "$PIN_KEY" "$VERSION"
 
+      - name: Verify the target version clears the tier-1 audit floor
+        # SERV-183. deploy.yml runs `docker compose exec -T chronicle chronicle tier1-audit`
+        # on EVERY deploy, and that subcommand exists from chronicle 1.11. A pin below it
+        # would deploy a healthy chronicle and then fail the gate with a CLI usage error,
+        # mark the rollback `failed` in the ledger, and — because the gate sits in the
+        # deploy — keep failing every later deploy of anything until chronicle came back
+        # up. The same shape as the signet floor below, and handled the same way:
+        # REFUSED HERE, before the pin is committed, during the rollback that is the
+        # only time anyone reaches for an older chronicle.
+        #
+        # THE FLOOR IS READ, NOT COPIED: versions.env declares it once, beside the pin
+        # it bounds, and deploy.yml reads the same line. Fails CLOSED when the line is
+        # missing — "the guard could not run" must not look like "the guard passed".
+        if: inputs.service == 'chronicle'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          floor="$(sed -n 's/^CHRONICLE_TIER1_AUDIT_FLOOR=[[:space:]]*\([0-9][0-9.]*\)[[:space:]]*$/\1/p' versions.env)"
+          if [ -z "$floor" ]; then
+            echo "Error: could not read CHRONICLE_TIER1_AUDIT_FLOOR from versions.env."
+            echo
+            echo "That is the version below which deploy.yml's tier-1 audit gate cannot run."
+            echo "Refusing to promote without it rather than skipping the check — if the line"
+            echo "moved or changed shape, fix this read. Nothing was committed."
+            exit 1
+          fi
+          echo "Tier-1 audit floor, from versions.env: $floor"
+          lowest="$(printf '%s\n%s\n' "$VERSION" "$floor" | sort -V | head -1)"
+          if [ "$VERSION" != "$floor" ] && [ "$lowest" = "$VERSION" ]; then
+            echo "Error: chronicle $VERSION predates $floor, which introduced 'chronicle tier1-audit' (CHRN-52)."
+            echo
+            echo "deploy.yml gates every deploy on that subcommand. Pinned below it, chronicle"
+            echo "would come up healthy and the deploy would then fail at 'Assert chronicle_tier1"
+            echo "holds only what the tier boundary allows' — with a usage error, not a finding —"
+            echo "and so would every later deploy of anything until chronicle was back above"
+            echo "the floor. The rollback would be recorded as failed in the ledger."
+            echo
+            echo "To go back this far, remove that gate step from deploy.yml first. That is a"
+            echo "workflow change, so it cannot ride along with a pin commit and this workflow"
+            echo "will not pretend otherwise. Nothing was committed."
+            exit 1
+          fi
+
       - name: Verify the target release exists, with its binary
         # Signet's half of the pre-flight above. verify-tag.sh is deliberately not
         # taught about this: it derives its image list from docker-compose.yml, and a

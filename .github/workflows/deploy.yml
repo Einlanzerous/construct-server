@@ -683,28 +683,6 @@ jobs:
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: ./scripts/assert-healthy.sh --timeout 300
 
-      - name: Assert chronicle_tier1 holds only what the tier boundary allows
-        id: tier1-audit
-        # CHRN-52 step 3 (SERV-183). `Ensure databases exist` runs init-db.sh AFTER
-        # `up -d`, so on the deploy that edits that script to widen chronicle_tier1,
-        # chronicle has already booted against the old grants, its boot audit was
-        # clean, and the widened role would serve until chronicle's next unrelated
-        # restart. The boot audit's cadence is chronicle restarts; the threat's
-        # cadence is init-db.sh runs, and only a step here sits at that cadence.
-        #
-        # `chronicle tier1-audit` (chronicle >= 1.11) is the same audit the service
-        # runs at boot: read-only, walks the catalogue, prints one line per privilege
-        # the role holds outside its allow-list with the REVOKE that clears it, exit 1
-        # on any. A red here means "the role was widened, go revoke" — it detects, it
-        # does not recover, like the health assertion above it.
-        #
-        # AFTER the health assertion, not straight after init-db, on purpose: on a
-        # cold rebuild chronicle crash-cycles once (the role does not exist until
-        # init-db.sh runs), and `exec` into a restarting container is a false red.
-        # The health assertion waits out that cycle.
-        working-directory: ${{ env.DEPLOY_ROOT }}
-        run: docker compose exec -T chronicle chronicle tier1-audit
-
       - name: Assert the origin still rejects a spoofed Host
         id: edge-auth
         # SERV-106. The config half of this runs against files and would pass in a
@@ -719,6 +697,51 @@ jobs:
         # unhealthy container it is, rather than as a mysterious 500 in a probe.
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: ./scripts/check-edge-auth.sh
+
+      - name: Assert chronicle_tier1 holds only what the tier boundary allows
+        id: tier1-audit
+        # CHRN-52 step 3 (SERV-183). `Ensure databases exist` runs init-db.sh AFTER
+        # `up -d`, so on the deploy that edits that script to widen chronicle_tier1,
+        # chronicle has already booted against the old grants, its boot audit was
+        # clean, and the widened role would serve until chronicle's next unrelated
+        # restart. The boot audit's cadence is chronicle restarts; the threat's
+        # cadence is init-db.sh runs, and only a step here sits at that cadence.
+        #
+        # `chronicle tier1-audit` is the same audit the service runs at boot:
+        # read-only, walks the catalogue, prints one line per privilege the role
+        # holds outside its allow-list with the REVOKE that clears it, exit 1 on
+        # any. A red here means "the role was widened, go revoke" — it detects, it
+        # does not recover, like the two assertions above it.
+        #
+        # LAST of the three gates, on purpose. After assert-healthy because on a cold
+        # rebuild chronicle crash-cycles once (the role does not exist until
+        # init-db.sh runs) and `exec` into a restarting container is a false red;
+        # after check-edge-auth so that a chronicle problem can never take the
+        # SERV-106 edge gate offline — each gate reports on its own subject.
+        #
+        # THE SUBCOMMAND EXISTS FROM 1.11, and the floor is declared ONCE in
+        # versions.env (CHRONICLE_TIER1_AUDIT_FLOOR). promote.yml refuses a pin below
+        # it before committing; this re-check is belt and braces for a hand-edited
+        # pin, so that case fails with a sentence naming the floor rather than a CLI
+        # usage error read mid-incident. It does NOT skip: "the guard could not run"
+        # must not look like "the guard passed".
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: |
+          set -euo pipefail
+          floor="$(sed -n 's/^CHRONICLE_TIER1_AUDIT_FLOOR=[[:space:]]*\([0-9][0-9.]*\)[[:space:]]*$/\1/p' versions.env)"
+          if [ -z "$floor" ]; then
+            echo "Error: could not read CHRONICLE_TIER1_AUDIT_FLOOR from versions.env; refusing rather than skipping the gate."
+            exit 1
+          fi
+          running="$(docker compose exec -T chronicle chronicle version | head -1)"
+          lowest="$(printf '%s\n%s\n' "$running" "$floor" | sort -V | head -1)"
+          if [ "$running" != "$floor" ] && [ "$lowest" = "$running" ]; then
+            echo "Error: chronicle $running is running, and 'chronicle tier1-audit' exists from $floor."
+            echo "promote.yml refuses a pin this low; this one must have been hand-edited. Either"
+            echo "promote chronicle back to >= $floor, or remove this gate step. Not skipping it."
+            exit 1
+          fi
+          docker compose exec -T chronicle chronicle tier1-audit
 
       # ── Report this deploy to the Switchyard delivery ledger (SERV-117) ─────────
       #
@@ -767,12 +790,16 @@ jobs:
           #
           # Every assertion in the deploy counts. A stack that came up broken did not
           # succeed, and neither did one that left the origin serving unauthenticated
-          # requests (SERV-106) — a deploy that goes red in the Actions tab must not go
-          # green in the ledger.
+          # requests (SERV-106), nor one that left chronicle_tier1 holding more than the
+          # tier boundary allows (SERV-183) — a deploy that goes red in the Actions tab
+          # must not go green in the ledger. Each gate is named here by id so that
+          # reordering one, or giving it continue-on-error, cannot turn its failure into
+          # a green row by adjacency.
           status=succeeded
           if [ "${{ steps.deploy.outcome }}" != "success" ] \
             || [ "${{ steps.healthy.outcome }}" != "success" ] \
-            || [ "${{ steps.edge-auth.outcome }}" != "success" ]; then
+            || [ "${{ steps.edge-auth.outcome }}" != "success" ] \
+            || [ "${{ steps.tier1-audit.outcome }}" != "success" ]; then
             status=failed
           elif [ "${DELIVERY_KIND:-}" = "rollback" ]; then
             # A successful rollback is not a plain success. The matrix renders a
