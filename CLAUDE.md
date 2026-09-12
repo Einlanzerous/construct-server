@@ -39,9 +39,10 @@ anything deploys or gets versioned.
     migration: CANT-13 Ruling 3, because migrations run **as** the `catenary` role and
     a role cannot create itself. Permanent, not pending a ticket.
 
-  Both are run once by hand as superuser, so a cold host rebuild does **not** self-heal
-  them: catenary crash-loops on an unreachable database until `provision.sql` is run,
-  and chronicle's migration 0001 fails on the missing role rather than booting.
+  It is run once by hand as superuser, so a cold host rebuild does **not** self-heal
+  it: catenary crash-loops on an unreachable database until `provision.sql` is run.
+  (Chronicle used to be in this sentence; since SERV-182 its one crash cycle on a
+  rebuild is the script's ordering, not a missing hand-run step, and it recovers.)
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).

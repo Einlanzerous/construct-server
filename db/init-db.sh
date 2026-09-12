@@ -132,9 +132,15 @@ revoke_public asr_test
 # script provisions, is what catches the two drifting.
 #
 # Same empty-password guard as ensure_db, for the same reason: an unset
-# CHRONICLE_TIER1_DB_PASSWORD must skip loudly, never blank the role. Every role
-# attribute is stated NO rather than left to the default, so a re-run also
-# undoes an ALTER ROLE somebody made by hand.
+# CHRONICLE_TIER1_DB_PASSWORD must skip loudly, never blank the role.
+#
+# WHAT A RE-RUN PUTS BACK, exactly: the five privilege attributes (superuser,
+# createdb, createrole, replication, bypassrls — each stated NO rather than left
+# to the default), LOGIN, the password, and the database-level ACL. NOT role
+# memberships: a hand-issued `GRANT chronicle TO chronicle_tier1` survives this
+# block. Chronicle's boot audit checks pg_auth_members and refuses to serve on
+# any membership, so that escalation is caught at the next boot and by the
+# deploy gate; it is not silently undone here.
 #
 # SEQUENCING, stated so a rebuild's log reads as expected rather than broken:
 # deploy.yml runs this script AFTER `up -d`, and chronicle/migrations/0001 grants
@@ -171,7 +177,11 @@ ensure_chronicle_tier1() {
         fi
         $psql_cmd -c "REVOKE ALL ON DATABASE $db FROM chronicle_tier1;"
         $psql_cmd -c "GRANT CONNECT ON DATABASE $db TO chronicle_tier1;"
-        psql --username "${POSTGRES_USER:-postgres}" --dbname "$db" \
+        # -v ON_ERROR_STOP=1 because this is the one call in the file with two -c
+        # flags: without it psql runs on past a failed first statement and exits
+        # with the LAST statement's status, so `set -e` would not fire and a
+        # deploy could go green having left PUBLIC with USAGE on the schema.
+        psql --username "${POSTGRES_USER:-postgres}" --dbname "$db" -v ON_ERROR_STOP=1 \
             -c "REVOKE ALL ON SCHEMA public FROM PUBLIC;" \
             -c "REVOKE ALL ON SCHEMA public FROM chronicle_tier1;"
     done
