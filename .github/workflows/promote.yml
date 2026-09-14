@@ -1,4 +1,26 @@
 name: Promote / Rollback a Version
+# The run's title carries its inputs (SERV-188). Two readers need it:
+#
+#   * a human in the Actions tab, where every run of this workflow otherwise
+#     reads "Promote / Rollback a Version" and a queue of pending promotes is a
+#     list of identical rows;
+#   * Switchyard (SWY-188), which dispatches this workflow through the API. A
+#     `workflow_dispatch` answers 204 with no run id and the runs API exposes no
+#     inputs, so the ONLY way a caller can find the run it created is by this
+#     title — it matches `display_title` exactly, among workflow_dispatch runs
+#     created after its dispatch, and treats two candidates as no match.
+#
+# The shape is `<kind> <service> → <version>`, then ` · <requested_by>` only
+# when an API caller supplied one — a run from the Actions tab leaves
+# requested_by blank (github.actor is right there) and gets no trailing
+# separator. Note the bound that does NOT apply here: the ledger's copy of
+# requested_by is truncated to 39 units downstream (the Repoint step), but
+# GitHub evaluates run-name from the raw input at dispatch, before any step
+# runs — so a long value makes a long title. Switchyard sends a GitHub login,
+# which is ≤ 39 by construction. Changing this string breaks Switchyard's
+# matcher: `runDisplayTitle` in switchyard's lib/delivery/promote-rules.ts is
+# the mirror.
+run-name: ${{ inputs.kind }} ${{ inputs.service }} → ${{ inputs.version }}${{ inputs.requested_by && format(' · {0}', inputs.requested_by) || '' }}
 
 # One workflow with a direction, not two (SERV-78, SERV-79). "Make prod run this exact
 # version" is the same operation whichever way it points, and SERV-79 argues the case
