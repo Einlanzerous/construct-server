@@ -217,9 +217,10 @@ anything deploys or gets versioned.
   included, since it compares mount *sources* and the project root, neither of
   which changed.
   **The test is "a single-file bind mount whose consumer reads at startup", and
-  FIVE files pass it** — `config/wiki/nginx.conf`, `config/traefik/traefik.yml`,
-  `config/crowdsec/acquis.yaml`, `config/copyparty.conf` and
-  `aperture/config.yaml`. Do not read Traefik as an exception: its file provider
+  SIX files pass it** — `config/wiki/nginx.conf`, `config/traefik/traefik.yml`,
+  `config/crowdsec/acquis.yaml`,
+  `config/crowdsec/parsers/s02-enrich/argosy-hls-whitelist.yaml` (SERV-184),
+  `config/copyparty.conf` and `aperture/config.yaml`. Do not read Traefik as an exception: its file provider
   watches the `dynamic/` **directory**, while `traefik.yml` is *static* config
   with no reload path at all. Only `wiki` is handled — `deploy.yml` recreates it
   when a commit touches `config/wiki/` — because it is the only leaf, with no
