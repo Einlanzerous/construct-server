@@ -310,7 +310,11 @@ jobs:
         # warm one, since nothing sequences these two workflows. mkdir -p is a no-op
         # when it already exists and cannot fix a directory already owned by root —
         # which is why the ansible task is the real guard, and this is the cheap one.
-        run: mkdir -p "$DEPLOY_ROOT/wiki/site"
+        #
+        # wiki/docs is the same race one service over (SERV-189): the generated
+        # markdown corpus, bind-mounted read-only into chronicle, and rsynced by
+        # wiki.yml as the runner user.
+        run: mkdir -p "$DEPLOY_ROOT/wiki/site" "$DEPLOY_ROOT/wiki/docs"
 
       - name: Ensure the chronicle capture directories exist
         # Chronicle stats both of these at boot and refuses to start if either is

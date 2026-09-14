@@ -123,7 +123,17 @@ jobs:
         # mkdir before rsync matters on a host where the wiki container started
         # before this workflow ever ran — see the ownership note in
         # ansible/roles/server/tasks/main.yml.
+        #
+        # THE CORPUS TOO, NOT ONLY THE SITE (SERV-189). Chronicle serves the
+        # generated markdown beside its authored notes — tier 1 beside tier 2
+        # (CHRN-100) — from a read-only bind mount of wiki/docs. The markdown
+        # exists only in this job's checkout, so it is published here alongside
+        # the bundle; deploy.yml syncs nothing under wiki/. --exclude .vitepress
+        # because dist/, cache/ and config.ts are the renderer's, not the
+        # corpus. build.json rides along: it is what Chronicle stamps every
+        # tier-1 payload with.
         run: |
           set -euo pipefail
-          mkdir -p "$DEPLOY_ROOT/wiki/site"
+          mkdir -p "$DEPLOY_ROOT/wiki/site" "$DEPLOY_ROOT/wiki/docs"
           rsync -a --delete ./wiki/docs/.vitepress/dist/ "$DEPLOY_ROOT/wiki/site/"
+          rsync -a --delete --exclude .vitepress ./wiki/docs/ "$DEPLOY_ROOT/wiki/docs/"

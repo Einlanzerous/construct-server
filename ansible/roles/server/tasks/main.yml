@@ -361,13 +361,20 @@
 # So claim it here, before compose ever sees it. Creating it empty is harmless:
 # nginx starts fine with nothing to serve and /healthz returns 503 until the first
 # wiki build lands, which is the honest answer to "is the bundle there".
-- name: Ensure the wiki site directory exists and is owned by user
+#
+# wiki/docs is the same race one service over (SERV-189): the generated markdown
+# corpus, rsynced by wiki.yml and bind-mounted read-only into chronicle, which
+# stats it at boot and refuses to start without it.
+- name: Ensure the wiki site and corpus directories exist and are owned by user
   file:
-    path: "{{ deploy_root }}/wiki/site"
+    path: "{{ item }}"
     state: directory
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
     mode: "0755"
+  loop:
+    - "{{ deploy_root }}/wiki/site"
+    - "{{ deploy_root }}/wiki/docs"
 
 # Chronicle's bind source (SERV-151), claimed here for the same reason and with a
 # sharper failure than the wiki's. /data/chronicle is not in the repo and nothing

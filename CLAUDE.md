@@ -665,7 +665,10 @@ anything deploys or gets versioned.
 - **The wiki is generated, and its generator must never read a resolved
   environment** (SERV-101). `wiki/docs/` is wiped and rewritten on every run, so a
   hand-written page there is deleted without warning — anything a person wants to
-  write belongs in the relevant repo's `CLAUDE.md`, or in tier 2 (IDEA-21). The
+  write belongs in the relevant repo's `CLAUDE.md`, or in tier 2 (IDEA-21). Since
+  SERV-189 the corpus is a **deployed artefact** as well as a build input:
+  `wiki.yml` publishes it to `$DEPLOY_ROOT/wiki/docs` beside the site, and
+  `chronicle` mounts it read-only to serve tier 1 beside tier 2 (CHRN-100). The
   generator parses the **raw** `docker-compose.yml` and never `docker compose
   config`, never a `.env`: the resolved view interpolates every variable, so
   reading it would publish the contents of `PROD_ENV_FILE` onto a Markdown page.
