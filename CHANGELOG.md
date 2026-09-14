@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.32.0](https://github.com/Einlanzerous/construct-server/compare/v4.31.0...v4.32.0) (2026-09-14)
+
+
+### Features
+
+* **promote:** title each run by its inputs — kind, service, version, who asked (SERV-188) ([#201](https://github.com/Einlanzerous/construct-server/issues/201)) ([a6bef44](https://github.com/Einlanzerous/construct-server/commit/a6bef449038da7290f02ce740300d55fa6e13261))
+* **wiki:** publish the generated corpus to the deploy root and mount it read-only into chronicle (SERV-189) ([#199](https://github.com/Einlanzerous/construct-server/issues/199)) ([d2bab34](https://github.com/Einlanzerous/construct-server/commit/d2bab341cfca6fafce216afd7d1e714d4db30ad0))
+
+
+### Bug Fixes
+
+* **pr-review:** run the host's Claude Code instead of installing one per run (SERV-114) ([#202](https://github.com/Einlanzerous/construct-server/issues/202)) ([52338f9](https://github.com/Einlanzerous/construct-server/commit/52338f9360924043e4dcc831fe41b0190ef848e1))
+
 ## [4.31.0](https://github.com/Einlanzerous/construct-server/compare/v4.30.0...v4.31.0) (2026-09-14)
 
 
