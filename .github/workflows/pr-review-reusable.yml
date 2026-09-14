@@ -955,6 +955,69 @@ jobs:
             fi
           done
 
+      # SERV-114. `claude-code-action` installs Claude Code on EVERY run, into
+      # `$HOME/.claude/downloads/claude-<version>-linux-x64` — a path with no
+      # per-run component — and every runner on this box is the same Unix user
+      # with the same $HOME. Two reviews in flight write one file, and the
+      # install script's failure branches end in `rm -f "$binary_path"`, so the
+      # loser of the race deletes the winner's binary on its way out. Three PRs
+      # opened across three repos inside 90 seconds took all three reviews down:
+      # `Checksum verification failed` and `sha256sum: … No such file or
+      # directory` are the two sides of the one race. Each install then ran
+      # `claude install`, which repoints `~/.local/bin/claude` — a second shared
+      # write, and the one that quietly made CI decide which version the
+      # developer's interactive `claude` was.
+      #
+      # So the action is pointed at the binary already on the box and installs
+      # nothing. The coupling now runs the other way — `claude update` on the
+      # host is what changes the version CI runs — which is accepted, and made
+      # visible rather than silent: the version is printed on every run, and a
+      # notice is emitted when it differs from the one the action would have
+      # installed. Serialising reviews across repos is NOT an alternative:
+      # `concurrency` is per-repo and cannot express it, and SERV-92 made the
+      # repos reviewable, which is the same thing as making them concurrent.
+      #
+      # A missing or broken binary must fail HERE, naming itself. Left to the
+      # action it dies inside the Review step, which the Classify step reads as
+      # `malfunction (turns: 0)` and the Gate calls "not a finding about the
+      # change" — legible as infrastructure, but not a diagnosis. Same shape as
+      # the Preflight above and the `$GITHUB_PATH` invariant in CLAUDE.md.
+      #
+      # The verifier (verify.yml) carries a copy of this step: it runs the same
+      # action on the same shared $HOME and was in the same race. Change both.
+      - name: Locate Claude Code
+        id: claude
+        run: |
+          set -euo pipefail
+          BIN="$HOME/.local/bin/claude"
+          if [ ! -e "$BIN" ]; then
+            if [ -L "$BIN" ]; then
+              echo "::error::Claude Code is not usable on this runner: $BIN is a symlink to $(readlink "$BIN"), which does not exist. Reinstall it for the runner's user (curl -fsSL https://claude.ai/install.sh | bash) — the action no longer installs it per run (SERV-114)."
+            else
+              echo "::error::Claude Code is not installed on this runner: $BIN does not exist. Install it for the runner's user (curl -fsSL https://claude.ai/install.sh | bash) — the action no longer installs it per run (SERV-114)."
+            fi
+            exit 1
+          fi
+          if [ ! -x "$BIN" ]; then
+            echo "::error::Claude Code is not usable on this runner: $BIN exists but is not executable."
+            exit 1
+          fi
+          if ! VERSION=$(timeout 60 "$BIN" --version 2>&1); then
+            echo "::error::Claude Code is not usable on this runner: '$BIN --version' failed — ${VERSION:-no output}"
+            exit 1
+          fi
+          echo "path=$BIN" >> "$GITHUB_OUTPUT"
+          echo "Claude Code: $VERSION at $BIN -> $(readlink -f "$BIN")"
+          # Best-effort. The action was fetched into the runner's _actions tree
+          # during job setup, and its base action pins the version it would have
+          # installed. A mismatch is not a failure — it is the accepted cost,
+          # printed so a `claude update` on the host is visible in the run log.
+          PIN=$(sed -n 's/^ *CLAUDE_CODE_VERSION="\([^"]*\)".*/\1/p' \
+                  "$GITHUB_WORKSPACE"/../../_actions/anthropics/claude-code-action/*/base-action/action.yml 2>/dev/null | head -1 || true)
+          if [ -n "$PIN" ] && [ "${VERSION%% *}" != "$PIN" ]; then
+            echo "::notice::Claude Code on this runner is ${VERSION%% *}; the action would have installed $PIN. CI runs the host's copy on purpose (SERV-114) — \`claude update\` on the host is what moves it."
+          fi
+
       # No workspace-integrity assertion here, deliberately — and twice now it has
       # looked like there should be. checkout defaults to `clean: true`
       # (`git clean -ffdx` + `git reset --hard`), so a stale file from a previous
@@ -1296,6 +1359,9 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           github_token: ${{ github.token }}
+          # The binary already on the box, asserted by "Locate Claude Code" above.
+          # Set, the action installs nothing — see that step (SERV-114).
+          path_to_claude_code_executable: ${{ steps.claude.outputs.path }}
           prompt: ${{ steps.prompt.outputs.text }}
           # Tools must be granted explicitly: the first run denied 17 calls and
           # produced nothing while still reporting success, because every step of

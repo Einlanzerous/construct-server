@@ -262,6 +262,28 @@ anything deploys or gets versioned.
   listener's PATH beside the file for that reason. **Never copy another runner's
   `.path`** when adding one — run the script, which is what `~/runners/POOL-README.md`
   now says.
+- **Every runner shares one `$HOME`, so a job must never write a fixed path under
+  it** (SERV-114). All fourteen runners run as `magos`, which makes `~` and `/tmp`
+  one namespace across every repo's CI. `claude-code-action` installed Claude Code
+  on every run into `$HOME/.claude/downloads/claude-<version>-linux-x64` and the
+  install script `rm -f`s that path on any failure — so two reviews in flight in
+  different repos deleted each other's binary and both went red, on the day the
+  estate was busiest, and each install's `claude install` repointed
+  `~/.local/bin/claude` so CI was also deciding the interactive version. The
+  reviewer and the verifier now pass `path_to_claude_code_executable` and the
+  action installs nothing; a `Locate Claude Code` step asserts the host's
+  `~/.local/bin/claude` runs and fails **naming it**, because left to the action
+  the death lands inside the Review step as `malfunction (turns: 0)`. Two costs,
+  both deliberate: **CI runs whatever `claude` the box has**, so `claude update`
+  on the host is a CI version change (the step prints a notice when it differs
+  from the action's pin), and a host with no install cannot review. The `/tmp` half
+  of the same namespace is SERV-137/143, closed by moving reviewer scratch to
+  `$RUNNER_TEMP`. Do not fix the next collision by serialising reviews —
+  `concurrency` is per-repo, and SERV-92 made the repos reviewable, which is the
+  same thing as concurrent. And do not reach for per-runner `HOME` without reading
+  SERV-190: SERV-127's sidecar and Switchyard's usage sweep both read
+  `~/.claude/projects` under the shared home, so splitting it moves every CI
+  transcript out of the ledger without anything going red.
 - **The stack deploys from `/opt/construct-server`, and no other path** (SERV-76).
   Neither checkout on this box is what runs: `~/construct-server` is a plain git
   working copy, and the runner's `_work/…` directory is CI scratch that
