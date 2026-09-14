@@ -1864,7 +1864,11 @@ services:
   # http-probing…) become ban decisions served over its LAPI (:8080, construct_net
   # only — never published). Traefik's crowdsec-bouncer middleware enforces them
   # on the public Argosy routers. LAN/tailnet are exempt at the bouncer, so a
-  # false positive can never lock us out of our own edge.
+  # false positive can never lock us out from inside the house — but it CAN lock
+  # out a member watching from outside it: Argosy's segment bursts read as
+  # crawling and banned viewers mid-episode until the argosy-hls-whitelist parser
+  # (SERV-184). Local parsers are single-file mounts into the hub-managed
+  # /etc/crowdsec volume, read at startup (see CLAUDE.md, SERV-159/SERV-164).
   crowdsec:
     image: crowdsecurity/crowdsec:v1.7.8@sha256:2f527c9bb8b367120eb08b82890aa912ce96bfa1ada93dda0721700e4b4e0dde
     container_name: crowdsec
@@ -1873,6 +1877,7 @@ services:
       - COLLECTIONS=crowdsecurity/traefik
     volumes:
       - ./config/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - ./config/crowdsec/parsers/s02-enrich/argosy-hls-whitelist.yaml:/etc/crowdsec/parsers/s02-enrich/argosy-hls-whitelist.yaml:ro
       - crowdsec_config:/etc/crowdsec
       - crowdsec_data:/var/lib/crowdsec/data
       - traefik_access_logs:/var/log/traefik:ro

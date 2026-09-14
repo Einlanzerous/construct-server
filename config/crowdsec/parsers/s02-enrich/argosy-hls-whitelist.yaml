@@ -1,0 +1,43 @@
+# SERV-184: Argosy's HLS player looks like a crawler by construction. While it
+# buffers it fetches dozens of distinct, non-static segment URIs within seconds
+# (95 in 27s on one episode), which overflows crowdsecurity/http-crawl-non_statics
+# and bans the viewer mid-episode. The bouncer's 403s then feed http-probing and
+# 403-bf, which re-ban them. LAN/tailnet are exempt at the bouncer, so this only
+# ever bit members watching from outside the house.
+#
+# Drop the event before any scenario sees it, but only when ALL of these hold:
+#   - it came through the public Argosy router,
+#   - Argosy answered it successfully, and
+#   - the path is one of Argosy's own transcode files, mirroring the allowlist
+#     regex in argosy's internal/library/transcode.go. Change the two together;
+#     that file points back here. If argosy starts serving a new artifact that
+#     this doesn't cover, the bans quietly return with every gate green.
+#
+# EDITING THIS FILE APPLIES NOTHING until `make recreate svc=crowdsec`. It is a
+# single-file mount read at startup (SERV-159/SERV-164). Pick the moment for
+# that recreate. The bouncer fails CLOSED while crowdsec's LAPI is down:
+# handleNoStreamCache returns BannedValue on a query error, and crowdsecMode is
+# `live`. So any public client not in its 60s verdict cache gets the ban
+# response on every crowdsec-bouncer router. Those 403s are logged and
+# replayed once crowdsec resumes tailing, which can earn a real ban. Don't
+# recreate while someone is watching Argosy off-LAN.
+# Those routes sit behind Argosy's device-token middleware, so a success means an
+# authenticated client. A 404 or 403 on the same path is NOT dropped, so guessing
+# session ids still counts toward probing. `[.]` instead of `\.` sidesteps
+# escaping rules in expr string literals.
+#
+# The optional query suffix is deliberate. This parser sorts before
+# crowdsecurity/http-logs, so http_path still carries the raw query here. No
+# client sends one on HLS today (0 of 111,646 logged requests, 2026-09-14). But
+# the mobile app already uses `?token=` for its other stream URLs, and if HLS
+# picked that up, a strict `$` would silently bring the bans back. A suffix
+# grants nothing: the status check is what requires an authenticated success.
+name: construct/argosy-hls-whitelist
+description: "Ignore successful Argosy HLS playlist/segment fetches (SERV-184)"
+whitelist:
+  reason: "argosy hls fetch (SERV-184)"
+  expression:
+    - >-
+      evt.Meta.traefik_router_name == 'argosy@file'
+      && evt.Meta.http_status in ['200', '206', '304']
+      && evt.Meta.http_path matches '^/api/v1/transcode/[^/]+/(index[.]m3u8|stream_[0-9]+[.]m3u8|init(_[0-9]+)?[.]mp4|stream_[0-9]+(_[0-9]+)?[.]m4s)([?].*)?$'
