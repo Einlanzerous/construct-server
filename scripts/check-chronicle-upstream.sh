@@ -93,10 +93,27 @@ http_code() {
 }
 
 # ── read the four values, without printing any of them ──────────────────────
+# Reads one value. NEVER echoes it — only whether it was there.
+#
+# signet's STDERR IS REPORTED rather than discarded, which
+# check-promote-dispatch.sh learned the hard way: "no such secret", a locked
+# vault, a daemon that is not serving and an unsupported flag all collapse into
+# one empty string, and the failure line below would then send someone off to
+# mint a SECOND Switchyard token for a credential that already exists. That is
+# not free here — the old token stays live until it is revoked.
 read_value() {
-  local name="$1"
+  local name="$1" out errfile
   if [ "$FROM_VAULT" -eq 1 ]; then
-    signet reveal --project construct-server --name "$name" 2>/dev/null
+    errfile="$(mktemp)"
+    if ! out="$(signet reveal --project construct-server --name "$name" 2>"$errfile")"; then
+      # The reason, not the value. signet reports failures on stderr and the
+      # secret on stdout, so this cannot print one for the other.
+      err "  note  signet could not reveal $name:"
+      sed 's/^/        /' "$errfile" >&2
+      out=""
+    fi
+    rm -f "$errfile"
+    printf '%s' "$out"
   else
     sed -n "s/^${name}=//p" "$DEPLOY_ROOT/.env" 2>/dev/null | head -1
   fi

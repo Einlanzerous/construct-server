@@ -862,6 +862,25 @@ There is no test suite — this repo is configuration, so validation is mostly
   means the next real promote queues behind it. Note also that a fine-grained PAT with no
   repo grant answers **404, not 403** — the same shape that hid `EXTERNAL_REF_POLLER`'s
   missing scope for weeks, so a 404 here is a grant problem and not a missing workflow.
+- `make chronicle-upstream-check` after minting or rotating `CHRONICLE_SWITCHYARD_TOKEN`,
+  and after any deploy that was supposed to deliver it (SERV-185). It asks Switchyard and
+  Amber the two questions Chronicle's resolvers ask, because **the failure mode of these
+  two credentials is silence**: without them every reference Chronicle renders answers
+  `unconfigured`, which is a *true* answer rather than an error, so nothing else in the
+  stack reports it. `vault=1` asks the vault instead of the deployed `.env`, the same
+  ordering `promote-dispatch-check` documents above and for the same reason.
+  Host-side and **not a deploy gate** — it needs both containers up, and a deploy that
+  recreated chronicle before switchyard would fail it for a reason that is not a
+  credential problem. It proves the credentials are ACCEPTED, not that the Switchyard
+  token is read-only: there is no safe probe for that, since Switchyard validates a
+  request body before the handler's `checkScope` runs, so a malformed write answers 400
+  whatever the scopes are and a well-formed one would create a real ticket. The scope is
+  asserted where it is minted — `mint-chronicle-token.sh` reads the granted scopes back
+  out of the mint response and refuses to hand over anything that is not exactly
+  `tickets:read`. **Note the compose pair is atomic**: `CHRONICLE_SWITCHYARD_URL` is
+  derived from the token's presence (`${CHRONICLE_SWITCHYARD_TOKEN:+...}`), so an
+  undelivered token leaves both halves empty and chronicle boots unconfigured rather than
+  refusing to start on a half-configured pair.
 - `make lint-gate` runs this repo's format/lint checks the way the pre-push hook does,
   and `make lint-gate-test` proves the hook still BLOCKS (SERV-58). The second one is the
   one that matters: the gate fails open on purpose, so a gate that has quietly stopped

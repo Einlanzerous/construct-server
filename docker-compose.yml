@@ -1201,7 +1201,25 @@ services:
       # the role layer agents bypass. Chronicle resolving references needs none
       # of it. If triage's ticket creation is ever turned on here it needs that
       # grant, and it needs its own decision: see SERV-185.
-      - CHRONICLE_SWITCHYARD_URL=http://switchyard:4002
+      # EACH PAIR IS ATOMIC BY CONSTRUCTION: the URL is present if and only if
+      # the token is. `${TOKEN:+literal}` yields the literal when the token is
+      # set and non-empty, and an empty string otherwise.
+      #
+      # Written that way because the obvious form is a foot-gun with production
+      # consequences. A literal URL beside `${CHRONICLE_SWITCHYARD_TOKEN}` is
+      # "URL set, token empty" whenever the vault has not delivered the key yet
+      # — which config.Load refuses, correctly, so chronicle would refuse to
+      # boot, `restart: unless-stopped` would crash-loop it, and the deploy's
+      # health assertion and the SERV-183 tier1-audit gate would both go red.
+      # That is not hypothetical: merging this before `signet sync` and a deploy
+      # is exactly that state, and the ordering would have been enforced by a
+      # sentence in a comment rather than by the file.
+      #
+      # This way the wrong order is harmless: no token means no URL means
+      # "neither", which is the configuration chronicle has run in all along.
+      # Every reference resolves `unconfigured` until the token lands, which is
+      # a true answer rather than an outage.
+      - CHRONICLE_SWITCHYARD_URL=${CHRONICLE_SWITCHYARD_TOKEN:+http://switchyard:4002}
       - CHRONICLE_SWITCHYARD_TOKEN=${CHRONICLE_SWITCHYARD_TOKEN}
       # Amber gates all of /v1 behind ONE token rather than one per consumer, so
       # there is nothing narrower to mint and Chronicle presents Amber's own —
@@ -1215,7 +1233,11 @@ services:
       # In-container on construct_net, so the default is the service name and no
       # .env entry is needed for the URL — switchyard's AMBER_BASE_URL line does
       # the same and shares this variable.
-      - CHRONICLE_AMBER_URL=${AMBER_BASE_URL:-http://amber:4008}
+      # Same atomic shape, and the AMBER_BASE_URL override survives inside it.
+      # AMBER_API_TOKEN is delivered today, so this pair is live on merge — the
+      # construction is here so that a future .env that loses it degrades to
+      # `unconfigured` rather than to a crash-loop.
+      - CHRONICLE_AMBER_URL=${AMBER_API_TOKEN:+${AMBER_BASE_URL:-http://amber:4008}}
       - CHRONICLE_AMBER_TOKEN=${AMBER_API_TOKEN}
     volumes:
       # rw: the only durable store for tier-2 audio, which nothing regenerates.
