@@ -1179,6 +1179,44 @@ services:
       # side derives client_id from.
       - CHRONICLE_ASR_URL=http://asr:4011
       - CHRONICLE_ASR_TOKEN=${CHRONICLE_ASR_TOKEN}
+      # ── The two upstreams a reference RESOLVES against (SERV-185 / CHRN-97) ──
+      #
+      # Chronicle links to Switchyard and Amber and never copies them: a ticket
+      # or an archive citation resolves at render time and is never written into
+      # a Chronicle table. Without these four the resolvers answer
+      # `unconfigured` — a true statement CHRN-51 minted a vocabulary member for
+      # so that a deployment with no token stops making claims, rather than
+      # reading as an outage on a service that is fine.
+      #
+      # BOTH HALVES OF EACH PAIR OR NEITHER: config.Load errors when exactly one
+      # of a pair is set, so a URL beside an empty ${...} token crash-loops the
+      # container. Same rule the CF Access pair above follows.
+      #
+      # The token is READ-ONLY (`tickets:read`), minted by
+      # scripts/mint-chronicle-token.sh, and that is a decision rather than a
+      # default. Switchyard gives an AGENT its token's scopes with no project
+      # role intersected (authz.ts `hasInstanceWideAccess`), and `tickets:write`
+      # emits write AND delete together — so for a service agent there is no
+      # narrow write grant, and the only thing that would withhold deletion is
+      # the role layer agents bypass. Chronicle resolving references needs none
+      # of it. If triage's ticket creation is ever turned on here it needs that
+      # grant, and it needs its own decision: see SERV-185.
+      - CHRONICLE_SWITCHYARD_URL=http://switchyard:4002
+      - CHRONICLE_SWITCHYARD_TOKEN=${CHRONICLE_SWITCHYARD_TOKEN}
+      # Amber gates all of /v1 behind ONE token rather than one per consumer, so
+      # there is nothing narrower to mint and Chronicle presents Amber's own —
+      # the same value switchyard already interpolates from this .env. That is a
+      # deliberate deviation from PRINCIPLES.md §4 ("never share a token across
+      # components; mint per-consumer, scope minimally"), already argued and
+      # paid for by SWY-209 / AMBR-9; Chronicle is the THIRD consumer and
+      # inherits it by reference rather than re-litigating it. Said out loud
+      # here because CHRN-50 asked that it be, rather than arrived at silently.
+      #
+      # In-container on construct_net, so the default is the service name and no
+      # .env entry is needed for the URL — switchyard's AMBER_BASE_URL line does
+      # the same and shares this variable.
+      - CHRONICLE_AMBER_URL=${AMBER_BASE_URL:-http://amber:4008}
+      - CHRONICLE_AMBER_TOKEN=${AMBER_API_TOKEN}
     volumes:
       # rw: the only durable store for tier-2 audio, which nothing regenerates.
       # BOTH subdirectories must exist on the host before chronicle is next

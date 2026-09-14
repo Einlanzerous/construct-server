@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check versions assert-tokens env-ownership-check promote-dispatch-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check versions assert-tokens env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
@@ -231,6 +231,25 @@ env-ownership-check:
 promote-dispatch-check:
 	@DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/check-promote-dispatch.sh \
 	  $(if $(vault),--from-vault,) $(if $(dispatch),--dispatch,)
+
+# Can Chronicle actually reach Switchyard and Amber with what it was handed?
+# (SERV-185 / CHRN-97) The failure mode of these two credentials is SILENCE: without
+# them every reference Chronicle renders answers `unconfigured`, which is a true
+# answer rather than an error, so nothing else in the stack reports it.
+#
+# `vault=1` reads what Signet holds instead of the deployed .env, and is the form to use
+# straight after minting — `signet sync` writes the PROD_ENV_FILE environment secret, but
+# only a deploy renders that into $(DEPLOY_ROOT)/.env, so in between the default form
+# reports "not provisioned" for a credential that is provisioned correctly.
+#
+# It proves the credentials are ACCEPTED, not that the Switchyard token is read-only:
+# there is no safe probe for that (a write probe either creates a ticket or proves
+# nothing), so the scope list is asserted at mint time by mint-chronicle-token.sh.
+# Usage: make chronicle-upstream-check
+#        make chronicle-upstream-check vault=1
+chronicle-upstream-check:
+	@DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/check-chronicle-upstream.sh \
+	  $(if $(vault),--from-vault,)
 
 # Run the delivery prober once, right now, exactly as the timer does (SERV-111). Reads
 # the same /etc/delivery-prober/prober.env the unit does, so it proves the deployed
