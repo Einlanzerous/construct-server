@@ -204,7 +204,7 @@ jobs:
           # one belongs in the other — the two drifting apart is exactly how this line
           # came to be missing after the Makefile got it.
           rsync -a --delete ./pkg/cfaccess/             "$DEV_ROOT/pkg/cfaccess/"
-          rsync -a docker-compose.dev.yml dev-versions.env Makefile "$DEV_ROOT/"
+          rsync -a docker-compose.dev.yml dev-versions.env dev-required-env-keys.txt Makefile "$DEV_ROOT/"
 
       - name: Restore dev secrets
         # DEV_ENV_FILE is to dev what PROD_ENV_FILE is to prod, and it is emphatically not
@@ -237,6 +237,18 @@ jobs:
           fi
           printf '%s\n' "$DEV_ENV_FILE" | ./scripts/render-env.sh - dev-versions.env "$DEV_ROOT/.env"
           chmod 600 "$DEV_ROOT/.env"
+
+      - name: Verify the rendered environment holds every key dev needs (SERV-173)
+        # Dev's copy of prod's required-keys gate: `dev-required-env-keys.txt` names the
+        # keys whose loss compose would not report, and a DEV_ENV_FILE rendered without
+        # one fails here rather than deploying a dev tier with a feature silently off.
+        # The dev edge's tunnel token is deliberately NOT in that list — it is the edge's
+        # on-switch (SERV-93), so its absence is a state and not a dropped credential.
+        # Runs before the edge test below because both read the file just rendered and
+        # this one is the cheaper thing to be wrong about.
+        env:
+          DEV_ROOT: ${{ env.DEV_ROOT }}
+        run: ./scripts/assert-env-keys.sh --dev
 
       - name: Is the dev edge deployed? (SERV-93)
         id: edge

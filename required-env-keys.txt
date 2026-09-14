@@ -1,0 +1,129 @@
+# required-env-keys.txt — keys the PROD stack cannot run without (SERV-173)
+#
+# One key NAME per line. Every key here must reach /opt/construct-server/.env with a
+# non-empty value, or deploy.yml fails before it pulls or recreates anything
+# (scripts/assert-env-keys.sh). Names only: this file holds nothing worth protecting
+# and is reviewed like any other.
+#
+# What belongs here: every key the stack READS whose loss would be silent. Compose's
+# `${KEY:-}` defaults mean a dropped credential does not fail — the service boots with
+# the feature off, healthy — which is how LYCEUM_BINDERY_API_KEY went missing four
+# times. A key that may legitimately be blank does NOT belong here; an empty value is
+# not a value (CLAUDE.md) and is reported as missing.
+#
+# What does not: the image pins (versions.env owns them and git delivers them), and
+# keys nothing reads — assert-env-keys.sh names those as "unlisted" on every deploy,
+# which is the prompt to either add them here or retire them from the vault.
+#
+# ORDER OF OPERATIONS when adding a key — vault first, then this file:
+#   signet set --project construct-server --name KEY
+#   signet target add-key --project construct-server --gh-secret PROD_ENV_FILE --name KEY
+#   signet sync
+#   ./scripts/assert-env-keys.sh --vault      # proves the next deploy will carry it
+#   …then add the line below and merge. The other order blocks every prod deploy,
+#   rollbacks included, until the vault catches up.
+
+# --- shared postgres, and every per-service database role (db/init-db.sh) ---
+POSTGRES_PASSWORD
+AMBER_DB_PASSWORD
+ARGOSY_DB_PASSWORD
+ASR_DB_PASSWORD
+CATENARY_DB_PASSWORD
+CENTRIFUGE_DB_PASSWORD
+CHRONICLE_DB_PASSWORD
+CHRONICLE_TIER1_DB_PASSWORD
+COOK_BOOK_DB_PASSWORD
+INTERLOCK_DB_PASSWORD
+LYCEUM_DB_PASSWORD
+PLACARD_DB_PASSWORD
+PURSER_DB_PASSWORD
+SWITCHYARD_DB_PASSWORD
+
+# --- the deploy itself (deploy.yml logs in to GHCR with these; promote.yml too) ---
+GITHUB_USER
+GITHUB_PAT
+
+# --- edge ---
+CLOUDFLARE_TUNNEL_TOKEN
+CF_DNS_API_TOKEN
+CROWDSEC_BOUNCER_KEY
+
+# --- switchyard and its consumers ---
+SWITCHYARD_PORT
+SWITCHYARD_PUBLIC_URL
+SWITCHYARD_BOOTSTRAP_TOKEN
+GITHUB_WEBHOOK_SECRET
+GITHUB_DISPATCH_TOKEN
+EXTERNAL_REF_POLLER
+PROMOTE_DISPATCH_TOKEN
+SIGNET_API_TOKEN
+
+# --- lyceum ---
+LYCEUM_AUTH
+LYCEUM_OWNER_EMAIL
+# The acquirer credential this file exists because of. `${LYCEUM_BINDERY_API_KEY:-}`
+# in compose means lyceum boots the no-op acquirer without it and every ingest confirm
+# strands its row at `wanted` (SERV-173).
+LYCEUM_BINDERY_API_KEY
+
+# --- purser (provisions real accounts across four services; a blank here is a
+#     provisioning run that silently does less, not one that fails) ---
+PURSER_API_TOKEN
+PURSER_SWITCHYARD_TOKEN
+PURSER_LYCEUM_OWNER_TOKEN
+PURSER_CF_ACCOUNT_ID
+PURSER_CF_ZONE_ID
+PURSER_CF_TUNNEL_ID
+PURSER_CF_API_TOKEN
+PURSER_CF_ACCESS_GROUP_ID
+
+# --- argosy ---
+ARGOSY_ADMIN_PASSWORD
+ARGOSY_PROVISION_TOKEN
+ARGOSY_MEDIA_DIR_HOST
+TMDB_API_KEY
+TMDB_API_READ_ACCESS_KEY
+OPEN_SUBTITLES_USERNAME
+OPEN_SUBTITLES_PASSWORD
+OPEN_SUBTITLES_API_KEY
+
+# --- amber ---
+AMBER_API_TOKEN
+AMBER_REDACTION_SALT
+
+# --- asr and chronicle ---
+ASR_CLIENT_TOKENS
+CHRONICLE_ASR_TOKEN
+CHRONICLE_OWNER_EMAIL
+CHRONICLE_PROXY_SECRET
+CHRONICLE_SWITCHYARD_TOKEN
+
+# --- centrifuge ---
+CENTRIFUGE_PORT
+CENTRIFUGE_INGEST_TOKEN
+
+# --- interlock ---
+# Not listed: INTERLOCK_SMTP_URL, INTERLOCK_ALERT_EMAIL_FROM, INTERLOCK_ALERT_EMAIL_TO.
+# Prod delivers all three EMPTY on purpose — alert mail is off — and empty is reported
+# as missing here, so a key that may legitimately be blank cannot be required.
+INTERLOCK_PORT
+INTERLOCK_SESSION_PASSWORD
+INTERLOCK_AUTH_PASSWORD_HASH
+INTERLOCK_AUTH_COOKIE_SECURE
+INTERLOCK_LEGISCAN_API_KEY
+
+# --- placard ---
+PLACARD_UPLOAD_TOKEN
+
+# --- cook book ---
+COOK_BOOK_PORT
+
+# --- third-party services with no first-party fallback ---
+DD_API_KEY
+DD_SITE
+# DD_TAGS is deliberately absent: Datadog treats an empty value as "no tags", so it
+# is the one key ansible's bootstrap check also lets be blank.
+SEMAPHORE_ADMIN
+SEMAPHORE_ADMIN_NAME
+SEMAPHORE_ADMIN_EMAIL
+SEMAPHORE_ADMIN_PASSWORD

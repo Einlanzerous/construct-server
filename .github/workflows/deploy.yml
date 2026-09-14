@@ -159,7 +159,9 @@ jobs:
           # but only after the rsync step has already claimed success.
           mkdir -p "$DEPLOY_ROOT/pkg"
           rsync -a --delete ./pkg/cfaccess/ "$DEPLOY_ROOT/pkg/cfaccess/"
-          rsync -a docker-compose.yml Makefile versions.env "$DEPLOY_ROOT/"
+          # required-env-keys.txt rides along so `make assert-env-keys` on the box reads
+          # the same manifest the deploy gated on (SERV-173).
+          rsync -a docker-compose.yml Makefile versions.env required-env-keys.txt "$DEPLOY_ROOT/"
 
       - name: Restore Secrets
         # The deployed environment comes from two sources with different homes (SERV-96):
@@ -185,6 +187,30 @@ jobs:
           fi
           printf '%s\n' "$PROD_ENV_FILE" | ./scripts/render-env.sh - versions.env "$DEPLOY_ROOT/.env"
           chmod 600 "$DEPLOY_ROOT/.env"
+
+      - name: Verify the rendered environment holds every key the stack needs (SERV-173)
+        # LYCEUM_BINDERY_API_KEY reached the lyceum container empty four times between
+        # July and September 2026, and every deploy in between was green. Compose reads
+        # it as `${LYCEUM_BINDERY_API_KEY:-}`, so a rewrite of the environment secret
+        # from a copy that predates the key is not an error anywhere: lyceum boots
+        # healthy with the no-op acquirer and strands every ingest at `wanted`. The
+        # fourth loss was the 2026-09-06 restore itself — done with `gh secret set` on a
+        # secret Signet renders, so the next `signet sync` rebuilt it from a vault that
+        # had never held the key.
+        #
+        # This is the check none of the others are. The token gate below judges the
+        # VALUES of five variables, the tag step asserts pins, drift compares mounts; a
+        # key that is simply absent fails none of them. `required-env-keys.txt` names the
+        # keys whose loss is silent, and this fails the deploy — before anything pulls,
+        # builds or recreates — if the file just rendered is missing one or carries it
+        # empty. Names only in the log, never a value; the script's header has the rest.
+        #
+        # STACK-WIDE, LIKE THE TOKEN GATE, AND FOR THE SAME REASON: a scoped promote of
+        # purser fails here on a dropped lyceum key it would never have shipped, because
+        # the failure this exists to catch is a key nobody was looking at. Vault first,
+        # then the manifest, when adding a key — the other order blocks every deploy
+        # until the vault catches up, rollbacks included.
+        run: ./scripts/assert-env-keys.sh
 
       - name: Verify the rendered environment holds tokens switchyard will accept (SERV-124)
         # The render-time gate dev has had since SERV-118, now on the tier that needed it

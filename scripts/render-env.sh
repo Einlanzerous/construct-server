@@ -43,7 +43,8 @@
 #
 # Exit codes:
 #   0  rendered (stdout says whether anything changed)
-#   2  usage error, missing input, or a malformed versions file
+#   2  usage error, missing input, a malformed versions file, or a base that defines
+#      keys below the pins marker (they would be discarded — SERV-173)
 
 set -euo pipefail
 
@@ -72,6 +73,11 @@ fi
 # ansible reconciles the deployed .env in place, so that is the normal case and not an
 # edge one. Without the cut, each run would leave another header and pin block behind.
 MARKER='# --- first-party image pins, rendered from versions.env (SERV-96) ---'
+# Everything below the marker is kept aside before the cut, because the cut is also a
+# trap (SERV-173): a key someone appended to the BOTTOM of a rendered .env — the natural
+# place — sits below the marker, and this cut discards it silently on every render. It
+# is judged once the pins are known, below.
+tail_content="$(printf '%s\n' "$base_content" | awk -v m="$MARKER" 'found { print } $0 == m { found = 1 }')"
 base_content="$(printf '%s\n' "$base_content" | awk -v m="$MARKER" '$0 == m { exit } { print }')"
 
 # An empty base is never a value (the CLAUDE.md invariant). Rendering one would produce
@@ -104,6 +110,38 @@ fi
 
 pins="$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$versions")"
 pinned_keys="$(printf '%s\n' "$pins" | cut -d= -f1)"
+
+# A KEY=VALUE line below the marker that is not one of the pins is a credential someone
+# thought they had added, and this script would have thrown it away (SERV-173). The
+# ticket's own restore runbook said "rebuild the secret from the deployed .env" — a
+# rendered file whose tail IS the pin block — and the key appended after it reached
+# compose zero times across two deploys that both printed `unchanged`. That is never
+# intentional, so it is an error and not a note: the fix is to move the line above
+# the marker, or better, to stop pasting rendered files into the secret at all (it is
+# rendered by Signet; add the key to the vault). The pins themselves are exempt because
+# on ansible's in-place reconcile the tail is exactly the block this script wrote.
+stray="$(printf '%s\n' "$tail_content" | awk -v keys="$pinned_keys" '
+  BEGIN {
+    n = split(keys, k, "\n")
+    for (i = 1; i <= n; i++) if (k[i] != "") pin[k[i]] = 1
+  }
+  /^[A-Za-z_][A-Za-z0-9_]*=/ {
+    eq = index($0, "=")
+    key = substr($0, 1, eq - 1)
+    if (!(key in pin) && !(key in seen)) { seen[key] = 1; print key }
+  }
+')"
+if [ -n "$stray" ]; then
+  err "ERROR: the base environment defines $(printf '%s\n' "$stray" | wc -l) key(s) BELOW the pins marker, where this render would discard them:"
+  printf '%s\n' "$stray" | sed 's/^/  /' >&2
+  err ""
+  err "Everything under '$MARKER'"
+  err "is cut and regenerated from $(basename "$versions") on every render, so a key appended there"
+  err "never reaches compose — and the deploy goes green (SERV-173). A base that carries the"
+  err "marker at all is a RENDERED file being fed back in: do not rebuild the secret from the"
+  err "deployed .env. It is rendered by Signet; add the key to the vault and \`signet sync\`."
+  exit 2
+fi
 
 # Exact key matches only — no regex built from the key names, so a key can never be
 # read as a pattern.

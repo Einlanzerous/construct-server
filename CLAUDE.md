@@ -55,6 +55,9 @@ anything deploys or gets versioned.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).
 - `scripts/check-compose-drift.sh` — the SERV-8 guardrail (see Invariants).
+- `required-env-keys.txt` / `dev-required-env-keys.txt` — the keys each tier's rendered
+  `.env` must carry with a value (SERV-173), names only. `scripts/assert-env-keys.sh`
+  gates both deploys on them before anything is pulled. See the invariant below.
 - `scripts/check-base-images.sh` — the base-image guard (SERV-170): every first-party
   `FROM` must name a supported cycle, to cycle precision, checked against endoflife.date.
   `base-images.yml` runs it across every repo's default branch every Monday. Design of
@@ -447,13 +450,38 @@ anything deploys or gets versioned.
   target's. A new stack credential is `signet set --project construct-server --name X`
   followed by `signet target add-key --project construct-server --gh-secret
   PROD_ENV_FILE --name X` — `signet set` alone mints a value that reaches nothing, which
-  is how four secrets in this project came to have no destination at all. And
+  is how four secrets in this project came to have no destination at all — and then,
+  **after** `signet sync`, a line in `required-env-keys.txt` (SERV-173, below). And
   **do not detach the render target and re-add it**: `--seed-from` reads a file target's
   key set, there is no longer one to read, and an unseeded rendered target is created
   with an *empty* key set. Use `target add-key` to change what it delivers.
   **Dev's allowlist is deliberately not empty**: `construct-server-dev` keeps
   `creds/dev.env`, the readable credential source it was seeded from, which
   `deploy-dev.yml` never writes. One writer, so it is a state and not a race.
+- **A key the vault does not hold does not exist, and the deploy asserts the set**
+  (SERV-173). `LYCEUM_BINDERY_API_KEY` reached the prod lyceum container empty four
+  times between 2026-07-20 and 2026-09-14, through deploys that were green every time.
+  Compose reads it as `${LYCEUM_BINDERY_API_KEY:-}`, so its absence is not an error
+  anywhere: lyceum boots healthy with the no-op acquirer and strands every ingest at
+  `wanted`. Three losses were rewrites of `PROD_ENV_FILE` from a copy that predated the
+  key. The fourth was the **restore** — done with `gh secret set` on a secret Signet
+  renders, so the next `signet sync` rebuilt it from a vault that had never held the key.
+  The ticket's ask to "move PROD_ENV_FILE to Signet" was already true (SERV-94); Signet
+  is exactly why the hand restore evaporated. So two things now hold. `deploy.yml` and
+  `deploy-dev.yml` run `scripts/assert-env-keys.sh` right after the render and **fail
+  before anything pulls** if the file is missing a key in `required-env-keys.txt` or
+  carries it empty — names only, never a value. And `render-env.sh` **refuses** a base
+  that defines keys below its pins marker: the marker cut is where a key appended to the
+  bottom of a rendered `.env` used to vanish, `unchanged` and green, which is what the
+  09-06 restore attempt hit twice before anyone looked. **Vault first, then the
+  manifest.** A manifest line whose key the vault does not deliver blocks every prod
+  deploy, rollbacks included, until it does; the reverse order is a warning
+  ("delivered, unlisted") on each deploy, which is the cheap direction.
+  `make assert-env-keys vault=1` asks the vault what the next deploy will carry, for the
+  interval between `signet sync` and the deploy that renders it. A key that may
+  legitimately be blank does not belong in the manifest at all — an empty value is not a
+  value — and dev's tunnel token is the case: it is the edge's on-switch (SERV-93), so
+  it is deliberately absent from `dev-required-env-keys.txt`.
 - **`postgres` is pinned by digest, and recreating it breaks the Node services**
   (SERV-102). Every first-party service depends on the one postgres container, so
   it has the largest blast radius in the stack — and under the old floating
@@ -829,6 +857,16 @@ There is no test suite — this repo is configuration, so validation is mostly
   SWY-303 removes the copy. Being Signet-managed is **not** a substitute — `signet render
   --check` compares key sets, not values, so a vault seeded from a stale file renders the
   stale value and reports success.
+- `make assert-env-keys` / `make dev-assert-env-keys` after anything that changes the
+  rendered environment's **key set** — a `signet target add-key`, a retired secret, a
+  manifest edit (SERV-173). It asks whether every key in `required-env-keys.txt` reaches
+  the deployed `.env` with a value, which is the question `assert-tokens` does not ask
+  and compose's `:-` defaults make unanswerable from anywhere else. Both deploys gate on
+  it, before any pull. `vault=1` asks the vault instead of the deployed file, for the
+  interval between a `signet sync` and the deploy that renders it — the same ordering
+  `promote-dispatch-check` documents. It also names, as a note, every delivered key the
+  manifest does not list: those are unprotected, not wrong, and the note is the prompt to
+  list the ones the stack reads and retire the rest.
 - `make env-ownership-check` / `make dev-env-ownership-check` after changing what the
   vault *delivers* — a `signet target add-key`, an `import`, a re-seeded render target.
   It is the ownership question, not the value question `assert-tokens` asks: whether the
