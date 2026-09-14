@@ -73,6 +73,7 @@ function main(): void {
 
   for (const page of pages) writePage(page);
   writeSidebar(estate);
+  writeBuild(estate);
 
   report(estate, pages, diagrams, repoDocsCache);
 }
@@ -145,6 +146,19 @@ function writePage(page: Page): void {
   const abs = join(DOCS_DIR, `${page.path}.md`);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, page.body.trimEnd() + "\n", "utf8");
+}
+
+/**
+ * The stamp Chronicle reads (SERV-189 / CHRN-100). It serves this corpus from a
+ * read-only mount beside its authored notes, and marks every tier-1 payload with
+ * which build generated it and when — so the stamp has to be machine-readable
+ * beside the pages, not only in the home page's "Built from" row. Wiped with the
+ * rest by cleanDocs(), which is right: a stale stamp on a fresh corpus would lie.
+ */
+function writeBuild(estate: Estate): void {
+  const abs = join(DOCS_DIR, "build.json");
+  const stamp = { ref: estate.buildRef, generated_at: new Date().toISOString() };
+  writeFileSync(abs, JSON.stringify(stamp, null, 2) + "\n", "utf8");
 }
 
 function writeSidebar(estate: Estate): void {

@@ -1063,6 +1063,12 @@ services:
       # SERV-182. Sync CHRONICLE_TIER1_DB_PASSWORD into PROD_ENV_FILE before this
       # lands, or it substitutes empty and the service crash-loops, correctly.
       - CHRONICLE_TIER1_DATABASE_URL=postgres://chronicle_tier1:${CHRONICLE_TIER1_DB_PASSWORD}@postgres:5432/chronicle?sslmode=disable
+      # The OTHER half of tier 1 (CHRN-100 / SERV-189): the generated estate
+      # wiki, read from the bind mount below. Chronicle stats it at boot and
+      # refuses to start without it, the way it refuses without the tier-1
+      # DSN: a tier-1 pane quietly served empty is not distinguishable from
+      # one that works on a host wiki.yml has not reached yet.
+      - CHRONICLE_TIER1_WIKI_DIR=/tier1/wiki
       - CHRONICLE_LOG_LEVEL=${CHRONICLE_LOG_LEVEL:-info}
       - CHRONICLE_LOG_FORMAT=${CHRONICLE_LOG_FORMAT:-json}
       - CHRONICLE_SHUTDOWN_GRACE=${CHRONICLE_SHUTDOWN_GRACE:-20s}
@@ -1256,6 +1262,15 @@ services:
       # container. If that changes, the failure is a write error on ingest
       # rather than at boot, so it would not be caught by the checks here.
       - /data/chronicle:/data/chronicle
+      # ro: the generated estate wiki — SERV-101's markdown corpus, published
+      # here by wiki.yml (SERV-189) and served by chronicle beside its authored
+      # notes (CHRN-100). READ-ONLY IS THE ENFORCEMENT: tier 1 is regenerated
+      # on every deploy and hand-edited by nobody, and the kernel, not a code
+      # path, is what keeps chronicle from writing it. A second view of the
+      # same artefact the wiki container renders — not a copy, not a table.
+      # Same ownership race as wiki/site: deploy.yml mkdirs it before compose
+      # can create it as root.
+      - ./wiki/docs:/tier1/wiki:ro
     networks:
       - construct_net
     depends_on:
