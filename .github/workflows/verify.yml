@@ -246,6 +246,40 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # A copy of the reviewer's "Locate Claude Code" step — the whole argument is
+      # on it, in pr-review-reusable.yml. Short form: every runner shares one
+      # $HOME, the action's per-run install races itself across repos and deletes
+      # the other run's binary, so the action is pointed at the host's copy and
+      # a missing one fails here with its name (SERV-114). Change both copies.
+      - name: Locate Claude Code
+        id: claude
+        run: |
+          set -euo pipefail
+          BIN="$HOME/.local/bin/claude"
+          if [ ! -e "$BIN" ]; then
+            if [ -L "$BIN" ]; then
+              echo "::error::Claude Code is not usable on this runner: $BIN is a symlink to $(readlink "$BIN"), which does not exist. Reinstall it for the runner's user (curl -fsSL https://claude.ai/install.sh | bash) — the action no longer installs it per run (SERV-114)."
+            else
+              echo "::error::Claude Code is not installed on this runner: $BIN does not exist. Install it for the runner's user (curl -fsSL https://claude.ai/install.sh | bash) — the action no longer installs it per run (SERV-114)."
+            fi
+            exit 1
+          fi
+          if [ ! -x "$BIN" ]; then
+            echo "::error::Claude Code is not usable on this runner: $BIN exists but is not executable."
+            exit 1
+          fi
+          if ! VERSION=$(timeout 60 "$BIN" --version 2>&1); then
+            echo "::error::Claude Code is not usable on this runner: '$BIN --version' failed — ${VERSION:-no output}"
+            exit 1
+          fi
+          echo "path=$BIN" >> "$GITHUB_OUTPUT"
+          echo "Claude Code: $VERSION at $BIN -> $(readlink -f "$BIN")"
+          PIN=$(sed -n 's/^ *CLAUDE_CODE_VERSION="\([^"]*\)".*/\1/p' \
+                  "$GITHUB_WORKSPACE"/../../_actions/anthropics/claude-code-action/*/base-action/action.yml 2>/dev/null | head -1 || true)
+          if [ -n "$PIN" ] && [ "${VERSION%% *}" != "$PIN" ]; then
+            echo "::notice::Claude Code on this runner is ${VERSION%% *}; the action would have installed $PIN. CI runs the host's copy on purpose (SERV-114) — \`claude update\` on the host is what moves it."
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -357,6 +391,9 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          # The binary already on the box, asserted by "Locate Claude Code" above.
+          # Set, the action installs nothing — see that step (SERV-114).
+          path_to_claude_code_executable: ${{ steps.claude.outputs.path }}
           prompt: ${{ steps.prompt.outputs.text }}
           # Bash is the whole job — curl the ticket, probe dev, write the verdict.
           # Write is allowed ONLY because the verdict file and the comment body

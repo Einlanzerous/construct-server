@@ -31,6 +31,12 @@ work with no long-lived service, no exposed port and no ambient credential. That
 takes Servo-Signal auth off the critical path, which was IDEA-19's cross-system
 item 1.
 
+Like the reviewer, it runs the Claude Code already installed on the box rather
+than letting the action install one per run — every runner shares one `$HOME`,
+and the per-run install raced across repos (SERV-114). The `Locate Claude Code`
+step is a copy of the reviewer's; `docs/pr-reviewer.md` > "Claude Code on the
+runner host" has the argument and what it couples. Change both copies together.
+
 Two jobs, for the SERV-87 reason: declining to verify has to be a **skipped**
 job, not a green one.
 

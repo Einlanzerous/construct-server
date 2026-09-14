@@ -119,6 +119,37 @@ A job already sitting in that 24-hour queue picks the runner up as soon as it
 registers, so there is no need to cancel the run or close and reopen the PR.
 purser's did.
 
+### Claude Code on the runner host
+
+The review job runs **the Claude Code already installed on the box** — the
+runner user's `~/.local/bin/claude` — and the action installs nothing
+(SERV-114). A `Locate Claude Code` step asserts it exists and runs, and fails
+naming it otherwise; a fresh host with no install reads as "Claude Code is not
+installed on this runner", not as a checksum error or a `malfunction (turns: 0)`.
+
+The reason is that every runner on this box is the same Unix user with the same
+`$HOME`, and `claude-code-action`'s per-run install writes
+`$HOME/.claude/downloads/claude-<version>-linux-x64` — no per-run component —
+and `rm -f`s it on failure. Two reviews in flight in different repos deleted
+each other's binary and both went red. Each install also ran `claude install`,
+which repoints `~/.local/bin/claude`, so CI was quietly deciding the version of
+the interactive `claude` as well.
+
+Two consequences, both accepted:
+
+- **`claude update` on the host is a CI version change.** The step prints the
+  version on every run and emits a `::notice` when it differs from the version
+  the action would have installed, so the coupling is visible in the log rather
+  than silent. Pinning CI to its own copy is SERV-190's per-runner
+  `HOME`, not a second install path under the shared one.
+- **A runner host with no Claude Code install cannot review.** On this box that
+  is already true; a new host installs it for the runner user once
+  (`curl -fsSL https://claude.ai/install.sh | bash`) rather than on every run.
+
+Do not fix the next collision by serialising reviews across repos:
+`concurrency` is per-repo and cannot express it, and SERV-92 made the repos
+reviewable, which is the same thing as making them concurrent.
+
 ## Inputs
 
 | input | default | what it is for |
@@ -460,6 +491,13 @@ reviewer runs with `--allowedTools Bash,Read,Grep,Glob` and spawns none today.
   Gate additionally checks that the posted body carries this run's
   `<!-- pr-review: <repo>#<pr> run <id> -->` marker and names the other run when
   it does not. The marker is composed once, in the review job's `env`.
+- **`$HOME` is one namespace across every runner too, and the action's own
+  install used to race in it** (SERV-114). `claude-code-action` installs Claude
+  Code on every run into `$HOME/.claude/downloads/…` and deletes the file on any
+  failure, so two reviews in different repos took each other down — the same
+  shared-identity class as the `/tmp` entry above, one directory over. The
+  action is now handed the host's `~/.local/bin/claude` and installs nothing;
+  see "Claude Code on the runner host" for what that couples.
 - **`claude-code-action` fails runs it completed.** It throws when `num_turns`
   exceeds `max_turns` even on a run the SDK allowed to finish. The workflow reads
   the result message from the execution file and decides for itself; the action's
@@ -468,6 +506,8 @@ reviewer runs with `--allowedTools Bash,Read,Grep,Glob` and spawns none today.
 ## Related
 
 - `REVIEW.md` — this repo's own review standards.
+- SERV-190 — per-runner `HOME` for the self-hosted runners, the structural fix
+  behind SERV-114 and the constraints it has to route around.
 - `PRINCIPLES.md` — estate-wide defaults the reviewer also applies.
 - SERV-59 (the reviewer), SERV-87 (the check now means something), SERV-92 (this
   extraction), SERV-126 (the first review a conflicting PR never got), SERV-127
