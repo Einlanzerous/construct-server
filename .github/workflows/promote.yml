@@ -101,6 +101,7 @@ on:
           - aperture
           - argosy
           - asr
+          - catenary
           - centrifuge
           - chronicle
           - cook_book
