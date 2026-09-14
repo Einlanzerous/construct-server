@@ -17,6 +17,14 @@ before changing anything here — it holds the reasoning this file only summaris
    it; the parser lifts comments onto the service and env-var they precede. A
    change that drops them makes the wiki much worse.
 
+**Section labels are derived from the banners, not printed from them** (SERV-186).
+A `# --- LYCEUM (self-hosted ebook reader + sync) — LYCM-61 ---` banner is the
+**Lyceum** group in the nav and the full banner under that heading on `/services/`.
+To rename a group, add `# group: Name` under its banner in `docker-compose.yml`;
+to rename a service, `# name: Name` above its key. Do not grow the casing table in
+`sources/compose.ts` for anything but an acronym. The full rule is in
+`docs/estate-wiki.md`.
+
 ## Commands
 
 Run these from the repo root:

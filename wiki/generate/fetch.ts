@@ -30,7 +30,6 @@ import {
   parseArchitectureMeta,
 } from "./sources/architecture.ts";
 import { parseCompose } from "./sources/compose.ts";
-import { parseVersions } from "./sources/versions.ts";
 import { EXTRA_REPOS, GITHUB_OWNER, REPO_DOC_FILES, repoFromImage, repoUrl } from "./sources/repos.ts";
 
 const WIKI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -204,6 +203,11 @@ function gitAuthEnv(token: string): Record<string, string> {
  * The repo list comes from the compose file, not from a constant: every first-party
  * image names its source repo, so adding a service to the stack adds it here with
  * no second edit. Only repos that ship no image need naming (EXTRA_REPOS).
+ *
+ * Exactly the set `deriveRepos()` in model.ts builds, and deliberately nothing more.
+ * It used to add a repo per `versions.env` variable as well, which the generator
+ * never read — a pin whose repo ships no image has no page — and which turned
+ * `ASR_TAG` into a fetch of a repo called `asr` on every build (SERV-186).
  */
 function discoverRepos(): string[] {
   const compose = parseCompose(join(REPO_ROOT, "docker-compose.yml"));
@@ -212,9 +216,7 @@ function discoverRepos(): string[] {
     .map((s) => repoFromImage(s.image!.repo))
     .filter((n): n is string => n !== null);
 
-  const fromPins = parseVersions(join(REPO_ROOT, "versions.env")).map((p) => p.repo);
-
-  return [...new Set([...fromImages, ...fromPins, ...EXTRA_REPOS])].sort();
+  return [...new Set([...fromImages, ...EXTRA_REPOS])].sort();
 }
 
 function readLocal(path: string): string | null {

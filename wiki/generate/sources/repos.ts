@@ -67,9 +67,24 @@ export function repoUrl(name: string): string {
   return `https://github.com/${GITHUB_OWNER}/${name}`;
 }
 
+/**
+ * Image names that do not name their source repo. Every other first-party image is
+ * `ghcr.io/<owner>/<repo>[/<component>]`, so the repo is derived from the path —
+ * but `estate-asr` is built from chronicle's `asr/` subtree and named for what it
+ * is rather than where it lives (CHRN-82). Left to the derivation, the wiki invented
+ * a repo called `estate-asr`, gave it a page with a permanent NO DOCS CACHED warning,
+ * and fetched four files from a GitHub repo that does not exist on every build
+ * (SERV-186). Add to this only when the image name and the repo name genuinely
+ * differ; a typo in compose is fixed in compose.
+ */
+export const IMAGE_REPO_ALIASES: Record<string, string> = {
+  "estate-asr": "chronicle",
+};
+
 /** `ghcr.io/einlanzerous/switchyard/backend` -> `switchyard`. */
 export function repoFromImage(repoPath: string): string | null {
   const parts = repoPath.split("/");
   // ghcr.io / owner / repo [ / component ]
-  return parts.length >= 3 ? (parts[2] ?? null) : null;
+  const name = parts.length >= 3 ? (parts[2] ?? null) : null;
+  return name === null ? null : (IMAGE_REPO_ALIASES[name] ?? name);
 }

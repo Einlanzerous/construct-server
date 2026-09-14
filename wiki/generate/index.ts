@@ -40,6 +40,17 @@ const DOCS_DIR = join(WIKI_DIR, "docs");
  */
 const REFERENCE_ROOT_FILES = ["CLAUDE.md", "PRINCIPLES.md", "README.md"];
 
+/**
+ * Titles for reference documents whose h1 does not make one. `CLAUDE.md`'s h1 is the
+ * filename with the repo after a dash, which `titleOf` would reduce to the filename
+ * (SERV-186). Keyed by repo-relative path; anything absent here is titled from its
+ * own h1, and that is the right default — a design document should be renamed in
+ * the document, not in this table.
+ */
+const REFERENCE_TITLES: Record<string, string> = {
+  "CLAUDE.md": "Construct Server (CLAUDE.md)",
+};
+
 function main(): void {
   const repoDocsCache = process.env.WIKI_REPO_DOCS
     ? resolve(process.env.WIKI_REPO_DOCS)
@@ -106,11 +117,29 @@ function loadReference(): Estate["reference"] {
   });
 }
 
-/** Prefer the document's own h1; fall back to a readable form of the filename. */
+/**
+ * Prefer the document's own h1; fall back to a readable form of the filename.
+ *
+ * An h1 here is `Name — description` more often than not, and the description is
+ * dropped: `Delivery Pipeline — dev, prod, and the Verified gate` is a sidebar entry
+ * called Delivery Pipeline. But not every dash is a description. `Zero Gravity
+ * Industries — Hybrid Edge` is a two-part name, and cutting it at the dash left a
+ * company on the sidebar where a document should be (SERV-186). The tell is case: a
+ * description is written as a sentence fragment, a name-part in Title Case, so a
+ * Title Case tail stays. Emoji are stripped — a README's decoration is not its name.
+ */
 function titleOf(body: string, path: string): string {
+  const named = REFERENCE_TITLES[path];
+  if (named) return named;
+
   const m = /^#\s+(.+)$/m.exec(body);
-  if (m?.[1]) return m[1].replace(/\s*—.*$/, "").trim();
-  return (path.split("/").pop() ?? path).replace(/\.md$/, "");
+  const h1 = m?.[1] ? m[1].replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, "").trim() : "";
+  if (!h1) return (path.split("/").pop() ?? path).replace(/\.md$/, "");
+
+  const [head, ...rest] = h1.split(/\s+—\s+/);
+  const tail = rest.join(" — ");
+  const titleCase = tail !== "" && tail.split(/\s+/).every((w) => /^[A-Z0-9]/.test(w));
+  return (titleCase ? h1 : (head ?? h1)).trim();
 }
 
 /**

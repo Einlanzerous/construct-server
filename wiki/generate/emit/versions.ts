@@ -1,5 +1,5 @@
 import { pinBehaviour } from "../sources/versions.ts";
-import { repoUrl } from "../sources/repos.ts";
+import { repoFromImage, repoUrl } from "../sources/repos.ts";
 import { code, frontmatter, provenance, section, table } from "../lib/md.ts";
 import type { Estate } from "../model.ts";
 import type { Page } from "./page.ts";
@@ -36,11 +36,14 @@ export function emitVersions(estate: Estate): Page {
           ["Variable", "Value", "Style", "Source repo", "Images"],
           estate.pins.map((pin) => {
             const images = firstParty.filter((s) => s.image?.tagVar === pin.variable);
+            // From the image where one reads the pin, not from the variable name:
+            // ASR_TAG pins an image built in chronicle, and the variable cannot say so.
+            const repo = (images[0]?.image && repoFromImage(images[0].image.repo)) || pin.repo;
             return [
               code(pin.variable),
               code(pin.value),
               pin.style,
-              `[${pin.repo}](${repoUrl(pin.repo)})`,
+              `[${repo}](${repoUrl(repo)})`,
               images.length > 0
                 ? images.map((s) => `[${s.name}](/${servicePath(s.name)})`).join(", ")
                 : "— *no service uses this*",

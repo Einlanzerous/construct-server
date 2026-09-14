@@ -42,6 +42,21 @@ const SECTION_RE = /^\s*-{2,}\s*(.+?)\s*-{2,}\s*$/;
 /** `${VAR}`, `${VAR:-default}`, `${VAR-default}`. */
 const VAR_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}/;
 
+/**
+ * An explicit display-name override, written as its own comment line: `# group: Edge
+ * Proxy` anywhere after a banner names the group it belongs to, `# name: Cook Book`
+ * above a service key names that service. Both are stripped from the prose they sit
+ * in. The derivation below covers every banner in the file today; this is the escape
+ * hatch for the one it gets wrong tomorrow, and it lives in the compose file because
+ * that is the one place the estate already edits — a regex over prose would otherwise
+ * keep growing exceptions here, in a file nobody opens to name a section (SERV-186).
+ */
+const ANNOTATION_RE = /^\s*(name|group):\s*(.+?)\s*$/;
+
+/** A Switchyard ticket key, `SERV-186` or `IDEA-22`. */
+const TICKET_KEY = "[A-Z]{3,4}-\\d+";
+const TICKET_LIST_RE = new RegExp(`${TICKET_KEY}(\\s*/\\s*${TICKET_KEY})*`);
+
 export interface EnvEntry {
   name: string;
   /** Literal value, when the tracked file spells one out. Null for `${VAR}` refs. */
@@ -91,8 +106,23 @@ export interface ImageRef {
 }
 
 export interface ComposeService {
+  /** The compose key — what `docker compose` and the Makefile targets take. */
   name: string;
-  section: string | null;
+  /**
+   * What to call it on a page. Equal to `name` for every service today except
+   * `cook_book`, the one snake_case key, which reads as a typo beside the rest; a
+   * `# name:` line above the key overrides it (SERV-186). Never a URL or a command
+   * argument — those keep using `name`.
+   */
+  displayName: string;
+  /**
+   * The nav label for the section this service sits in: the banner with its ticket
+   * keys, parentheticals and trailing description stripped, in Title Case. Null when
+   * no banner precedes it, which the model reports as a finding rather than hiding.
+   */
+  group: string | null;
+  /** The `# --- … ---` banner verbatim, ticket keys and all, for the page body. */
+  sectionDoc: string | null;
   doc: string;
   image: ImageRef | null;
   build: string | null;
@@ -151,21 +181,39 @@ function parseServices(doc: Document): ComposeService[] {
   const out: ComposeService[] = [];
   // Section banners cascade: a `# --- ARGOSY ---` header applies to every service
   // after it until the next banner, not just the one it sits above.
-  let section: string | null = null;
+  let section: Section = { banner: null, group: null };
+
+  // The FIRST banner does not sit on the first service. `yaml` hangs a comment that
+  // precedes the first entry of a map on the map itself, not on that entry's key —
+  // so `# --- AI & LLM STACK ---` is on `services`, and `ollama`'s key carries
+  // nothing. Reading only the keys lost that banner on every build and emitted
+  // ollama under an "Ungrouped" heading that named a bug rather than a section
+  // (SERV-186). Seed from the map's own comment, and hand any prose that shares the
+  // block to the first service, whose documentation it is.
+  const lead = splitSectionComment(commentOf(services));
+  section = advance(section, lead);
+  let leadProse: string | null = lead.prose || null;
+  let leadName: string | null = lead.name;
 
   for (const item of services.items as Pair<unknown, unknown>[]) {
     const name = scalarString(item.key);
     if (!name) continue;
 
-    const { section: found, prose } = splitSectionComment(commentOf(item.key));
-    if (found) section = found;
+    const split = splitSectionComment(commentOf(item.key));
+    section = advance(section, split);
+    const prose = [leadProse, split.prose].filter(Boolean).join("\n\n");
+    const displayName = split.name ?? leadName ?? humanise(name);
+    leadProse = null;
+    leadName = null;
 
     const body = item.value;
     if (!isMap(body)) continue;
 
     out.push({
       name,
-      section,
+      displayName,
+      group: section.group,
+      sectionDoc: section.banner,
       doc: prose,
       image: parseImage(str(body, "image")),
       build: parseBuild(body.get("build", true)),
@@ -369,27 +417,125 @@ function commentOf(node: unknown): string {
     .trim();
 }
 
+/** The section a service falls under: the banner as written, and the label derived from it. */
+interface Section {
+  banner: string | null;
+  group: string | null;
+}
+
+/**
+ * Fold one comment block into the running section. A new banner replaces both the
+ * banner and the label; a `# group:` line replaces the label only, whether it sits
+ * under a fresh banner or three services later — it is an override on whatever
+ * section is current.
+ */
+function advance(current: Section, found: SplitComment): Section {
+  const banner = found.banner ?? current.banner;
+  const group = found.group ?? (found.banner ? groupLabel(found.banner) : current.group);
+  return { banner, group };
+}
+
+interface SplitComment {
+  banner: string | null;
+  /** `# group:` override, when the block carries one. */
+  group: string | null;
+  /** `# name:` override, when the block carries one. */
+  name: string | null;
+  prose: string;
+}
+
 /**
  * Pull a `--- SECTION ---` banner out of a comment block, returning it separately
  * from the prose. Banners are matched anywhere in the block because a service is
  * routinely preceded by both its section header and its own explanation; the last
  * banner wins, and only the lines after it are that service's documentation.
+ * Annotation lines (`name:`, `group:`) are lifted out of the prose wherever they sit.
  */
-function splitSectionComment(comment: string): { section: string | null; prose: string } {
-  if (!comment) return { section: null, prose: "" };
+function splitSectionComment(comment: string): SplitComment {
+  if (!comment) return { banner: null, group: null, name: null, prose: "" };
   const lines = comment.split("\n");
 
-  let section: string | null = null;
+  let banner: string | null = null;
   let lastBanner = -1;
   lines.forEach((line, i) => {
     const m = SECTION_RE.exec(line);
     if (m?.[1]) {
-      section = m[1];
+      banner = m[1];
       lastBanner = i;
     }
   });
 
-  return { section, prose: lines.slice(lastBanner + 1).join("\n").trim() };
+  let group: string | null = null;
+  let name: string | null = null;
+  const prose: string[] = [];
+  for (const line of lines.slice(lastBanner + 1)) {
+    const m = ANNOTATION_RE.exec(line);
+    if (m?.[1] === "group") group = m[2] ?? null;
+    else if (m?.[1] === "name") name = m[2] ?? null;
+    else prose.push(line);
+  }
+
+  return { banner, group, name, prose: prose.join("\n").trim() };
+}
+
+/**
+ * Words whose Title Case is wrong. Acronyms, and one brand: no rule can tell `ASR`
+ * from `AMBER` in an all-caps banner, so the ones that must stay upper are listed.
+ * Keep this to casing — a section that needs a different *name* gets a `# group:`
+ * line in the compose file, not an entry here.
+ */
+const WORD_CASE: Record<string, string> = {
+  ai: "AI",
+  llm: "LLM",
+  ui: "UI",
+  asr: "ASR",
+  crowdsec: "CrowdSec",
+};
+
+/**
+ * The nav label for a banner. Banners were written as headings in the old sections
+ * and as sentences with ticket suffixes in the new ones, and printed verbatim they
+ * make the sidebar read as a changelog — 16 of 28 carried a key, one ran to 68
+ * characters (SERV-186). So: drop the ticket keys, whether trailing (`— SERV-33`,
+ * `— PCAD-1 / IDEA-22`) or parenthesised mid-name (`CROWDSEC (SERV-27) — …`); drop
+ * any remaining parenthetical, which is always the product behind a role
+ * (`DASHBOARD (Aperture)`); keep what precedes the first ` — `, which is always a
+ * description; then Title Case what is left. The full banner survives as
+ * `sectionDoc`, so the keys move to the page body rather than disappearing.
+ */
+export function groupLabel(banner: string): string {
+  const stripped = banner
+    .replace(new RegExp(`\\s*\\(\\s*${TICKET_LIST_RE.source}\\s*\\)`, "g"), "")
+    .replace(new RegExp(`\\s+[—–-]\\s*${TICKET_LIST_RE.source}\\s*$`), "")
+    .replace(/\s*\([^)]*\)/g, "")
+    .split(/\s+[—–]\s+/)[0] ?? "";
+  return titleCase(stripped.replace(/\s+/g, " ").trim());
+}
+
+function titleCase(text: string): string {
+  return text
+    .split(" ")
+    .map((word) =>
+      word
+        .split("-")
+        .map((part) => {
+          const lower = part.toLowerCase();
+          return WORD_CASE[lower] ?? (lower ? lower[0]!.toUpperCase() + lower.slice(1) : part);
+        })
+        .join("-"),
+    )
+    .join(" ");
+}
+
+/**
+ * A snake_case compose key is a product name written to satisfy a filesystem —
+ * `cook_book` is Cook Book. Every other key in the file is a bare lowercase word or
+ * a hyphenated one, and those are left exactly as written: `cf-access-guard` is its
+ * name, and capitalising it would make it read as three words.
+ */
+export function humanise(name: string): string {
+  if (!name.includes("_")) return name;
+  return titleCase(name.replace(/_/g, " "));
 }
 
 // --- small helpers ---------------------------------------------------------
