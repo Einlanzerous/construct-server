@@ -1265,9 +1265,12 @@ services:
       # ro: the generated estate wiki — SERV-101's markdown corpus, published
       # here by wiki.yml (SERV-189) and served by chronicle beside its authored
       # notes (CHRN-100). READ-ONLY IS THE ENFORCEMENT: tier 1 is regenerated
-      # on every deploy and hand-edited by nobody, and the kernel, not a code
-      # path, is what keeps chronicle from writing it. A second view of the
-      # same artefact the wiki container renders — not a copy, not a table.
+      # by every wiki.yml run — NOT by deploy.yml, which publishes nothing
+      # under wiki/ (a docs push regenerates it with no deploy; a promote
+      # deploys and regenerates nothing) — and hand-edited by nobody, and the
+      # kernel, not a code path, is what keeps chronicle from writing it. A
+      # second view of the same artefact the wiki container renders — not a
+      # copy, not a table.
       # Same ownership race as wiki/site: deploy.yml mkdirs it before compose
       # can create it as root.
       - ./wiki/docs:/tier1/wiki:ro

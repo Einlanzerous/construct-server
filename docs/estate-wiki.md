@@ -283,6 +283,20 @@ site and rsyncs it to `$DEPLOY_ROOT/wiki/site`, which the `wiki` container serve
 read-only. The site is **content, not an image**, so a docs change updates it with
 no container recreate at all, and no compose action of any kind.
 
+**It publishes two artefacts, not one (SERV-189).** Beside the site, the same step
+rsyncs the generated Markdown itself — `wiki/docs/` minus `.vitepress/` — to
+`$DEPLOY_ROOT/wiki/docs`, and `docker-compose.yml` bind-mounts that directory
+**read-only** into `chronicle` at `/tier1/wiki`. Chronicle serves it over HTTP
+beside its authored notes (CHRN-100): tier 1 beside tier 2, the corpus a second
+view of, never a copy of. The generator also writes `docs/build.json` — the build
+ref and a timestamp, not a page — which Chronicle stamps every tier-1 payload
+with; `cleanDocs()` wipes it with the rest, so it cannot go stale. The `:ro` is
+the enforcement of the load-bearing rule on that side: the corpus is regenerated
+by every `wiki.yml` run and hand-edited by nobody, and the kernel, not a code path
+in another repository, is what keeps it that way. Chronicle stats the directory at
+boot and refuses to start without it, so a compose block that lost the mount is a
+crash loop with one clear line rather than an empty tier 1.
+
 The split exists for two reasons, both found in review on #108 after the build
 initially lived inside `deploy.yml`:
 
@@ -301,12 +315,15 @@ initially lived inside `deploy.yml`:
   property is what SERV-75 took away from Watchtower; it should not return through
   the docs.
 
-The `wiki/site` directory is generated content and so is **not in the repo**. That
-matters more than it sounds: if compose reaches the missing bind source first, the
-Docker daemon creates it as **root**, and every later rsync (running as the runner
-user) fails against it permanently. `ansible/roles/server` claims the path before
-`Start Docker Stack` on a cold host, and `deploy.yml` `mkdir -p`s it to cover the
-ordering race on a warm one — nothing sequences the two workflows.
+The `wiki/site` and `wiki/docs` directories are generated content and so are **not
+in the repo**. That matters more than it sounds: if compose reaches a missing bind
+source first, the Docker daemon creates it as **root**, and every later rsync
+(running as the runner user) fails against it permanently. `ansible/roles/server`
+claims both paths before `Start Docker Stack` on a cold host, and `deploy.yml`
+`mkdir -p`s both to cover the ordering race on a warm one — nothing sequences the
+two workflows. `wiki/docs` has the sharper failure of the two: an empty `wiki/site`
+is a 503 from nginx until the first build lands, but a *missing* `wiki/docs` is
+chronicle refusing to boot.
 
 ### Cloudflare bring-up (one-time, manual)
 
