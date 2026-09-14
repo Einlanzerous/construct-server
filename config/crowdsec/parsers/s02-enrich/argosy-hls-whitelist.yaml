@@ -9,7 +9,18 @@
 #   - it came through the public Argosy router,
 #   - Argosy answered it successfully, and
 #   - the path is one of Argosy's own transcode files, mirroring the allowlist
-#     regex in argosy's internal/library/transcode.go.
+#     regex in argosy's internal/library/transcode.go. Change the two together;
+#     that file points back here. If argosy starts serving a new artifact that
+#     this doesn't cover, the bans quietly return with every gate green.
+#
+# EDITING THIS FILE APPLIES NOTHING until `make recreate svc=crowdsec`. It is a
+# single-file mount read at startup (SERV-159/SERV-164). Pick the moment for
+# that recreate. The bouncer fails CLOSED while crowdsec's LAPI is down:
+# handleNoStreamCache returns BannedValue on a query error, and crowdsecMode is
+# `live`. So any public client not in its 60s verdict cache gets the ban
+# response on every crowdsec-bouncer router. Those 403s are logged and
+# replayed once crowdsec resumes tailing, which can earn a real ban. Don't
+# recreate while someone is watching Argosy off-LAN.
 # Those routes sit behind Argosy's device-token middleware, so a success means an
 # authenticated client. A 404 or 403 on the same path is NOT dropped, so guessing
 # session ids still counts toward probing. `[.]` instead of `\.` sidesteps
