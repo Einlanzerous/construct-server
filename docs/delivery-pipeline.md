@@ -609,6 +609,16 @@ nothing reads until SWY-188 lands — the "target with no consumer" shape SERV-9
 about, which reports a state that means nothing. The token is the part that has to exist
 first, because it is the part SWY-188 cannot mint for itself.*
 
+***One string this repo owns that the caller depends on** (SERV-188). `promote.yml`'s
+`run-name` renders `<kind> <service> → <version>`, then ` · <requested_by>` only when an
+API caller supplied one. That title is how Switchyard finds the run its dispatch created —
+a `workflow_dispatch` answers 204 with no run id and the runs API exposes no inputs, so
+it matches `display_title` exactly among `workflow_dispatch` runs created after its
+dispatch, and treats two candidates as no match. `runDisplayTitle` in switchyard's
+`lib/delivery/promote-rules.ts` is the mirror; an edit to the title here breaks it with
+nothing red on either side, which is why the workflow's header comment names the
+coupling and this paragraph does too.*
+
 **9. Post-prod smoke.** On failure, auto-rollback to the last-good version, which the
 `deployments` table already knows.
 
