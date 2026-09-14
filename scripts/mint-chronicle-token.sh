@@ -90,14 +90,26 @@ fi
 # sitting in the file looking usable (see mint-prober-token.sh, which found it):
 # the 401 alone reads as "wrong value" and sends you looking for a typo in a
 # token that is character-for-character correct.
-# NOT `curl ... || echo 000`: on a refused connection curl writes its own `000`
-# through -w AND exits non-zero, so the fallback appends a second one, the
-# result is `000000`, and the `could not reach` branch directly below never
-# fires — it dies with "unexpected 000000" instead. mint-prober-token.sh, which
-# this script is modelled on, still carries that shape; it is not reproduced
-# here.
+# THREE WAYS THIS ONE LINE HAS BEEN WRONG, so the reasoning is here rather than
+# in a commit message.
+#
+#   `|| echo 000`     curl writes its own `000` through -w AND exits non-zero,
+#                     so the fallback appends a second one and the result is
+#                     `000000` — matching no case, dying as "unexpected".
+#   `2>/dev/null`     under `set -euo pipefail` the failed assignment ends the
+#                     script before the case runs, and the redirect has already
+#                     discarded the one thing that would have said why. Exit 7
+#                     and NO OUTPUT AT ALL, from the credential-minting path, at
+#                     the moment switchyard is down.
+#   `[0-9][0-9][0-9]` ordered before the catch-all, it swallows `000` too —
+#                     every value curl can produce is three digits, so the
+#                     "could not reach" arm was dead code either way.
+#
+# `|| true` keeps the exit code from ending the script, curl's stderr is LEFT
+# ALONE because a connect error names the address and cannot print a credential,
+# and `000` gets its own arm before the numeric one.
 probe_status="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' \
-  "$SWITCHYARD_URL/v1/users?limit=1" -H "authorization: Bearer $bootstrap" 2>/dev/null)"
+  "$SWITCHYARD_URL/v1/users?limit=1" -H "authorization: Bearer $bootstrap" || true)"
 case "$probe_status" in
   200) ;;
   401|403)
@@ -107,8 +119,8 @@ case "$probe_status" in
   instead:
       BOOTSTRAP_TOKEN=sw_your_admin_token ./scripts/mint-chronicle-token.sh
   A Switchyard owner can create one under Settings > API tokens." ;;
-  [0-9][0-9][0-9]) die "unexpected $probe_status from $SWITCHYARD_URL/v1/users" ;;
-  *)   die "could not reach $SWITCHYARD_URL" ;;
+  000|"") die "could not reach $SWITCHYARD_URL" ;;
+  *)   die "unexpected $probe_status from $SWITCHYARD_URL/v1/users" ;;
 esac
 
 api() {
