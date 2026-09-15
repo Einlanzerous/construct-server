@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.32.1](https://github.com/Einlanzerous/construct-server/compare/v4.32.0...v4.32.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* **promote:** teach promote.yml that catenary exists (SERV-191) ([#203](https://github.com/Einlanzerous/construct-server/issues/203)) ([49c69d7](https://github.com/Einlanzerous/construct-server/commit/49c69d7d97705b082a932a38fa40318631be463c))
+* **wiki:** derive nav labels from the compose banners instead of printing them (SERV-186) ([#205](https://github.com/Einlanzerous/construct-server/issues/205)) ([7933e60](https://github.com/Einlanzerous/construct-server/commit/7933e60d9a4f33aad41bdeb60b3704200b825fae))
+
 ## [4.32.0](https://github.com/Einlanzerous/construct-server/compare/v4.31.0...v4.32.0) (2026-09-14)
 
 
