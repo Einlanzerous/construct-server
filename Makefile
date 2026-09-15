@@ -1,6 +1,6 @@
-.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check versions assert-tokens env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check versions assert-tokens assert-env-keys env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
-        dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-env-ownership-check \
+        dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-assert-env-keys dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve \
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall
@@ -193,6 +193,19 @@ versions:
 # Usage: make assert-tokens
 assert-tokens:
 	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-token-shapes.sh
+
+# Does the rendered prod .env hold every key in required-env-keys.txt, with a value?
+# (SERV-173) The token check above judges VALUES; this one asks about PRESENCE, which
+# is the question a `${KEY:-}` default in compose makes unanswerable from anywhere
+# else — LYCEUM_BINDERY_API_KEY reached the container empty four times through green
+# deploys. deploy.yml runs the same script as a pre-pull gate. `vault=1` asks the vault
+# what the NEXT deploy will carry instead of reading the deployed file, which is the
+# form to use straight after `signet set` + `target add-key` + `signet sync`, before
+# the deploy that renders it. Names only; it never prints a value.
+# Usage: make assert-env-keys            (the deployed file)
+#        make assert-env-keys vault=1    (what the vault will deliver)
+assert-env-keys:
+	DEPLOY_ROOT=$(DEPLOY_ROOT) ./scripts/assert-env-keys.sh $(if $(vault),--vault,)
 
 # Ask the vault whether it claims anything git or a deploy already owns (SERV-94): a
 # versions.env pin delivered through PROD_ENV_FILE, or a file target on a path
@@ -483,7 +496,7 @@ dev-network:
 # checkout that CI or a human may move underneath it.
 dev-bootstrap: dev-network
 	@mkdir -p "$(DEV_ROOT)" 2>/dev/null || { echo "Cannot create $(DEV_ROOT) — run: sudo install -d -o $$(id -un) -g $$(id -gn) $(DEV_ROOT)"; exit 1; }
-	rsync -a docker-compose.dev.yml dev-versions.env Makefile "$(DEV_ROOT)/"
+	rsync -a docker-compose.dev.yml dev-versions.env dev-required-env-keys.txt Makefile "$(DEV_ROOT)/"
 	@# rsync creates only the LAST component of a destination path, so the two
 	@# nested syncs below need their parent directories to exist first (SERV-93).
 	mkdir -p "$(DEV_ROOT)/config" "$(DEV_ROOT)/services" "$(DEV_ROOT)/pkg"
@@ -645,6 +658,13 @@ dev-versions:
 dev-assert-tokens:
 	$(DEV_PROFILES) DEPLOY_ROOT=$(DEV_ROOT) COMPOSE_FILE=docker-compose.dev.yml COMPOSE_PROJECT=$(DEV_PROJECT) \
 	  ./scripts/assert-token-shapes.sh
+
+# The dev project's copy of the required-keys check, against dev-required-env-keys.txt
+# and the construct-server-dev vault (SERV-173). deploy-dev.yml gates on it.
+# Usage: make dev-assert-env-keys            (the deployed dev file)
+#        make dev-assert-env-keys vault=1    (what the vault will deliver)
+dev-assert-env-keys:
+	DEV_ROOT=$(DEV_ROOT) ./scripts/assert-env-keys.sh --dev $(if $(vault),--vault,)
 
 # The dev project's copy of the ownership check. Dev's allowlist is not empty the way
 # prod's is — `creds/dev.env` is the credential source it was seeded from and has one

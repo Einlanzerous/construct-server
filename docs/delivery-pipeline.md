@@ -582,6 +582,12 @@ signet target add-key --project construct-server \
     --gh-secret PROD_ENV_FILE --name PROMOTE_DISPATCH_TOKEN
 signet sync
 
+# 4b. name it in required-env-keys.txt and merge that, AFTER the vault has it
+#     (SERV-173). deploy.yml then fails any render that comes out without the key,
+#     which is how a secret rewritten from a stale copy stops being silent. Vault
+#     first: the other order blocks every prod deploy until the vault catches up.
+make assert-env-keys vault=1             # the vault will deliver it
+
 # 5. prove the grant BEFORE shipping it. `signet sync` writes the environment
 #    secret; only a deploy renders that into /opt/construct-server/.env, so
 #    between here and step 6 the deployed file legitimately does not have it.
