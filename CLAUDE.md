@@ -470,10 +470,13 @@ anything deploys or gets versioned.
   is exactly why the hand restore evaporated. So two things now hold. `deploy.yml` and
   `deploy-dev.yml` run `scripts/assert-env-keys.sh` right after the render and **fail
   before anything pulls** if the file is missing a key in `required-env-keys.txt` or
-  carries it empty — names only, never a value. And `render-env.sh` **refuses** a base
-  that defines keys below its pins marker: the marker cut is where a key appended to the
-  bottom of a rendered `.env` used to vanish, `unchanged` and green, which is what the
-  09-06 restore attempt hit twice before anyone looked. **Vault first, then the
+  carries it empty — names only, never a value. And `render-env.sh` **refuses** a fresh
+  base that defines non-pin keys below its pins marker: the marker cut is where a key
+  appended to the bottom of a rendered `.env` used to vanish, `unchanged` and green,
+  which is what the 09-06 restore attempt hit twice before anyone looked. On the
+  **in-place** render (ansible's reconcile of the deployed file into itself) the same
+  finding is a note, not an error, because there the tail is what the previous render
+  wrote and a pin since retired from `versions.env` looks identical to a stray. **Vault first, then the
   manifest.** A manifest line whose key the vault does not deliver blocks every prod
   deploy, rollbacks included, until it does; the reverse order is a warning
   ("delivered, unlisted") on each deploy, which is the cheap direction.

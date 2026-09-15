@@ -115,11 +115,20 @@ pinned_keys="$(printf '%s\n' "$pins" | cut -d= -f1)"
 # thought they had added, and this script would have thrown it away (SERV-173). The
 # ticket's own restore runbook said "rebuild the secret from the deployed .env" — a
 # rendered file whose tail IS the pin block — and the key appended after it reached
-# compose zero times across two deploys that both printed `unchanged`. That is never
-# intentional, so it is an error and not a note: the fix is to move the line above
-# the marker, or better, to stop pasting rendered files into the secret at all (it is
-# rendered by Signet; add the key to the vault). The pins themselves are exempt because
-# on ansible's in-place reconcile the tail is exactly the block this script wrote.
+# compose zero times across two deploys that both printed `unchanged`. On a render from
+# a NEW base (stdin in a deploy, or a file other than the output) that is never
+# intentional, so it is an error: the fix is to stop pasting rendered files into the
+# secret at all — it is rendered by Signet; add the key to the vault.
+#
+# The IN-PLACE render is different, and the difference is that this script wrote the
+# tail. ansible reconciles `$root/.env` into itself on every play, and the block under
+# the marker is then exactly what the previous render left: the pins as they WERE. A pin
+# since retired from the versions file reads as a stray by name alone — SERV-130 moved
+# SIGNET_VERSION out that way — and failing ansible over a pin someone deliberately
+# deleted, with an error that says "add it to the vault", is wrong twice. So in place it
+# is a note, naming what the reconcile dropped: a retired pin, or a host edit that the
+# marker's own comment already says is lost without warning. Either way nothing below
+# the marker survives a render, and in place there is no secret to fix.
 stray="$(printf '%s\n' "$tail_content" | awk -v keys="$pinned_keys" '
   BEGIN {
     n = split(keys, k, "\n")
@@ -132,15 +141,23 @@ stray="$(printf '%s\n' "$tail_content" | awk -v keys="$pinned_keys" '
   }
 ')"
 if [ -n "$stray" ]; then
-  err "ERROR: the base environment defines $(printf '%s\n' "$stray" | wc -l) key(s) BELOW the pins marker, where this render would discard them:"
-  printf '%s\n' "$stray" | sed 's/^/  /' >&2
-  err ""
-  err "Everything under '$MARKER'"
-  err "is cut and regenerated from $(basename "$versions") on every render, so a key appended there"
-  err "never reaches compose — and the deploy goes green (SERV-173). A base that carries the"
-  err "marker at all is a RENDERED file being fed back in: do not rebuild the secret from the"
-  err "deployed .env. It is rendered by Signet; add the key to the vault and \`signet sync\`."
-  exit 2
+  if [ "$base" != "-" ] && [ "$base" -ef "$out" ]; then
+    err "note: dropped $(printf '%s\n' "$stray" | wc -l) key(s) found below the pins marker in $out — a pin since"
+    err "      retired from $(basename "$versions"), or an edit made on the host; neither survives a render."
+    printf '%s\n' "$stray" | sed 's/^/        /' >&2
+  else
+    err "ERROR: the base environment defines $(printf '%s\n' "$stray" | wc -l) key(s) BELOW the pins marker, where this render would discard them:"
+    printf '%s\n' "$stray" | sed 's/^/  /' >&2
+    err ""
+    err "Everything under '$MARKER'"
+    err "is cut and regenerated from $(basename "$versions") on every render, so a key appended there"
+    err "never reaches compose — and the deploy goes green (SERV-173). A base that carries the"
+    err "marker at all is a RENDERED file being fed back in: do not rebuild the secret from the"
+    err "deployed .env. It is rendered by Signet; add the key to the vault and \`signet sync\`."
+    err "(A name that is a pin since retired from $(basename "$versions") is the same mistake with"
+    err "a different key — cut the pasted file at the marker.)"
+    exit 2
+  fi
 fi
 
 # Exact key matches only — no regex built from the key names, so a key can never be

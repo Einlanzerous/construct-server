@@ -24,6 +24,13 @@ on:
       # (SERV-78, SERV-79) will commit it — so a push that repoints a tag has to be
       # able to reach the box on its own.
       - 'versions.env'
+      # required-env-keys.txt is rsynced to the deploy root too, and `make
+      # assert-env-keys` on the box reads THAT copy (SERV-173). The documented order
+      # for a new key ends with a merge that touches only this file, so without this
+      # trigger that merge runs no deploy: the box keeps a manifest that does not
+      # require the key and an .env that does not carry it, and the guard prints a
+      # false all-clear in its own runbook. Same hazard as scripts/ below.
+      - 'required-env-keys.txt'
       # scripts/ is rsynced to the deploy root and executed FROM there — by the
       # Makefile targets, and since SERV-111 by delivery-prober.service, which
       # runs $DEPLOY_ROOT/scripts/probe-delivery.sh every five minutes. Without
