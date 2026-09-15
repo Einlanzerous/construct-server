@@ -91,12 +91,15 @@ function deriveRepos(prod: ComposeFile, pins: VersionPin[], cacheDir: string): R
 
   for (const name of EXTRA_REPOS) ensure(name);
 
-  // Attach the pin by repo name. A pin whose repo never appears in compose is left
-  // alone here and reported by the versions page — a stale pin is a real finding,
-  // not something to silently drop.
+  // The pin named after the repo wins over the first image's variable. Compose order
+  // puts `asr` before `chronicle`, and both are chronicle's (IMAGE_REPO_ALIASES), so
+  // the loop above would call chronicle "pinned by ASR_TAG" — the pin of a subtree
+  // on its own release train, not the repo's. A pin whose repo never appears in
+  // compose is left alone here and reported by the versions page: a stale pin is a
+  // real finding, not something to silently drop.
   for (const pin of pins) {
     const repo = byName.get(pin.repo);
-    if (repo) repo.tagVariable ??= pin.variable;
+    if (repo) repo.tagVariable = pin.variable;
   }
 
   for (const repo of byName.values()) {
@@ -110,16 +113,42 @@ function deriveRepos(prod: ComposeFile, pins: VersionPin[], cacheDir: string): R
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Group services in compose-file order, preserving the `# --- SECTION ---` runs. */
-export function groupBySection(services: ComposeService[]): { section: string; services: ComposeService[] }[] {
-  const out: { section: string; services: ComposeService[] }[] = [];
+export interface ServiceGroup {
+  /** The nav label — see `ComposeService.group`. */
+  label: string;
+  /** The banner as written in compose, for the page body. Null only for the fallback group. */
+  banner: string | null;
+  services: ComposeService[];
+}
+
+/**
+ * Group services in compose-file order, preserving the `# --- SECTION ---` runs.
+ * A service with no banner above it lands under "Ungrouped" — that is a finding about
+ * the compose file, and it is emitted rather than hidden so that it gets fixed there.
+ * As of SERV-186 every service has one, including the first (whose banner the parser
+ * used to lose).
+ */
+export function groupBySection(services: ComposeService[]): ServiceGroup[] {
+  const out: ServiceGroup[] = [];
   for (const svc of services) {
-    const section = svc.section ?? "Ungrouped";
+    const label = svc.group ?? "Ungrouped";
     const last = out[out.length - 1];
-    if (last && last.section === section) last.services.push(svc);
-    else out.push({ section, services: [svc] });
+    if (last && last.label === label) last.services.push(svc);
+    else out.push({ label, banner: svc.sectionDoc, services: [svc] });
   }
   return out;
+}
+
+/**
+ * The banner for a group, when it says more than the label does. `FILE SHARING` and
+ * `File Sharing` are the same words and rendering both would be noise; `ESTATE WIKI
+ * (SERV-101) — generated, served read-only` carries the ticket and the description
+ * that the label was stripped of, and that is what the page body keeps.
+ */
+export function groupDescription(group: ServiceGroup): string | null {
+  if (!group.banner) return null;
+  const fold = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return fold(group.banner) === fold(group.label) ? null : group.banner;
 }
 
 /** Which pin, if any, decides this service's image tag. */

@@ -13,7 +13,7 @@ import {
   slug,
   table,
 } from "../lib/md.ts";
-import { dependents, groupBySection, pinFor, type Estate } from "../model.ts";
+import { dependents, groupBySection, groupDescription, pinFor, type Estate } from "../model.ts";
 import type { Page } from "./page.ts";
 
 export function emitServices(estate: Estate): Page[] {
@@ -32,12 +32,17 @@ function servicesIndex(estate: Estate): Page {
   ];
 
   for (const group of groupBySection(estate.prod.services)) {
-    parts.push(`## ${group.section}\n\n`);
+    parts.push(`## ${group.label}\n\n`);
+    // The banner as written, when it says more than the heading. The heading is the
+    // banner with its ticket keys and description stripped so the nav stays a nav
+    // (SERV-186); this line is where those go, so nothing the file says is lost.
+    const banner = groupDescription(group);
+    if (banner) parts.push(`*${prose(banner)}*\n\n`);
     parts.push(
       table(
         ["Service", "Image", "Published ports", "Depends on"],
         group.services.map((svc) => [
-          `[${svc.name}](/${servicePath(svc.name)})`,
+          `[${svc.displayName}](/${servicePath(svc.name)})`,
           svc.image ? code(svc.image.repo) : svc.build ? `built from ${code(svc.build)}` : "—",
           cell(svc.ports.filter((p) => !p.internalOnly).map((p) => p.raw).join(", ")),
           cell(svc.dependsOn.join(", ")),
@@ -51,7 +56,9 @@ function servicesIndex(estate: Estate): Page {
 
 function servicePage(estate: Estate, svc: ComposeService): Page {
   const parts: string[] = [
-    frontmatter({ title: svc.name }),
+    // The display name titles the page; the compose key is in the "Container name"
+    // row below, which is the one a command takes.
+    frontmatter({ title: svc.displayName }),
     provenance([estate.prod.label]),
   ];
 

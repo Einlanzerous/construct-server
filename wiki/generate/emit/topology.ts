@@ -95,7 +95,7 @@ function exposurePage(estate: Estate): Page {
             port.publishedVar ? code(port.publishedVar) : "fixed in compose",
             `[${svc.name}](/${servicePath(svc.name)})`,
             code(port.target),
-            cell(svc.section),
+            cell(svc.group),
           ]),
         ),
       ),

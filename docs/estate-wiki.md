@@ -73,6 +73,76 @@ assembled from the resolved model would be a table dump with the documentation
 stripped out. Comments are lifted onto the service and env-var they sit above and
 rendered as quoted material.
 
+## What a section is called (SERV-186)
+
+The compose file groups services under `# --- BANNER ---` comments, and the wiki
+groups them the same way: one sidebar group, one `##` on `/services/`, one row on
+the home page per banner. The banners were written as headings in the old sections
+(`FILE SHARING`) and as sentences with ticket suffixes in the new ones
+(`ASR (shared estate transcription service) — SERV-156 / CHRN-82`), and printing
+them verbatim made the nav read as a changelog — 16 of 28 labels carried a ticket
+key, one ran to 68 characters.
+
+So a banner is **two things** now, and the parser keeps both:
+
+- **The label** is derived: ticket keys stripped (trailing `— SERV-33`, a
+  `/`-separated list, or a parenthesised one mid-name), any remaining parenthetical
+  dropped (it is always the product behind a role — `DASHBOARD (Aperture)`),
+  everything after the first ` — ` dropped (it is always a description), and the
+  rest Title Cased. `EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge
+  (SERV-20)` is **Edge Proxy** in the nav.
+- **The banner** survives verbatim as the group's description on `/services/`,
+  under the heading, so the ticket references move to the page body rather than
+  disappearing. It is omitted where it would only repeat the label.
+
+Title Case has to know which words are acronyms — no rule tells `ASR` from `AMBER`
+in an all-caps banner — so `sources/compose.ts` carries a short casing table (`AI`,
+`LLM`, `UI`, `ASR`, `CrowdSec`). Keep it to **casing**. A section that needs a
+different *name* is named in the compose file, with an annotation line under its
+banner:
+
+```yaml
+  # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
+  # group: Edge
+  traefik:
+```
+
+and a service whose key is not its name takes `# name:` above the key. Both lines
+are lifted out of the prose the parser would otherwise quote. The override lives
+there and not in the generator because the compose file is the one place the
+estate already edits — a regex over prose was always going to keep needing
+exceptions, and a table of them in a file nobody opens to name a section is where
+they would rot. Note that a comment-only edit to `docker-compose.yml` still fires
+`deploy.yml`, which is a whole-stack pull; that is the cost of the annotation and
+it is paid rarely.
+
+Service names are the compose key, as before, except that a **snake_case key is
+humanised** for titles and nav — `cook_book` is Cook Book — because it was the one
+key that read as a typo beside the rest. Hyphenated keys are left alone:
+`cf-access-guard` is its name. The key itself stays on the "Container name" row,
+which is the one a command takes, and in every URL.
+
+Two further things the same pass fixed, both in the parser's reading of comments.
+**The first banner in the file was lost on every build**: `yaml` hangs a comment
+that precedes the first entry of a map on the map itself, not on that entry's key,
+so `# --- AI & LLM STACK ---` sat on `services` where a key-only reader never
+looked, and `ollama` was emitted under an "Ungrouped" heading that named a bug
+rather than a section. And **an image name is not always a repo name**:
+`estate-asr` is built from chronicle's `asr/` subtree (CHRN-82), and deriving the
+repo from the image path invented a repo called `estate-asr` with a permanent NO
+DOCS CACHED warning. `IMAGE_REPO_ALIASES` in `sources/repos.ts` maps it, the
+versions page names the repo from the image rather than from the variable, and the
+chronicle repo page lists `ASR_TAG` beside `CHRONICLE_TAG` — one repo, two release
+trains, and the page must not say `1.14` over a service running `0.1`.
+
+Reference titles come from each document's h1 with the ` — description` dropped,
+as before, with two corrections: a Title Case tail is part of the name and stays
+(`Zero Gravity Industries — Hybrid Edge` is a document, `Zero Gravity Industries`
+was a company), and emoji are stripped. `REFERENCE_TITLES` in `generate/index.ts`
+overrides by path for the one h1 that cannot be made to work — `CLAUDE.md`'s is
+the filename — and should stay that short: a design document is renamed in the
+document.
+
 ## Architecture maps (SERV-159)
 
 A repo can commit **`docs/architecture.archify.json`** — a typed JSON IR — and its

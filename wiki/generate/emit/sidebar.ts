@@ -7,6 +7,7 @@ import { referencePath } from "./reference.ts";
 import { repoPath } from "./repos.ts";
 import { servicePath } from "./services.ts";
 import { groupBySection } from "../model.ts";
+import { humanise } from "../sources/compose.ts";
 
 export interface SidebarItem {
   text: string;
@@ -31,17 +32,19 @@ export function buildSidebar(estate: Estate): SidebarItem[] {
       text: "Services",
       link: "/services/",
       collapsed: false,
+      // Labels, not banners: the label is the banner with its ticket keys and
+      // description stripped (SERV-186). Those stay on /services/, under the heading.
       items: groupBySection(estate.prod.services).map((group) => ({
-        text: group.section,
+        text: group.label,
         collapsed: true,
-        items: group.services.map((svc) => ({ text: svc.name, link: `/${servicePath(svc.name)}` })),
+        items: group.services.map((svc) => ({ text: svc.displayName, link: `/${servicePath(svc.name)}` })),
       })),
     },
     {
       text: "Repositories",
       link: "/repos/",
       collapsed: true,
-      items: estate.repos.map((repo) => ({ text: repo.name, link: `/${repoPath(repo.name)}` })),
+      items: estate.repos.map((repo) => ({ text: humanise(repo.name), link: `/${repoPath(repo.name)}` })),
     },
     {
       text: "Reference",

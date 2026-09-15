@@ -53,11 +53,11 @@ export function emitHome(estate: Estate): Page {
 
       "## The stack, by section\n\n",
       groupBySection(services)
-        .map(({ section, services: group }) => {
+        .map(({ label, services: group }) => {
           // servicePath, not the bare name: `cook_book` slugs to `cook-book`, and a
           // hand-built link would 404 on exactly the services whose names are unusual.
-          const names = group.map((s) => `[${s.name}](/${servicePath(s.name)})`).join(" · ");
-          return `**${section}**  \n${names}\n`;
+          const names = group.map((s) => `[${s.displayName}](/${servicePath(s.name)})`).join(" · ");
+          return `**${label}**  \n${names}\n`;
         })
         .join("\n"),
       "\n",

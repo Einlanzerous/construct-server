@@ -1,4 +1,5 @@
 import { ARCHITECTURE_IR_PATH } from "../sources/architecture.ts";
+import { humanise } from "../sources/compose.ts";
 import { GITHUB_OWNER, repoUrl, type Repo } from "../sources/repos.ts";
 import { absolutizeLinks, code, demoteHeadings, fence, frontmatter, provenance, section, slug, table } from "../lib/md.ts";
 import type { Estate } from "../model.ts";
@@ -35,7 +36,7 @@ function repoIndex(estate: Estate): Page {
         table(
           ["Repo", "Pinned by", "Services", "Docs"],
           estate.repos.map((r) => [
-            `[${r.name}](/${repoPath(r.name)})`,
+            `[${humanise(r.name)}](/${repoPath(r.name)})`,
             r.tagVariable ? code(r.tagVariable) : "—",
             r.services.length > 0 ? r.services.map((s) => `[${s}](/${servicePath(s)})`).join(", ") : "—",
             r.docs.length > 0 ? r.docs.map((d) => d.file).join(", ") : "**none cached**",
@@ -63,8 +64,22 @@ function repoIndex(estate: Estate): Page {
 function repoPage(estate: Estate, repo: Repo, diagram: Diagram | undefined): Page {
   const pin = estate.pins.find((p) => p.variable === repo.tagVariable);
 
+  // A repo can ship more than one release train: chronicle's `asr/` subtree is
+  // pinned by ASR_TAG, on its own cadence (CHRN-82). Name every variable its services
+  // read, or the row above says "1.14" over a service that is running 0.1.
+  const alsoPinned = estate.prod.services
+    .filter((s) => repo.services.includes(s.name) && s.image?.tagVar && s.image.tagVar !== repo.tagVariable)
+    .map((s) => {
+      const v = s.image!.tagVar!;
+      return `${code(v)} = ${code(estate.pins.find((p) => p.variable === v)?.value)} for [${s.displayName}](/${servicePath(s.name)})`;
+    });
+  const pinnedBy = repo.tagVariable
+    ? [`${code(repo.tagVariable)} = ${code(pin?.value)}`, ...alsoPinned].join("; also ")
+    : "— (ships no image)";
+
   const parts: string[] = [
-    frontmatter({ title: repo.name }),
+    // Humanised for the title only — the slug on the Source row is the repo's real name.
+    frontmatter({ title: humanise(repo.name) }),
     provenance([`${repo.slug} — ${repo.docs.map((d) => d.file).join(", ") || "no docs cached"}`]),
     section(
       "At a glance",
@@ -72,7 +87,7 @@ function repoPage(estate: Estate, repo: Repo, diagram: Diagram | undefined): Pag
         ["", ""],
         [
           ["Source", `[${repo.slug}](${repoUrl(repo.name)})`],
-          ["Pinned by", repo.tagVariable ? `${code(repo.tagVariable)} = ${code(pin?.value)}` : "— (ships no image)"],
+          ["Pinned by", pinnedBy],
           [
             "Services",
             repo.services.length > 0
