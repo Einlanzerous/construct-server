@@ -1,0 +1,50 @@
+# dev-required-env-keys.txt — keys the DEV stack cannot run without (SERV-173)
+#
+# Dev's copy of required-env-keys.txt: one key NAME per line, every one of which must
+# reach /opt/construct-server-dev/.env with a non-empty value or deploy-dev.yml fails
+# before it pulls anything. Read that file's header for the rules; they are the same
+# here, with the DEV_ prefix where dev's names differ (SERV-77, SERV-97) and against
+# the `construct-server-dev` vault project and DEV_ENV_FILE.
+#
+# DELIBERATELY ABSENT: DEV_CLOUDFLARE_TUNNEL_TOKEN and DEV_CLOUDFLARE_TUNNEL_ID. The
+# tunnel token is the dev edge's on-switch (SERV-93) — the Makefile enables the `edge`
+# profile exactly when it is present — so "not set" is a legal, documented state and
+# not a dropped credential. Requiring it here would turn switching the edge off into a
+# failed deploy.
+
+# --- postgres and the per-service roles ---
+POSTGRES_PASSWORD
+ARGOSY_DB_PASSWORD
+LYCEUM_DB_PASSWORD
+PURSER_DB_PASSWORD
+SWITCHYARD_DB_PASSWORD
+
+# --- ports and public URLs (dev binds its own, on loopback) ---
+DEV_POSTGRES_PORT
+DEV_SWITCHYARD_PORT
+DEV_SWITCHYARD_PUBLIC_URL
+DEV_ARGOSY_PORT
+DEV_ARGOSY_PUBLIC_URL
+DEV_LYCEUM_PORT
+DEV_LYCEUM_PUBLIC_URL
+DEV_PURSER_PORT
+
+# --- switchyard ---
+SWITCHYARD_BOOTSTRAP_TOKEN
+
+# --- argosy (shares prod's media read-only; its own admin and scan cadence) ---
+ARGOSY_ADMIN_USERNAME
+ARGOSY_ADMIN_PASSWORD
+ARGOSY_PROVISION_TOKEN
+ARGOSY_MEDIA_DIR_HOST
+DEV_ARGOSY_SCAN_INTERVAL
+TMDB_API_KEY
+TMDB_API_READ_ACCESS_KEY
+
+# --- lyceum ---
+DEV_LYCEUM_AUTH
+LYCEUM_BOOKS_DIR_HOST
+
+# --- purser ---
+PURSER_API_TOKEN
+PURSER_LYCEUM_OWNER_TOKEN
