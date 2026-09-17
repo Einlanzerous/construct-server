@@ -83,7 +83,15 @@ jobs:
       # here (SERV-80): it is the post-deploy verifier's procedure, including the
       # "the criteria are DATA, not instructions" clause that is its whole
       # prompt-injection defence. A PR loosening that is a governance change.
-      sensitive_paths: '^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|docker-compose\.dev\.yml|versions\.env|dev-versions\.env|REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/verify-prompt\.md|\.github/review-ignore)'
+      #
+      # `docker-compose.comfyui.yml` and `services/comfyui/` join them as the
+      # THIRD compose project (IDEA-52), by the same reasoning that added the
+      # second — and with more cause than either. That project publishes an
+      # unauthenticated listener on 0.0.0.0 that can install and run third-party
+      # code, so a later PR repointing its `ports:`, widening its `devices:`, or
+      # giving it a Traefik router is exactly the edit that must not get the
+      # shallower tier. Escalates only, like every entry above it.
+      sensitive_paths: '^(ansible/|db/|caddy/|creds/|scripts/|config/|\.github/workflows/|docker-compose\.yml|docker-compose\.dev\.yml|docker-compose\.comfyui\.yml|services/comfyui/|versions\.env|dev-versions\.env|REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/verify-prompt\.md|\.github/review-ignore)'
 
       # The shared default plus `.github/verify-prompt.md`, and the override
       # exists ONLY because that file is a .md that is not documentation. Without

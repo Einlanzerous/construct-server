@@ -1,0 +1,213 @@
+# ComfyUI — local image generation on the R9700 (IDEA-52).
+#
+# A SEPARATE COMPOSE PROJECT, deliberately, and not a service in
+# docker-compose.yml. Three reasons, in order of weight:
+#
+#   1. It is not part of the stack and is not meant to be. Nothing else depends
+#      on it, nothing routes to it, and it is never going to be broadly
+#      available. Putting it in the prod file would enrol it in assert-healthy,
+#      check-compose-drift and every deploy — gates it does not need and would
+#      occasionally fail for reasons nobody wants to chase at 3am.
+#   2. It is built on the box, and prod already has exactly one of those
+#      (cf-access-guard, SERV-106). Adding a second — a ~25 GB image whose build
+#      downloads 5 GB of wheels — to the prod deploy path is a real cost paid on
+#      every cold rebuild, for a service the stack does not use.
+#   3. VRAM. The R9700 is shared with ollama, which holds ~20 GB when a 30B model
+#      is resident. ComfyUI needs to be brought up and down freely, which is
+#      awkward for something `deploy.yml` converges back to running.
+#
+# Being a separate PROJECT (not just a separate file) is what makes that true:
+# check-compose-drift.sh and assert-healthy.sh iterate the services defined in
+# the prod compose file, so nothing here is visible to them — neither flagged
+# nor silently checked.
+#
+# Driven by the `make comfy-*` targets, which pin the project name and file
+# together. A bare `docker compose` in this repo resolves to the PROD file.
+name: construct-comfyui
+
+services:
+  comfyui:
+    build:
+      context: ./services/comfyui
+      args:
+        COMFYUI_REF: ${COMFYUI_REF:-v0.36.0}
+    image: construct/comfyui:${COMFYUI_REF:-v0.36.0}-rocm7.2
+    container_name: comfyui
+    # Brought up and down by hand to free the GPU, so `unless-stopped` is the
+    # right policy: it survives a reboot if it was up, and a `make comfy-down`
+    # keeps it down.
+    restart: unless-stopped
+
+    # Published on the host, matching ollama:11434 and open-webui:3000.
+    #
+    # COMFYUI HAS NO AUTHENTICATION OF ANY KIND, and it is a worse thing to
+    # expose than ollama: it reads and writes everything under its base
+    # directory, and executes whatever workflow is submitted to it.
+    # Anything that can reach this port has all of that. It is bound to the LAN
+    # and the tailnet on purpose (a deliberate choice for IDEA-52, not an
+    # oversight) — but it is the reason this must never gain a Traefik router
+    # without an Access middleware in front of it (SERV-106).
+    ports:
+      - "${COMFYUI_PORT:-8188}:8188"
+
+    # THE R9700'S RENDER NODE ONLY — not the whole of /dev/dri, the way ollama
+    # and aperture-backend take it. renderD129 is the Navi 48; renderD128 is the
+    # CometLake iGPU, which reads the wrong way round from the numbering and was
+    # confirmed from /sys/class/drm/*/device/uevent rather than assumed:
+    #   renderD128 -> i915    0000:00:02.0
+    #   renderD129 -> amdgpu  0000:03:00.0   <- R9700
+    # Same reasoning as the asr service: passing only this one means the iGPU is
+    # not in the container to be enumerated at all. /dev/kfd is what ROCm
+    # actually computes through and is not optional.
+    devices:
+      - /dev/kfd
+      - /dev/dri/renderD129
+
+    # 993 is THIS HOST's render gid (`getent group render`) — a host fact, not a
+    # portable constant. Both /dev/kfd and renderD129 are root:render 0660, and
+    # unlike asr this container does NOT run as root, so this is load-bearing
+    # today rather than a precaution: without it every ROCm call fails.
+    # `video` (44) is not needed — no /dev/dri/card* is passed.
+    group_add:
+      - "993"
+
+    # NO `security_opt` AND NO `ipc: host`, both of which were here first because
+    # AMD's ROCm container guidance asks for them. They are not needed on this
+    # box and they are the wrong things to carry on THIS container in particular.
+    #
+    # Measured rather than argued: with the default seccomp profile, a private
+    # IPC namespace and this shm_size, matmul, conv2d and attention all execute
+    # on the R9700 from this image. The three GPU containers already on the box
+    # agree — ollama, asr and aperture-backend all run ROCm with SecurityOpt=[]
+    # and IpcMode=private, and `security_opt`/`ipc:` appear nowhere else in
+    # either of the other two compose files.
+    #
+    # What they cost is specific to this service. It is unauthenticated on
+    # 0.0.0.0, so anything on the LAN can drive it — so `seccomp:unconfined`
+    # would hand a workflow-level compromise every
+    # syscall the kernel exposes (keyctl, add_key, userfaultfd, unshare), and
+    # `ipc: host` would put it in the host's IPC namespace, able to read and
+    # write System V segments and /dev/shm shared with processes outside this
+    # container. That is a far larger post-compromise surface than the data tree
+    # the exposure note below reasons about. Compose was also silently adding
+    # `label=disable` alongside the seccomp entry, turning off LSM labelling too.
+    #
+    # shm_size gives the one thing the old comment actually wanted — a
+    # shared-memory segment bigger than docker's 64 MB default, for torch's
+    # dataloader and pinned-memory paths — without joining anything.
+    shm_size: 8gb
+
+    # Not root. Files written into the bind mount below — generated images,
+    # downloaded models, saved workflows — land owned by the invoking user
+    # instead of root, which is the difference between being able to manage the
+    # model tree by hand and needing sudo for every move.
+    user: "1000:1000"
+
+    environment:
+      # THERE IS DELIBERATELY NO PIP_USER / PYTHONUSERBASE HERE. Do not add them
+      # back as a way to persist custom-node dependencies across a recreate,
+      # which is what they were here for at first and why this note exists.
+      #
+      # `PIP_USER=1` makes `pip list` report NOTHING — measured: 0 lines against
+      # 101 without it, exit code 0 either way. ComfyUI-Manager enumerates the
+      # environment with exactly that command (common/manager_util.py,
+      # get_installed_packages), so it concluded no packages were installed and
+      # logged "[ComfyUI-Manager] PyTorch is not installed" at boot.
+      #
+      # That is not cosmetic. Manager's PIPFixer snapshots torch/torchvision/
+      # torchaudio before a custom-node install and ROLLS THEM BACK if the
+      # install changed them — the one thing standing between a node whose
+      # requirements.txt names `torch` and a CUDA build from PyPI silently
+      # replacing this container's ROCm torch. That rollback lives in an `elif`
+      # after the "is it installed" test, so an empty `pip list` disables it
+      # entirely while looking like a harmless log line.
+      #
+      # So dependencies now live in the image, and a custom node that earns its
+      # place gets added to services/comfyui/Dockerfile and rebuilt. There is NO
+      # try-it-out path any more: the manager is not loaded, custom_nodes is not
+      # redirected into the mount, and /opt/ComfyUI/custom_nodes is root-owned
+      # while this runs as 1000. A node is a pinned Dockerfile entry and a
+      # rebuild, deliberately, or it is nothing.
+      # Caches into the mount for the same reason, plus one that is not obvious:
+      # MIOpen has no shipped perf database for gfx1201 (it says so at boot), so
+      # it TUNES kernels on first use. Left in the container layer that tuning is
+      # thrown away on every recreate and paid again on the next generation.
+      - MIOPEN_USER_DB_PATH=/data/.cache/miopen
+      - MIOPEN_CUSTOM_CACHE_DIR=/data/.cache/miopen
+      - HF_HOME=/data/.cache/huggingface
+      - TORCHINDUCTOR_CACHE_DIR=/data/.cache/torchinductor
+
+    # ONE bind mount holding everything ComfyUI reads or writes. On / rather than
+    # /data, which is the estate's usual home for service data (/data/chronicle):
+    # / has the most headroom (~400 GB) and is the only one of the three disks
+    # that argosy's media does not grow into, and a bake-off across FLUX.2,
+    # Qwen-Image-Edit and an SDXL/ControlNet stack is 100-200 GB of weights. It
+    # is NVMe either way, which matters when a 35 GB fp8 checkpoint is reloaded
+    # between comparisons.
+    volumes:
+      - ${COMFYUI_DATA_DIR:-/srv/comfyui}:/data
+
+    # The five MUTABLE directories are pointed at the mount individually, rather
+    # than with the single --base-directory flag that was here first. That flag
+    # also redirects custom_nodes/, and custom nodes are declared in the image
+    # (services/comfyui/Dockerfile) — so pointing them at the mount would mean an
+    # image-declared node is simply not loaded. Naming the five makes "state in
+    # the mount, code in the image" structural rather than a convention.
+    #
+    # ComfyUI does NOT create these: it exits with `FileNotFoundError` on a
+    # missing one before printing anything about itself. `make comfy-bootstrap`.
+    #
+    # NO --enable-manager. It was here, justified as what Phase 1 needs to
+    # install ControlNet preprocessors, IP-Adapter and a GGUF loader. It cannot
+    # do that on this deployment, and the reason is structural rather than a
+    # setting anyone forgot: ComfyUI-Manager gates every install behind
+    # `is_allowed_security_level('middle+')`, which is False unless the listener
+    # is loopback or network_mode is `personal_cloud`. This container publishes
+    # 8188, so --listen must be 0.0.0.0, so it is False for ever. Measured: a
+    # queued install returns HTTP 200, then fails with "security_level must be
+    # `normal or below`, and network_mode must be set to `personal_cloud`", and
+    # custom_nodes/ stays empty.
+    #
+    # So it bought nothing and still cost the `middle`-level endpoints — which
+    # include /v2/manager/reboot, policy/update and db_mode — on an
+    # unauthenticated listener. Custom nodes go in the Dockerfile instead.
+    #
+    # To re-enable it for BROWSING (the registry UI works; installs still 403),
+    # add `- --enable-manager` here and `make comfy-recreate`. The package is in
+    # the image, so that is a recreate and not a rebuild. Do NOT instead set
+    # `security_level = weak` in /data/user/__manager/config.ini to force
+    # installs to work: that file is inside the bind mount, so the widening
+    # would be invisible to git and survive every recreate — an access change
+    # with no reviewable diff, which is the one shape this repo does not accept.
+    command:
+      - --models-directory
+      - /data/models
+      - --input-directory
+      - /data/input
+      - --output-directory
+      - /data/output
+      - --temp-directory
+      - /data/temp
+      - --user-directory
+      - /data/user
+
+    healthcheck:
+      # A real HTTP GET of the API, not a process check: ComfyUI's server can be
+      # up while the torch import that precedes it has failed, and that is the
+      # state worth catching (it is how the CUDA-torchaudio and the
+      # uid-not-in-passwd failures both presented). The image ships no curl or
+      # wget, so python3 — which is certain to be there, since it is the thing
+      # being tested.
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8188/system_stats', timeout=5).status == 200 else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Cold ROCm init plus the frontend import is ~15s measured; 90s is slack
+      # for a first run that also has MIOpen tuning to do.
+      start_period: 90s
