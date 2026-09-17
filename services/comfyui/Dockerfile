@@ -54,11 +54,35 @@ RUN git clone --depth 1 --branch ${COMFYUI_REF} \
       https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && pip install --no-cache-dir -r /opt/ComfyUI/requirements.txt
 
-# ComfyUI-Manager is a SEPARATE requirements file, and --enable-manager is a
-# silent no-op without it: the server prints one line at boot
+# ComfyUI-Manager. Installed but NOT enabled — see the `command:` in
+# docker-compose.comfyui.yml for why, and note that leaving the package here is
+# what makes turning it on a recreate rather than a 20-minute rebuild.
+#
+# It is a SEPARATE requirements file, which is its own trap: --enable-manager
+# without this is a silent no-op, where the server prints one line at boot
 # ("the `comfyui-manager` package must be installed first") and carries on
-# serving, so the UI then offers to install it and reads as needing an update.
+# serving, so the UI offers to install the manager and the whole thing reads as
+# ComfyUI needing an update.
 RUN pip install --no-cache-dir -r /opt/ComfyUI/manager_requirements.txt
+
+# ── CUSTOM NODES ─────────────────────────────────────────────────────────────
+# Declared HERE, in the image, and nowhere else. This is the whole mechanism:
+# clone at a pinned ref, install its requirements, done.
+#
+# It is here rather than in the data mount because the manager cannot install a
+# node on this deployment at all — measured, not assumed. ComfyUI-Manager gates
+# `do_install` behind `is_allowed_security_level('middle+')`, which returns
+# False unless the listener is loopback or network_mode is `personal_cloud`.
+# This container publishes 8188, so --listen is 0.0.0.0, so that is permanently
+# False: a queued install returns HTTP 200 and then fails with "security_level
+# must be `normal or below`, and network_mode must be set to `personal_cloud`".
+#
+# Pin the ref. A floating clone makes the image non-reproducible in exactly the
+# way versions.env exists to prevent for everything else on this box.
+ARG GGUF_REF=6ea2651e7df66d7585f6ffee804b20e92fb38b8a
+RUN git clone https://github.com/city96/ComfyUI-GGUF /opt/ComfyUI/custom_nodes/ComfyUI-GGUF \
+    && git -C /opt/ComfyUI/custom_nodes/ComfyUI-GGUF checkout -q ${GGUF_REF} \
+    && pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt
 
 # Let git READ /opt/ComfyUI as the uid this container runs as. The clone happens
 # here as root, so without this every git call from inside the app fails with

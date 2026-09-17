@@ -750,7 +750,7 @@ comfy-bootstrap:
 	  echo "  sudo install -d -o $$(id -un) -g $$(id -gn) $(COMFYUI_DATA_DIR)"; \
 	  exit 1; \
 	}
-	mkdir -p $(addprefix $(COMFYUI_DATA_DIR)/,models input output temp user custom_nodes .cache)
+	mkdir -p $(addprefix $(COMFYUI_DATA_DIR)/,models input output temp user .cache)
 	@echo "ComfyUI data tree ready at $(COMFYUI_DATA_DIR)"
 
 # Build the image. Slow and mostly network (~5 GB of PyTorch ROCm wheels); the

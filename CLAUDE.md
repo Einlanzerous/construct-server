@@ -92,9 +92,14 @@ anything deploys or gets versioned.
   R9700", and the first kernel launch SIGSEGVs — which is why
   `services/comfyui/comfy-check.sh` launches a real kernel instead of asking
   whether a GPU is present. And **ComfyUI here has no authentication and is
-  published on the host** (8188), like ollama and open-webui, but it reads and
-  writes its whole data tree and can install and run custom nodes — so it must
-  never gain a Traefik router without the `cf-access-jwt` middleware (SERV-106).
+  published on the host** (8188), like ollama and open-webui: anything that
+  reaches that port can submit arbitrary workflows, and read and write the whole
+  data tree — models, inputs and outputs. So it must never gain a Traefik router
+  without the `cf-access-jwt` middleware (SERV-106). It deliberately does **not**
+  run ComfyUI-Manager, so it cannot install code: custom nodes are declared in
+  `services/comfyui/Dockerfile`, because the manager refuses every install
+  behind a non-loopback listener anyway, and the knob that would change that
+  lives in the bind mount where git could not see it.
 - `pkg/cfaccess/` — the **estate's** Cloudflare Access JWT verifier (SERV-131), a
   nested Go module imported by cf-access-guard, Lyceum and Chronicle. Decision of
   record in `docs/cf-access-verifier.md`; see the invariant below before writing

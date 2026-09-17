@@ -146,21 +146,49 @@ services:
     volumes:
       - ${COMFYUI_DATA_DIR:-/srv/comfyui}:/data
 
-    # --base-directory points models/, input/, output/, user/, custom_nodes/ and
-    # temp/ at the mount in one flag. It does NOT create them: ComfyUI exits with
-    # `FileNotFoundError: /data/custom_nodes` if they are missing, which is what
-    # `make comfy-bootstrap` is for.
+    # The five MUTABLE directories are pointed at the mount individually, rather
+    # than with the single --base-directory flag that was here first. That flag
+    # also redirects custom_nodes/, and custom nodes are declared in the image
+    # (services/comfyui/Dockerfile) — so pointing them at the mount would mean an
+    # image-declared node is simply not loaded. Naming the five makes "state in
+    # the mount, code in the image" structural rather than a convention.
     #
-    # --enable-manager is deliberate and is the risky flag on this file: it lets
-    # the UI install and run third-party code. Phase 1 needs custom nodes
-    # (ControlNet preprocessors, IP-Adapter, a GGUF loader), and the alternative
-    # is hand-cloning each one and pip-installing inside the container. Read it
-    # together with the `ports:` warning above — together they mean anything on
-    # the LAN can install code here.
+    # ComfyUI does NOT create these: it exits with `FileNotFoundError` on a
+    # missing one before printing anything about itself. `make comfy-bootstrap`.
+    #
+    # NO --enable-manager. It was here, justified as what Phase 1 needs to
+    # install ControlNet preprocessors, IP-Adapter and a GGUF loader. It cannot
+    # do that on this deployment, and the reason is structural rather than a
+    # setting anyone forgot: ComfyUI-Manager gates every install behind
+    # `is_allowed_security_level('middle+')`, which is False unless the listener
+    # is loopback or network_mode is `personal_cloud`. This container publishes
+    # 8188, so --listen must be 0.0.0.0, so it is False for ever. Measured: a
+    # queued install returns HTTP 200, then fails with "security_level must be
+    # `normal or below`, and network_mode must be set to `personal_cloud`", and
+    # custom_nodes/ stays empty.
+    #
+    # So it bought nothing and still cost the `middle`-level endpoints — which
+    # include /v2/manager/reboot, policy/update and db_mode — on an
+    # unauthenticated listener. Custom nodes go in the Dockerfile instead.
+    #
+    # To re-enable it for BROWSING (the registry UI works; installs still 403),
+    # add `- --enable-manager` here and `make comfy-recreate`. The package is in
+    # the image, so that is a recreate and not a rebuild. Do NOT instead set
+    # `security_level = weak` in /data/user/__manager/config.ini to force
+    # installs to work: that file is inside the bind mount, so the widening
+    # would be invisible to git and survive every recreate — an access change
+    # with no reviewable diff, which is the one shape this repo does not accept.
     command:
-      - --base-directory
-      - /data
-      - --enable-manager
+      - --models-directory
+      - /data/models
+      - --input-directory
+      - /data/input
+      - --output-directory
+      - /data/output
+      - --temp-directory
+      - /data/temp
+      - --user-directory
+      - /data/user
 
     healthcheck:
       # A real HTTP GET of the API, not a process check: ComfyUI's server can be

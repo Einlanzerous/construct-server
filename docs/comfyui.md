@@ -124,15 +124,52 @@ hand-written Python in the loop.
   not grow into, and a bake-off across FLUX.2, Qwen-Image-Edit and an
   SDXL/ControlNet stack is 100–200 GB of weights.
 
-### The manager, and why there is no `PIP_USER`
+### Custom nodes are declared in the image, and the manager is off
 
-`--enable-manager` needs a package the main requirements file does not install.
-ComfyUI ships a **separate `manager_requirements.txt`** (`comfyui_manager==4.2.2`),
-and without it the flag is a **silent no-op**: the server logs one line at boot
-and carries on serving, and the UI then offers to install the manager — which
-reads as ComfyUI needing an update when it is exactly on its pinned tag.
+**ComfyUI-Manager cannot install a custom node on this deployment**, and the
+reason is structural rather than a setting someone forgot. Every install is
+gated behind `is_allowed_security_level('middle+')`, which returns False unless
+the listener is loopback or `network_mode` is `personal_cloud`. This container
+publishes `8188`, so `--listen` must be `0.0.0.0`, so that test is False for
+ever. Measured: a queued install returns HTTP 200, then fails with
 
-Git also has to be able to read `/opt/ComfyUI` as the uid the container runs as.
+```
+ERROR: To use this action, security_level must be `normal or below`,
+and network_mode must be set to `personal_cloud`.
+```
+
+and `custom_nodes/` stays empty. So `--enable-manager` bought nothing and still
+exposed the `middle`-level endpoints — `/v2/manager/reboot`, `policy/update`,
+`db_mode`, `queue/start` — on an unauthenticated listener. It is off.
+
+Custom nodes are therefore declared in `services/comfyui/Dockerfile`: clone at a
+pinned ref, install its `requirements.txt`. `ComfyUI-GGUF` is there as the
+worked example and because Track A needs it for quantised checkpoints. Pin the
+ref — a floating clone makes the image non-reproducible in exactly the way
+`versions.env` exists to prevent for everything else on this box.
+
+This is also why the mutable directories are named individually in `command:`
+rather than with `--base-directory`. That flag redirects `custom_nodes/` too, so
+an image-declared node would simply not be loaded. Naming the five makes "state
+in the mount, code in the image" structural instead of a convention.
+
+**Do not make installs work by setting `security_level = weak`** in
+`/data/user/__manager/config.ini`. That file is inside the bind mount: the
+widening would be invisible to git, survive every recreate, and be an access
+change with no reviewable diff. To re-enable the manager for *browsing* — the
+registry UI works, installs still refuse — add `- --enable-manager` back to
+`command:` and `make comfy-recreate`. The package stays in the image so that is
+a recreate, not a rebuild.
+
+The package is also a trap worth recording: `--enable-manager` without
+`manager_requirements.txt` installed is a **silent no-op**. The server logs one
+line at boot and carries on serving, and the UI then offers to install the
+manager — which reads as ComfyUI needing an update when it is exactly on its
+pinned tag.
+
+### Why there is no `PIP_USER`
+
+Git still has to be readable as the uid the container runs as.
 The clone happens as root during the build, so without
 `git config --system --add safe.directory /opt/ComfyUI` every git call from
 inside the app fails with `detected dubious ownership in repository`. That is
