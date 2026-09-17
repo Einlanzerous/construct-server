@@ -3,7 +3,8 @@
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-assert-env-keys dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve \
-        lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall
+        lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
+        comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -707,3 +708,80 @@ dev-edge-auth-check:
 	else \
 	  ./scripts/check-edge-auth.sh --dev $(if $(config_only),--config-only); \
 	fi
+
+# ─── ComfyUI (IDEA-52) ────────────────────────────────────────────────────────
+#
+# A separate compose PROJECT, not a service in the prod stack — see the header of
+# docker-compose.comfyui.yml for why. These targets pin the project name and the
+# compose file together for the same reason the dev ones do: a bare
+# `docker compose` in this repo resolves to the PROD file.
+#
+# Unlike prod (SERV-76) and dev, this project runs from the CHECKOUT and has no
+# deploy root. Nothing in CI deploys it, deploy.yml does not rsync it, and there
+# is no second copy for the running containers to drift against — so "which
+# ComfyUI is live" has one answer without needing a fixed path to enforce it.
+COMFY_PROJECT = construct-comfyui
+COMFY_FILE = docker-compose.comfyui.yml
+COMFY_COMPOSE = docker compose -f $(COMFY_FILE) -p $(COMFY_PROJECT)
+
+# The bind mount holding models, outputs, workflows and custom nodes. Keep in
+# step with the default in docker-compose.comfyui.yml.
+COMFYUI_DATA_DIR ?= /srv/comfyui
+
+comfy-file:
+	@test -f "$(COMFY_FILE)" || { \
+	  echo "No $(COMFY_FILE) here. The ComfyUI project runs from the CHECKOUT, not"; \
+	  echo "from a deploy root — run these targets from your construct-server clone."; \
+	  exit 1; \
+	}
+
+# Create the data directory tree. ComfyUI's --base-directory does NOT create
+# these: it exits with `FileNotFoundError: /data/custom_nodes` if they are
+# missing, before printing anything about itself.
+comfy-bootstrap:
+	@mkdir -p "$(COMFYUI_DATA_DIR)" 2>/dev/null || { \
+	  echo "Cannot create $(COMFYUI_DATA_DIR) — run:"; \
+	  echo "  sudo install -d -o $$(id -un) -g $$(id -gn) $(COMFYUI_DATA_DIR)"; \
+	  exit 1; \
+	}
+	mkdir -p $(addprefix $(COMFYUI_DATA_DIR)/,models input output temp user custom_nodes .cache .python)
+	@echo "ComfyUI data tree ready at $(COMFYUI_DATA_DIR)"
+
+# Build the image. Slow and mostly network (~5 GB of PyTorch ROCm wheels); the
+# layers cache, so a ComfyUI version bump alone is quick.
+comfy-build: comfy-file
+	$(COMFY_COMPOSE) build
+
+comfy-up: comfy-file comfy-bootstrap
+	$(COMFY_COMPOSE) up -d
+	@echo "ComfyUI on http://$$(hostname -I | awk '{print $$1}'):$${COMFYUI_PORT:-8188} — no auth, see the compose file."
+
+comfy-down: comfy-file
+	$(COMFY_COMPOSE) down
+
+# Recreate a container whose spec did not change — e.g. after an image rebuild.
+# `docker restart` would keep the OLD spec, the SERV-8 hazard, and here it would
+# also keep the old image.
+comfy-recreate: comfy-file comfy-bootstrap
+	$(COMFY_COMPOSE) up -d --force-recreate
+
+comfy-ps: comfy-file
+	$(COMFY_COMPOSE) ps
+
+comfy-logs: comfy-file
+	$(COMFY_COMPOSE) logs -f --tail=200
+
+# What the container thinks it has. Asks ComfyUI's own API rather than the
+# container's health, because the failure worth catching is a torch that imported
+# and then dispatches to no gfx1201 kernel — see services/comfyui/Dockerfile.
+comfy-health: comfy-file
+	@./services/comfyui/comfy-check.sh
+
+# Who holds the GPU right now. The R9700 is shared with ollama, which keeps a 30B
+# model resident at ~20 GB — so this is the target to run before wondering why a
+# generation OOM'd.
+comfy-gpu:
+	@rocm-smi --showmeminfo vram --showpids 2>/dev/null | grep -vE '^$$' || echo "rocm-smi not available"
+	@echo
+	@docker ps --filter name=ollama --filter name=comfyui --filter name=asr \
+	  --format 'table {{.Names}}\t{{.Status}}'

@@ -79,6 +79,22 @@ anything deploys or gets versioned.
   VitePress renderer; `wiki/docs/` is **generated and wiped on every run**. Design
   of record in `docs/estate-wiki.md`; see also the invariant below.
 - `services/` — first-party service source that hasn't graduated to its own repo.
+- `docker-compose.comfyui.yml` + `services/comfyui/` — **ComfyUI on the R9700**
+  (IDEA-52), a THIRD compose project (`construct-comfyui`), separate from prod and
+  from dev. Not part of the stack: nothing in `docker-compose.yml` references it,
+  no CI deploys it, and `assert-healthy.sh`/`check-compose-drift.sh` iterate the
+  prod file's services, so it is invisible to them rather than silently skipped.
+  Driven by `make comfy-*` from the **checkout** — it has no deploy root, because
+  nothing deploys it. Design of record in `docs/comfyui.md`; two things from it
+  belong here. **The official AMD image `rocm/comfyui` does not work on this card
+  and fails silently**: its PyTorch is built for gfx942/gfx950 only, so
+  `is_available()` is True, `get_device_name()` correctly says "AMD Radeon AI PRO
+  R9700", and the first kernel launch SIGSEGVs — which is why
+  `services/comfyui/comfy-check.sh` launches a real kernel instead of asking
+  whether a GPU is present. And **ComfyUI here has no authentication and is
+  published on the host** (8188), like ollama and open-webui, but it reads and
+  writes its whole data tree and can install and run custom nodes — so it must
+  never gain a Traefik router without the `cf-access-jwt` middleware (SERV-106).
 - `pkg/cfaccess/` — the **estate's** Cloudflare Access JWT verifier (SERV-131), a
   nested Go module imported by cf-access-guard, Lyceum and Chronicle. Decision of
   record in `docs/cf-access-verifier.md`; see the invariant below before writing
