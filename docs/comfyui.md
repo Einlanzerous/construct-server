@@ -44,7 +44,7 @@ different compilation target.
 
 ## What is used instead
 
-A slim image built from `services/comfyui/Dockerfile`: **29.5 GB**, ComfyUI
+A slim image built from `services/comfyui/Dockerfile`: **25.1 GB**, ComfyUI
 v0.36.0, on the **official PyTorch ROCm wheels**, which do carry gfx1201.
 
 Two things are load-bearing and non-obvious:
@@ -53,7 +53,7 @@ Two things are load-bearing and non-obvious:
 ROCm runtime under `site-packages/_rocm_sdk_libraries`, so `python:3.12-slim-trixie`
 plus a handful of apt libraries is enough. The host's ROCm (6.4.4) is irrelevant
 to the container — only the kernel's amdgpu/KFD ABI is shared, and 6.17 is far
-newer than anything here needs. This is what turns a 91.7 GB image into a 29.5 GB
+newer than anything here needs. This is what turns a 91.7 GB image into a 25.1 GB
 one.
 
 **The version set is forced, not chosen.** ComfyUI imports `torchaudio`
@@ -110,20 +110,52 @@ hand-written Python in the loop.
   not grow into, and a bake-off across FLUX.2, Qwen-Image-Edit and an
   SDXL/ControlNet stack is 100–200 GB of weights.
 
-### Two things that would otherwise be lost on every recreate
+### The manager, and why there is no `PIP_USER`
 
-`PYTHONUSERBASE=/data/.python` with `PIP_USER=1`. ComfyUI's manager installs a
-custom node by cloning it and running its `requirements.txt`; left alone that
-lands in the image's `site-packages`, inside the container layer, so every
-recreate silently reverts it and the node then fails to import with a missing
-module nobody changed. Pointing pip's `--user` target into the bind mount makes
-those installs persist — Python picks the directory up as the user site
-automatically, no `PYTHONPATH` needed.
+`--enable-manager` needs a package the main requirements file does not install.
+ComfyUI ships a **separate `manager_requirements.txt`** (`comfyui_manager==4.2.2`),
+and without it the flag is a **silent no-op**: the server logs one line at boot
+and carries on serving, and the UI then offers to install the manager — which
+reads as ComfyUI needing an update when it is exactly on its pinned tag.
+
+Git also has to be able to read `/opt/ComfyUI` as the uid the container runs as.
+The clone happens as root during the build, so without
+`git config --system --add safe.directory /opt/ComfyUI` every git call from
+inside the app fails with `detected dubious ownership in repository`. That is
+not cosmetic either: the manager and the frontend shell out to git to determine
+the installed version, and a failed check also presents as "an update is
+needed".
+
+**`PIP_USER` / `PYTHONUSERBASE` are deliberately absent, and must not be added
+back.** They were here first, to persist custom-node dependencies across a
+recreate, and the cost was much higher than the benefit: `PIP_USER=1` makes
+`pip list` **report nothing at all** — measured, 0 lines against 101, exit code
+0 either way. ComfyUI-Manager enumerates the environment with exactly that
+command (`common/manager_util.py`, `get_installed_packages`), so it concluded
+nothing was installed and logged `[ComfyUI-Manager] PyTorch is not installed`.
+
+That log line is the visible edge of a disabled safety net. Manager's `PIPFixer`
+snapshots `torch`/`torchvision`/`torchaudio` before a custom-node install and
+**rolls them back** if the install changed them — the one thing standing between
+a node whose `requirements.txt` names `torch` and a CUDA build from PyPI
+silently replacing this container's ROCm torch. The rollback sits in an `elif`
+after the "is it installed" test, so an empty `pip list` switches it off
+entirely while looking like a harmless warning.
+
+So dependencies live in the image. A custom node that earns its place gets added
+to `services/comfyui/Dockerfile` and rebuilt; the manager can still install one
+for the lifetime of a container to try it out, and that install is lost on the
+next recreate — which is the honest shape for something the image does not
+declare, and the same reasoning as ComfyUI not being able to update itself.
+
+### What the cache variables are for
 
 `MIOPEN_USER_DB_PATH=/data/.cache/miopen`. MIOpen ships **no perf database for
 gfx1201** (it says so at boot: `File is unreadable: .../gfx1201_32.HIP.fdb.txt`),
 so it tunes kernels on first use. In the container layer that tuning is thrown
-away on every recreate and paid again on the next generation.
+away on every recreate and paid again on the next generation. `HF_HOME` and
+`TORCHINDUCTOR_CACHE_DIR` are in the mount for the ordinary version of the same
+reason — neither affects pip, which is why they survived the removal above.
 
 ## Exposure — read this before changing the port
 

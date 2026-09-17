@@ -16,7 +16,7 @@
 #
 # The official PyTorch ROCm wheels DO carry gfx1201, and bundle their own ROCm
 # runtime under site-packages/_rocm_sdk_libraries, so no rocm/* base image is
-# needed at all: a slim Python base is enough, and the result is 29.5 GB.
+# needed at all: a slim Python base is enough, and the result is 25.1 GB.
 # The HOST's ROCm (6.4.4) is irrelevant to this container — only the kernel's
 # amdgpu/KFD ABI is shared, and 6.17 is far newer than anything here needs.
 #
@@ -53,6 +53,31 @@ RUN pip install --no-cache-dir --index-url ${ROCM_INDEX} \
 RUN git clone --depth 1 --branch ${COMFYUI_REF} \
       https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && pip install --no-cache-dir -r /opt/ComfyUI/requirements.txt
+
+# ComfyUI-Manager is a SEPARATE requirements file, and --enable-manager is a
+# silent no-op without it: the server prints one line at boot
+# ("the `comfyui-manager` package must be installed first") and carries on
+# serving, so the UI then offers to install it and reads as needing an update.
+RUN pip install --no-cache-dir -r /opt/ComfyUI/manager_requirements.txt
+
+# Let git READ /opt/ComfyUI as the uid this container runs as. The clone happens
+# here as root, so without this every git call from inside the app fails with
+# `detected dubious ownership in repository` — which is not cosmetic: the
+# manager and the frontend shell out to git to work out what version is
+# installed, and a failed check presents as "an update is needed" for a checkout
+# that is exactly on its pinned tag.
+#
+# --system, not --global: --global writes to $HOME, and the runtime HOME is set
+# below, so a --global entry would land in the wrong file for the wrong user.
+#
+# Deliberately NOT a chown. /opt/ComfyUI stays root-owned and therefore
+# read-only to the app, so ComfyUI cannot update ITSELF. That is the intended
+# shape: the version is pinned by COMFYUI_REF and changing it is a rebuild, so
+# an in-place self-update would be reverted by the next recreate — silently, and
+# with nothing to show which ComfyUI was actually serving. Failing that write is
+# better than losing it later. Custom nodes are unaffected: they install into
+# /data/custom_nodes, which is the writable bind mount.
+RUN git config --system --add safe.directory /opt/ComfyUI
 
 # A real passwd entry for the uid compose runs as. Without one, torch's
 # _inductor cache_dir() calls getpass.getuser(), which falls through to

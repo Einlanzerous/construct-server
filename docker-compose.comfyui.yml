@@ -9,7 +9,7 @@
 #      check-compose-drift and every deploy — gates it does not need and would
 #      occasionally fail for reasons nobody wants to chase at 3am.
 #   2. It is built on the box, and prod already has exactly one of those
-#      (cf-access-guard, SERV-106). Adding a second — a ~30 GB image whose build
+#      (cf-access-guard, SERV-106). Adding a second — a ~25 GB image whose build
 #      downloads 5 GB of wheels — to the prod deploy path is a real cost paid on
 #      every cold rebuild, for a service the stack does not use.
 #   3. VRAM. The R9700 is shared with ollama, which holds ~20 GB when a 30B model
@@ -85,17 +85,29 @@ services:
     user: "1000:1000"
 
     environment:
-      # CUSTOM NODE DEPENDENCIES MUST SURVIVE A RECREATE.
+      # THERE IS DELIBERATELY NO PIP_USER / PYTHONUSERBASE HERE. Do not add them
+      # back as a way to persist custom-node dependencies across a recreate,
+      # which is what they were here for at first and why this note exists.
       #
-      # ComfyUI's manager installs a node by cloning it and running its
-      # requirements.txt. Left alone that lands in the image's site-packages —
-      # inside the container layer — so every `make comfy-recreate` silently
-      # reverts it, and the node then fails to import with a missing module
-      # nobody changed. Pointing pip's --user target into the bind mount makes
-      # those installs persistent: Python picks the directory up as the user
-      # site automatically, no PYTHONPATH needed.
-      - PYTHONUSERBASE=/data/.python
-      - PIP_USER=1
+      # `PIP_USER=1` makes `pip list` report NOTHING — measured: 0 lines against
+      # 101 without it, exit code 0 either way. ComfyUI-Manager enumerates the
+      # environment with exactly that command (common/manager_util.py,
+      # get_installed_packages), so it concluded no packages were installed and
+      # logged "[ComfyUI-Manager] PyTorch is not installed" at boot.
+      #
+      # That is not cosmetic. Manager's PIPFixer snapshots torch/torchvision/
+      # torchaudio before a custom-node install and ROLLS THEM BACK if the
+      # install changed them — the one thing standing between a node whose
+      # requirements.txt names `torch` and a CUDA build from PyPI silently
+      # replacing this container's ROCm torch. That rollback lives in an `elif`
+      # after the "is it installed" test, so an empty `pip list` disables it
+      # entirely while looking like a harmless log line.
+      #
+      # So dependencies now live in the image, and a custom node that earns its
+      # place gets added to services/comfyui/Dockerfile and rebuilt. The manager
+      # can still install one for the lifetime of a container to try it out;
+      # that install is lost on the next recreate, which is the honest shape
+      # for something the image does not declare.
       # Caches into the mount for the same reason, plus one that is not obvious:
       # MIOpen has no shipped perf database for gfx1201 (it says so at boot), so
       # it TUNES kernels on first use. Left in the container layer that tuning is
