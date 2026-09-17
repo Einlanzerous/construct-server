@@ -117,8 +117,9 @@ hand-written Python in the loop.
   hand without sudo. The image carries a matching passwd entry — without one,
   torch's `_inductor` cache setup calls `getpass.getuser()` and dies with
   `KeyError: getpwuid(): uid not found: 1000` before ComfyUI prints anything.
-- **Data**: one bind mount, `/srv/comfyui` → `/data`, with `--base-directory`
-  pointing models/input/output/user/custom_nodes/temp at it. On `/` rather than
+- **Data**: one bind mount, `/srv/comfyui` → `/data`, with the five *mutable*
+  directories pointed at it individually — models, input, output, temp, user.
+  `custom_nodes` is **not** among them; nodes are declared in the image. On `/` rather than
   `/data`, which is the estate's usual home for service data: `/` has the most
   headroom (~370 GB) and is the only one of the three disks argosy's media does
   not grow into, and a bake-off across FLUX.2, Qwen-Image-Edit and an
@@ -195,9 +196,11 @@ entirely while looking like a harmless warning.
 
 So dependencies live in the image. A custom node that earns its place gets added
 to `services/comfyui/Dockerfile` and rebuilt; the manager can still install one
-for the lifetime of a container to try it out, and that install is lost on the
-next recreate — which is the honest shape for something the image does not
-declare, and the same reasoning as ComfyUI not being able to update itself.
+There is no try-it-out path: the manager is not loaded, `custom_nodes` is not
+redirected into the mount, and `/opt/ComfyUI/custom_nodes` is root-owned while
+the process runs as 1000. A node is a pinned Dockerfile entry and a rebuild,
+deliberately, or it is nothing — the same reasoning as ComfyUI not being able to
+update itself.
 
 ### What the cache variables are for
 
@@ -216,8 +219,9 @@ It is reachable from the LAN and the tailnet. That is a deliberate choice for
 IDEA-52, not an oversight.
 
 It is a worse thing to expose than ollama: it reads and writes everything under
-its base directory, and `--enable-manager` lets the UI install and run
-third-party code. Anything that can reach that port has all of that.
+its data tree, and executes whatever workflow is submitted to it. It does not
+run ComfyUI-Manager, so it cannot install code — see the custom-nodes section
+above before changing that. Anything that can reach that port has all of that.
 
 Consequently it must **never** gain a Traefik router without an Access middleware
 in front of it (SERV-106). A router on the `internal` entrypoint with no

@@ -42,7 +42,7 @@ services:
     #
     # COMFYUI HAS NO AUTHENTICATION OF ANY KIND, and it is a worse thing to
     # expose than ollama: it reads and writes everything under its base
-    # directory and, with the manager enabled below, installs and runs code.
+    # directory, and executes whatever workflow is submitted to it.
     # Anything that can reach this port has all of that. It is bound to the LAN
     # and the tailnet on purpose (a deliberate choice for IDEA-52, not an
     # oversight) — but it is the reason this must never gain a Traefik router
@@ -83,8 +83,8 @@ services:
     # either of the other two compose files.
     #
     # What they cost is specific to this service. It is unauthenticated on
-    # 0.0.0.0 and, with --enable-manager below, anything on the LAN can install
-    # and run code in it — so `seccomp:unconfined` would hand that code every
+    # 0.0.0.0, so anything on the LAN can drive it — so `seccomp:unconfined`
+    # would hand a workflow-level compromise every
     # syscall the kernel exposes (keyctl, add_key, userfaultfd, unshare), and
     # `ipc: host` would put it in the host's IPC namespace, able to read and
     # write System V segments and /dev/shm shared with processes outside this
@@ -123,10 +123,11 @@ services:
       # entirely while looking like a harmless log line.
       #
       # So dependencies now live in the image, and a custom node that earns its
-      # place gets added to services/comfyui/Dockerfile and rebuilt. The manager
-      # can still install one for the lifetime of a container to try it out;
-      # that install is lost on the next recreate, which is the honest shape
-      # for something the image does not declare.
+      # place gets added to services/comfyui/Dockerfile and rebuilt. There is NO
+      # try-it-out path any more: the manager is not loaded, custom_nodes is not
+      # redirected into the mount, and /opt/ComfyUI/custom_nodes is root-owned
+      # while this runs as 1000. A node is a pinned Dockerfile entry and a
+      # rebuild, deliberately, or it is nothing.
       # Caches into the mount for the same reason, plus one that is not obvious:
       # MIOpen has no shipped perf database for gfx1201 (it says so at boot), so
       # it TUNES kernels on first use. Left in the container layer that tuning is

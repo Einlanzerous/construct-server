@@ -37,8 +37,9 @@ ARG COMFYUI_REF=v0.36.0
 ARG ROCM_INDEX=https://download.pytorch.org/whl/rocm7.2
 
 # libgl1/libglib2.0-0 are for opencv, which the ControlNet preprocessor nodes
-# pull in (Phase 1 Track B). git is needed at runtime too: ComfyUI's built-in
-# manager installs custom nodes by cloning them.
+# pull in (Phase 1 Track B). git is needed at BUILD time, to clone ComfyUI and
+# the custom nodes below, and at runtime only so the frontend can read the
+# checkout's version.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates \
       libgomp1 libnuma1 libdrm2 libelf1 libatomic1 libzstd1 \
@@ -99,8 +100,8 @@ RUN git clone https://github.com/city96/ComfyUI-GGUF /opt/ComfyUI/custom_nodes/C
 # shape: the version is pinned by COMFYUI_REF and changing it is a rebuild, so
 # an in-place self-update would be reverted by the next recreate — silently, and
 # with nothing to show which ComfyUI was actually serving. Failing that write is
-# better than losing it later. Custom nodes are unaffected: they install into
-# /data/custom_nodes, which is the writable bind mount.
+# better than losing it later. Nothing needs to write here: custom nodes are
+# declared below, in this image, never installed at runtime.
 RUN git config --system --add safe.directory /opt/ComfyUI
 
 # A real passwd entry for the uid compose runs as. Without one, torch's
@@ -115,6 +116,6 @@ ENV HOME=/home/comfy
 WORKDIR /opt/ComfyUI
 EXPOSE 8188
 
-# --listen only; everything else (base directory, VRAM reserve) is compose's to
-# say, so this image stays a plain ComfyUI and the deployment holds the policy.
+# --listen only; every directory and every policy flag is compose's to say, so
+# this image stays a plain ComfyUI and the deployment holds the policy.
 ENTRYPOINT ["python3", "main.py", "--listen", "0.0.0.0", "--port", "8188"]

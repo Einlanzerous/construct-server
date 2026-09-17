@@ -741,9 +741,10 @@ comfy-file:
 	  exit 1; \
 	}
 
-# Create the data directory tree. ComfyUI's --base-directory does NOT create
-# these: it exits with `FileNotFoundError: /data/custom_nodes` if they are
-# missing, before printing anything about itself.
+# Create the data directory tree. ComfyUI does NOT create these: it exits with
+# a FileNotFoundError on a missing one before printing anything about itself.
+# custom_nodes is deliberately NOT here — nodes are declared in the image
+# (services/comfyui/Dockerfile), so only mutable state lives in the mount.
 comfy-bootstrap:
 	@mkdir -p "$(COMFYUI_DATA_DIR)" 2>/dev/null || { \
 	  echo "Cannot create $(COMFYUI_DATA_DIR) — run:"; \
