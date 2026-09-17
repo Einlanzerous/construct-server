@@ -71,12 +71,31 @@ services:
     group_add:
       - "993"
 
-    # Both are what AMD's own ROCm container guidance asks for. ipc: host is the
-    # one that matters in practice — torch's dataloader and pinned-memory paths
-    # want a shared-memory segment larger than docker's 64 MB default.
-    security_opt:
-      - seccomp:unconfined
-    ipc: host
+    # NO `security_opt` AND NO `ipc: host`, both of which were here first because
+    # AMD's ROCm container guidance asks for them. They are not needed on this
+    # box and they are the wrong things to carry on THIS container in particular.
+    #
+    # Measured rather than argued: with the default seccomp profile, a private
+    # IPC namespace and this shm_size, matmul, conv2d and attention all execute
+    # on the R9700 from this image. The three GPU containers already on the box
+    # agree — ollama, asr and aperture-backend all run ROCm with SecurityOpt=[]
+    # and IpcMode=private, and `security_opt`/`ipc:` appear nowhere else in
+    # either of the other two compose files.
+    #
+    # What they cost is specific to this service. It is unauthenticated on
+    # 0.0.0.0 and, with --enable-manager below, anything on the LAN can install
+    # and run code in it — so `seccomp:unconfined` would hand that code every
+    # syscall the kernel exposes (keyctl, add_key, userfaultfd, unshare), and
+    # `ipc: host` would put it in the host's IPC namespace, able to read and
+    # write System V segments and /dev/shm shared with processes outside this
+    # container. That is a far larger post-compromise surface than the data tree
+    # the exposure note below reasons about. Compose was also silently adding
+    # `label=disable` alongside the seccomp entry, turning off LSM labelling too.
+    #
+    # shm_size gives the one thing the old comment actually wanted — a
+    # shared-memory segment bigger than docker's 64 MB default, for torch's
+    # dataloader and pinned-memory paths — without joining anything.
+    shm_size: 8gb
 
     # Not root. Files written into the bind mount below — generated images,
     # downloaded models, saved workflows — land owned by the invoking user

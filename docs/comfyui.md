@@ -91,8 +91,22 @@ hand-written Python in the loop.
 
 - **Project**: `construct-comfyui`, from `docker-compose.comfyui.yml`, run from the
   **checkout**. Unlike prod (SERV-76) and dev there is no deploy root, because
-  nothing deploys it — so "which ComfyUI is live" has one answer without a fixed
-  path to enforce it.
+  nothing deploys it. That is not the same as there being one copy of the compose
+  file: after merge at least two checkouts carry it (`~/construct-server` and the
+  runner's `_work/…`, which `pr-review.yml` points at unmerged PR merge refs).
+  What holds is that the **project name** is pinned in the Makefile, so a second
+  checkout adopts the one container rather than standing up a second — and the
+  `comfy-file` guard covers the case that actually bites, invoking the targets
+  from the deploy root where the file is absent.
+- **No `security_opt`, no `ipc: host`.** AMD's ROCm container guidance asks for
+  both and neither is needed here — measured: default seccomp, private IPC and
+  `shm_size: 8gb` run matmul, conv2d and attention on the R9700 from this image.
+  ollama, asr and aperture-backend all do ROCm with `SecurityOpt=[]` and
+  `IpcMode=private` already. On *this* container the cost would be real, because
+  it is unauthenticated and can be made to run third-party code: `seccomp:unconfined`
+  hands that code every syscall the kernel exposes, and `ipc: host` gives it the
+  host's System V segments and `/dev/shm`. `shm_size` supplies the only thing
+  actually wanted — a segment bigger than docker's 64 MB default.
 - **Devices**: `/dev/kfd` plus `/dev/dri/renderD129` only — the R9700's render
   node, not the whole of `/dev/dri`. `renderD128` is the CometLake iGPU; the
   numbering reads the wrong way round on this box and was confirmed from

@@ -717,9 +717,15 @@ dev-edge-auth-check:
 # `docker compose` in this repo resolves to the PROD file.
 #
 # Unlike prod (SERV-76) and dev, this project runs from the CHECKOUT and has no
-# deploy root. Nothing in CI deploys it, deploy.yml does not rsync it, and there
-# is no second copy for the running containers to drift against — so "which
-# ComfyUI is live" has one answer without needing a fixed path to enforce it.
+# deploy root: nothing in CI deploys it and deploy.yml does not rsync it.
+#
+# That does NOT mean there is only one copy of the compose file. After merge at
+# least two checkouts on this box carry it — ~/construct-server and the runner's
+# _work/…, which pr-review.yml regularly points at an unmerged PR merge ref. What
+# holds is weaker and still enough: the project NAME is pinned here, so a second
+# checkout ADOPTS the one container rather than standing up a second one. The
+# `comfy-file` guard below covers the case that actually bites, which is invoking
+# these targets from the deploy root, where the file is absent entirely.
 COMFY_PROJECT = construct-comfyui
 COMFY_FILE = docker-compose.comfyui.yml
 COMFY_COMPOSE = docker compose -f $(COMFY_FILE) -p $(COMFY_PROJECT)
