@@ -326,3 +326,47 @@ cannot.
   before anything is generated at final size — Phase 2.
 - Track A's candidates (FLUX.1 Kontext dev, Qwen-Image-Edit, FLUX.2 dev) are
   20–35 GB each at fp8. Budget the disk before pulling all three.
+
+
+## Track A result: Kontext reproduces a style reference, it does not apply one
+
+Recorded here because it cost an afternoon and the failure is deceptive.
+
+**A style reference image fed to FLUX.1 Kontext comes back as the output.** Every
+source pushed through that path returned the reference itself: the Matterhorn,
+Zermatt and Glacier Express photographs all produced the Nikko waterfall, mean
+|pixel difference| 16.3 / 34.6 / 18.3 against the generated Nikko on a 128x170
+grayscale — near-identical, not merely similar. One run copied the reference's
+cream border as well.
+
+Three mechanisms, all the same: a chained second `ReferenceLatent`, the same chain
+with the order reversed, and `ImageStitch` with an instruction naming which half to
+redraw. `ReferenceLatent` carries composition along with style and exposes no
+weight to turn that down.
+
+**The failure hid behind the obvious validation.** It was first tested against
+`nikko_real.JPG`, the photo the reference poster was made from — and for that one
+input, "correctly restyle the source" and "just copy the reference" produce the
+same picture. A ground-truth pair is the natural thing to validate on and was
+exactly the wrong choice here: it is the single input on which this bug is
+invisible. Validate a style transfer on a subject the reference does NOT contain.
+
+A second, independent fault was found on the way: **the prompt must describe
+treatment, never content.** Naming scene elements ("a row of silhouetted conifers
+along the clifftop ridge") makes Kontext draw that scene and discard the
+photograph. Describe edges, fills, palette and contrast; the subject comes from
+the image.
+
+### Where it leaves the track
+
+Prompt-only, with no reference, works as far as it goes: subjects survive intact
+and the output is a credible flat poster. But the palette drifts per image — one
+source lands teal-and-cream duotone, another multi-coloured with reds — so the
+three do not read as a set, and **set consistency is the whole point**. Words
+alone cannot pin a specific existing style.
+
+Matching the Nikko treatment therefore needs a mechanism with a separate, weighted
+style channel: **IP-Adapter (Track B)** or a trained LoRA. Track A's failure is the
+argument for the classic SDXL + ControlNet + IP-Adapter route rather than a
+detour from it — ControlNet holds geometry, the adapter holds style, each with its
+own strength.
