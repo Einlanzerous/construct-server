@@ -228,6 +228,39 @@ in front of it (SERV-106). A router on the `internal` entrypoint with no
 `cf-access-jwt` middleware is exactly the hole that ticket closed, and
 `check-edge-auth.sh` would fail on it — correctly.
 
+## System RAM is the binding constraint, not VRAM
+
+The card has 32 GiB. **The host has 31 GiB, and that is what runs out first.**
+ComfyUI stages weights through system RAM before they reach the GPU, so a model
+that fits the card comfortably can still kill the box.
+
+Measured on FLUX.1 Kontext fp8 (12 GB) plus `t5xxl_fp8` (5 GB), with ollama
+holding ~9.5 GB resident and the 8 GB swap already ~90% used: 31.5 GB used, 414
+MB available, and the kernel killed ComfyUI — `global_oom`, `Killed process
+(python3)`, 12.3 GB anon-rss. Reproduced twice.
+
+**The failure mode is quiet, which is the part worth remembering.** The container
+is SIGKILLed and `restart: unless-stopped` brings it straight back, so seconds
+later `docker ps` shows a healthy container and `comfy-check.sh` passes. The only
+evidence is a `RemoteDisconnected` in whatever was driving the API, and a restart
+count nobody is watching. `docker inspect` even reports `OOMKilled=false`, because
+that flag means the *cgroup* limit was hit — this was the global kernel OOM
+killer, which is a different thing wearing the same word.
+
+The fix is two flags in `command:`. `--mmap-torch-files` makes weights file-backed
+rather than anonymous, so the kernel can evict them under pressure instead of
+OOMing; `--cache-none` stops ComfyUI retaining models between prompts. Peak drops
+to 30.2 GB and the same run completes. Both cost reload time per prompt, which is
+the right trade against being killed.
+
+Two consequences:
+
+- **FLUX.2 dev is ruled out on this box** — ~32 GB of weights at fp8 cannot be
+  staged in 31 GB of RAM, whatever the card can hold. Host memory disqualifies it
+  before VRAM is consulted. A GGUF quant (Q4, ~19 GB) is the only way it could run.
+- Headroom is still thin at 30.2 GB. Stopping ollama frees ~9.5 GB and is the
+  largest single lever if a run needs it.
+
 ## GPU contention
 
 The R9700 is shared. `ollama` holds ~20 GiB while a 30B model is resident and
