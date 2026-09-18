@@ -411,6 +411,35 @@ from — it is subject-dependent, not one-better-than-the-other. Pair each
 preprocessor with its matching ControlNet (`--preprocessor` and `--controlnet`
 move together).
 
+### The weights this workflow needs
+
+`/srv/comfyui` is outside git by design, so after a host rebuild nothing in the
+repo would say what to fetch or where it goes. `models/ipadapter/` in particular
+is a directory only the custom node knows about.
+
+| file | `models/` subdir | source repo (all ungated) |
+|---|---|---|
+| `sd_xl_base_1.0.safetensors` | `checkpoints/` | `stabilityai/stable-diffusion-xl-base-1.0` |
+| `controlnet-depth-sdxl.safetensors` | `controlnet/` | `xinsir/controlnet-depth-sdxl-1.0` (`diffusion_pytorch_model.safetensors`, renamed) |
+| `controlnet-scribble-sdxl.safetensors` | `controlnet/` | `xinsir/controlnet-scribble-sdxl-1.0` (same filename, renamed) — this is the **lineart** pairing |
+| `ip-adapter-plus_sdxl_vit-h.safetensors` | `ipadapter/` | `h94/IP-Adapter`, `sdxl_models/` |
+| `CLIP-ViT-H-14-laion2B.safetensors` | `clip_vision/` | `h94/IP-Adapter`, `models/image_encoder/model.safetensors`, renamed |
+
+~14.5 GB total. The preprocessor checkpoints are fetched on first use into
+`/data/.cache/` and are not listed here because nothing chooses them by hand.
+
+**The custom nodes live in the image, so a `git pull` alone does not get them:**
+
+```
+make comfy-build && make comfy-recreate
+```
+
+`make comfy-up` runs `up -d` with no `--build`, and the image tag is keyed only to
+`COMFYUI_REF` — so on a box where that tag already exists, a compose change
+recreates the container against the OLD image and the workflow then fails at
+submit with an unknown node type, while the container is healthy and on the
+"right" tag.
+
 ### A permissions trap that looks like a preprocessor bug
 
 `comfyui_controlnet_aux` downloads preprocessor checkpoints at **run** time, by
@@ -424,3 +453,10 @@ So it presents as "lineart is broken" and is really a permissions problem.
 `AUX_ANNOTATOR_CKPTS_PATH=/data/.cache/controlnet_aux` in the compose file fixes
 it, and puts the checkpoint in the mount so it is fetched once rather than on
 every recreate.
+
+**Do not verify that fix from the boot log.** `util.py` logs `Using ckpts path: …`
+from the value computed *before* it consults the environment variable, so the line
+keeps printing `/opt/ComfyUI/custom_nodes/comfyui_controlnet_aux/ckpts` however the
+variable is set. The fix works — the lineart preprocessor runs — but the log says
+it did not. Check `/srv/comfyui/.cache/controlnet_aux` for the downloaded
+checkpoint instead.

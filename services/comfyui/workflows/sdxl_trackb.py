@@ -36,6 +36,18 @@ NEGATIVE = ("photograph, photorealistic, 3d render, gradient, soft focus, blurry
 # sizes cost quality on SDXL far more than on FLUX.
 W, H = 896, 1152
 
+# A preprocessor and its ControlNet are ONE choice, so they are looked up together
+# rather than being two flags that happen to agree. They were two flags, and
+# `--preprocessor lineart` alone then fed a lineart map into the depth-trained
+# ControlNet: ComfyUI accepts it, the run completes, and the output degrades in a
+# way that reads as "the ControlNet is too weak" — which on a spike whose method
+# is sweeping --cn-strength sends you tuning the wrong number. --controlnet still
+# overrides, for trying a third ControlNet against either map.
+CONTROLNETS = {
+    "depth":   "controlnet-depth-sdxl.safetensors",
+    "lineart": "controlnet-scribble-sdxl.safetensors",
+}
+
 
 def build(a):
     g = {
@@ -91,9 +103,12 @@ def build(a):
         "16": {"class_type": "SaveImage", "inputs": {
             "filename_prefix": a.prefix, "images": ["15", 0]}},
     }
-    if a.save_depth:
+    if a.save_control:
+        # Named for the PREPROCESSOR, not "_depth". This image is exactly the
+        # artefact you compare between the two modes, so a lineart map filed as
+        # `_depth` is the one that ends up mislabelled in the comparison.
         g["17"] = {"class_type": "SaveImage", "inputs": {
-            "filename_prefix": a.prefix + "_depth", "images": ["4", 0]}}
+            "filename_prefix": f"{a.prefix}_{a.preprocessor}", "images": ["4", 0]}}
     return g
 
 
@@ -124,7 +139,9 @@ if __name__ == "__main__":
     ap.add_argument("--style-ref", required=True,
                     help="unlike Track A this is load-bearing and actually works")
     ap.add_argument("--prefix", required=True)
-    ap.add_argument("--controlnet", default="controlnet-depth-sdxl.safetensors")
+    ap.add_argument("--controlnet", default=None,
+                    help="override the ControlNet paired with --preprocessor; "
+                         f"defaults are {CONTROLNETS}")
     # DEPTH VS LINEART IS SUBJECT-DEPENDENT, which the objective asks to test and
     # the first run demonstrated: the Matterhorn is defined by its OUTLINE, and
     # DepthAnything renders it as a near-black undifferentiated mass, so the
@@ -145,7 +162,11 @@ if __name__ == "__main__":
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--steps", type=int, default=30)
     ap.add_argument("--cfg", type=float, default=6.0)
-    ap.add_argument("--save-depth", action="store_true")
+    ap.add_argument("--save-control", action="store_true",
+                    help="also save the control map, suffixed with the preprocessor name")
     a = ap.parse_args()
-    print(f"{a.image} -> {a.prefix}  cn={a.cn_strength} ip={a.ip_weight} cfg={a.cfg}")
+    if a.controlnet is None:
+        a.controlnet = CONTROLNETS[a.preprocessor]
+    print(f"{a.image} -> {a.prefix}  {a.preprocessor}/{a.controlnet} "
+          f"cn={a.cn_strength} ip={a.ip_weight} cfg={a.cfg}")
     run(build(a))
