@@ -440,6 +440,30 @@ recreates the container against the OLD image and the workflow then fails at
 submit with an unknown node type, while the container is healthy and on the
 "right" tag.
 
+### Describe treatment and value, never hue
+
+The positive prompt prescribed a palette outright — *"deep navy and dark teal
+shadows … sage and olive greens"* — and that fought the photograph. The Glacier
+Express's scarlet train came out blue-white; the Matterhorn's grey rock and white
+snow came out as a green hill. The IP-Adapter is already supplying the reference's
+palette, so prescribing one in words as well leaves the subject's own colour
+nowhere to go.
+
+Removing the prescribed hues and naming the subject's **real** colours per image
+recovers them: the train is scarlet again, the mountain is grey stone with white
+snow over a blue lake, and the set still reads as one family with Nikko. That is
+the `--accent` flag, appended to the positive prompt:
+
+```
+--accent "The train is bright scarlet red. The viaduct is pale grey-white stone."
+--accent "The mountain is grey stone with bright white snow. The lake is deep blue."
+```
+
+**This is not the content-prompting mistake Track A made.** That one named scene
+elements the photograph did not contain — conifers on a ridge — and the model drew
+them instead of the photo. Naming a colour the subject actually has constrains the
+rendering of what is already there. Keep to colours you can see in the source.
+
 ### A permissions trap that looks like a preprocessor bug
 
 `comfyui_controlnet_aux` downloads preprocessor checkpoints at **run** time, by

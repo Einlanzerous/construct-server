@@ -26,9 +26,20 @@ API = "http://127.0.0.1:8188"
 
 # Treatment, not content — the Track A lesson applies unchanged. Naming scene
 # elements makes the model draw them and discard the photograph.
+# DESCRIBES TREATMENT AND VALUE, NEVER HUE. An earlier version prescribed the
+# palette outright ("deep navy and dark teal shadows … sage and olive greens") and
+# that fought the photograph: the Glacier Express's scarlet train came out blue-
+# white, and the Matterhorn's grey rock and white snow came out as a green hill.
+# The IP-Adapter is already supplying the reference's palette; prescribing one in
+# words as well leaves the subject's own colour nowhere to go.
+#
+# Naming a subject's REAL colours is not the content-prompting mistake Track A
+# made — that was naming scene elements which were not in the photograph. Use
+# --accent for those, per image.
 POSITIVE = ("vintage screen-printed travel poster, flat blocks of solid colour, "
             "crisp hard edges, no gradients, bold simplified shapes, strong graphic "
-            "value contrast, limited muted palette")
+            "value contrast between deep shadows and pale highlights, keeping the "
+            "subject's own real colours, vivid and saturated")
 NEGATIVE = ("photograph, photorealistic, 3d render, gradient, soft focus, blurry, "
             "noise, grain, text, letters, words, watermark, signature, frame, border")
 
@@ -158,6 +169,16 @@ if __name__ == "__main__":
     ap.add_argument("--ip-weight", type=float, default=0.8,
                     help="how hard the style reference pulls")
     ap.add_argument("--positive", default=POSITIVE)
+    # Per-image colour notes, appended to the positive prompt. This is what keeps a
+    # subject's signature colour alive against the style reference's palette —
+    # measured: "The train is bright scarlet red" is the difference between a red
+    # Glacier Express and a blue-white one. Name only colours the photograph
+    # actually has.
+    #   glacier  "The train is bright scarlet red. The viaduct is pale grey-white stone."
+    #   matterhorn "The mountain is grey stone with bright white snow. The lake is deep blue."
+    ap.add_argument("--accent", default="",
+                    help="per-image colour note appended to the positive prompt, "
+                         "e.g. 'The train is bright scarlet red.'")
     ap.add_argument("--negative", default=NEGATIVE)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--steps", type=int, default=30)
@@ -167,6 +188,8 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.controlnet is None:
         a.controlnet = CONTROLNETS[a.preprocessor]
+    if a.accent:
+        a.positive = f"{a.positive}. {a.accent}"
     print(f"{a.image} -> {a.prefix}  {a.preprocessor}/{a.controlnet} "
           f"cn={a.cn_strength} ip={a.ip_weight} cfg={a.cfg}")
     run(build(a))
