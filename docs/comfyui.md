@@ -261,6 +261,33 @@ Two consequences:
 - Headroom is still thin at 30.2 GB. Stopping ollama frees ~9.5 GB and is the
   largest single lever if a run needs it.
 
+## Before you run: `make comfy-preflight`
+
+Two layers stop a generation run taking the box down, because one already did.
+
+**`mem_limit: 20g` on the container** is the structural half. Without it the global
+kernel OOM killer chooses by `oom_score` across the whole machine, so the process
+that dies is not the process at fault — it killed ollama's `llama-server` once
+(13.7 GB anon-rss), a prod service with nothing to do with the run. A cgroup limit
+makes it a local problem: the kernel reclaims this container's memory first and,
+failing that, kills only this container — and then `docker inspect` reports
+`OOMKilled=true`, where the global killer leaves it `false`.
+
+**`make comfy-preflight`** is the operational half: it refuses before you start.
+`free=1` asks ollama to unload. Two traps it exists to report rather than hide:
+
+- **An unload does not stay unloaded.** `keep_alive: 0` drops the model after the
+  current request; the next request loads it straight back. Observed immediately —
+  gemma4:31b returned within seconds, because something on this box uses ollama
+  continuously.
+- **`/api/ps` is not the truth about VRAM.** After an unload it reports no resident
+  models while `llama-server` still holds its allocation at the KFD level —
+  measured at `/api/ps` "none" against `rocm-smi` "llama-server 18.9 GiB". The
+  process keeps its context and buffers. Only restarting ollama returns that, which
+  the preflight prints the command for and deliberately does not do on its own.
+
+So `rocm-smi` is authoritative for VRAM and `/api/ps` is a hint.
+
 ## GPU contention
 
 The R9700 is shared. `ollama` holds ~20 GiB while a 30B model is resident and

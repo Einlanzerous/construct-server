@@ -97,6 +97,29 @@ services:
     # dataloader and pinned-memory paths — without joining anything.
     shm_size: 8gb
 
+    # A HARD MEMORY CEILING, so this can never take the box down again.
+    #
+    # It did. Driving a Kontext run put the host at 414 MB available and the global
+    # kernel OOM killer fired three times — twice on ComfyUI, and ONCE ON OLLAMA's
+    # llama-server (13.7 GB anon-rss), which is a prod service that had nothing to
+    # do with it. The global killer chooses by oom_score across the whole machine,
+    # so the process that dies is not the process at fault: 33 prod containers were
+    # candidates.
+    #
+    # A cgroup limit converts that into a local problem. Over this ceiling the
+    # kernel reclaims THIS container's memory and, failing that, kills only this
+    # container — and `docker inspect` then reports OOMKilled=true, where the global
+    # killer leaves it false and the event invisible. It reads as a smaller number
+    # than the box has on purpose: the headroom above it is what prod gets to keep.
+    #
+    # 20g is measured, not picked: a successful Kontext run peaks around 15 GB above
+    # a quiet baseline, and the two kills recorded 12.3 GB and 16.2 GB anon-rss.
+    # Raising it is a decision about how much of the host prod is allowed to lose.
+    # It works WITH --mmap-torch-files below rather than against it: mmapped weights
+    # are file-backed, so the kernel can evict them to stay under this ceiling
+    # instead of killing anything.
+    mem_limit: 20g
+
     # Not root. Files written into the bind mount below — generated images,
     # downloaded models, saved workflows — land owned by the invoking user
     # instead of root, which is the difference between being able to manage the
