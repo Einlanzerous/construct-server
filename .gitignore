@@ -55,3 +55,21 @@ ticket-comment.md
 # a blanket ignore would swallow it silently (SERV-145).
 .claude/settings.local.json
 .claude/worktrees/
+
+# ComfyUI source photos and style references (IDEA-52). Personal photographs and
+# scans of physical items, dropped here for convenience — THIS REPO IS PUBLIC, so
+# they must never be committed. They are inputs, not stack files: the service
+# reads them from ${COMFYUI_DATA_DIR}/input (default /srv/comfyui/input), which is
+# outside every checkout by design, and nothing in git needs to know they exist.
+#
+# The directory, plus photo extensions AT THE REPO ROOT ONLY. The leading slash
+# is deliberate and is the SERV-145 lesson applied: a blanket `*.jpg` would ignore
+# an image anywhere in the tree for ever, including a future doc or wiki asset
+# somebody adds and then cannot work out why git will not see. Root-only covers
+# the actual failure mode — a photo dropped beside the compose file, where
+# `git add -A` takes it — and a public push is not a revert (SERV-31).
+comfyui_images/
+/*.JPG
+/*.jpg
+/*.jpeg
+/*.png
