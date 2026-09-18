@@ -97,6 +97,29 @@ services:
     # dataloader and pinned-memory paths — without joining anything.
     shm_size: 8gb
 
+    # A HARD MEMORY CEILING, so this can never take the box down again.
+    #
+    # It did. Driving a Kontext run put the host at 414 MB available and the global
+    # kernel OOM killer fired three times — twice on ComfyUI, and ONCE ON OLLAMA's
+    # llama-server (13.7 GB anon-rss), which is a prod service that had nothing to
+    # do with it. The global killer chooses by oom_score across the whole machine,
+    # so the process that dies is not the process at fault: 33 prod containers were
+    # candidates.
+    #
+    # A cgroup limit converts that into a local problem. Over this ceiling the
+    # kernel reclaims THIS container's memory and, failing that, kills only this
+    # container — and `docker inspect` then reports OOMKilled=true, where the global
+    # killer leaves it false and the event invisible. It reads as a smaller number
+    # than the box has on purpose: the headroom above it is what prod gets to keep.
+    #
+    # 20g is measured, not picked: a successful Kontext run peaks around 15 GB above
+    # a quiet baseline, and the two kills recorded 12.3 GB and 16.2 GB anon-rss.
+    # Raising it is a decision about how much of the host prod is allowed to lose.
+    # It works WITH --mmap-torch-files below rather than against it: mmapped weights
+    # are file-backed, so the kernel can evict them to stay under this ceiling
+    # instead of killing anything.
+    mem_limit: 20g
+
     # Not root. Files written into the bind mount below — generated images,
     # downloaded models, saved workflows — land owned by the invoking user
     # instead of root, which is the difference between being able to manage the
@@ -190,6 +213,31 @@ services:
       - /data/temp
       - --user-directory
       - /data/user
+      # SYSTEM RAM, NOT VRAM, IS THE BINDING CONSTRAINT ON THIS BOX (IDEA-52).
+      #
+      # The R9700 has 32 GiB of VRAM and the host has 31 GiB of RAM, and ComfyUI
+      # stages weights through the latter. Loading FLUX.1 Kontext fp8 (12 GB) plus
+      # t5xxl fp8 (5 GB) against an ollama that holds ~9.5 GB resident, on a box
+      # whose 8 GB swap was already ~90% used, put the machine at 31.5 GB used /
+      # 414 MB available and the KERNEL killed ComfyUI: `global_oom`, `Killed
+      # process (python3)`, 12.3 GB anon-rss. Reproducible, twice.
+      #
+      # Note the shape of that failure — the container is SIGKILLed and
+      # `restart: unless-stopped` brings it straight back, so `docker ps` shows a
+      # healthy container and the only evidence is a RemoteDisconnected in
+      # whatever was driving the API. Nothing here goes red.
+      #
+      # --mmap-torch-files makes the weights file-backed rather than anonymous, so
+      # the kernel can evict them under pressure instead of OOMing; --cache-none
+      # stops ComfyUI retaining models between prompts. Together: peak 30.2 GB and
+      # the same run completes. They cost reload time on each prompt, which is the
+      # right trade when the alternative is being killed.
+      #
+      # Consequence for the bake-off, and it is a real one: FLUX.2 dev is ~32 GB of
+      # weights at fp8, which cannot be staged in 31 GB of RAM at all. On this box
+      # it is ruled out by host memory before VRAM is even consulted.
+      - --mmap-torch-files
+      - --cache-none
 
     healthcheck:
       # A real HTTP GET of the API, not a process check: ComfyUI's server can be

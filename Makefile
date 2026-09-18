@@ -4,7 +4,7 @@
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve \
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
-        comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu
+        comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -783,6 +783,19 @@ comfy-logs: comfy-file
 # and then dispatches to no gfx1201 kernel — see services/comfyui/Dockerfile.
 comfy-health: comfy-file
 	@./services/comfyui/comfy-check.sh
+
+# Can this box take a generation run RIGHT NOW? Checks system RAM (the constraint
+# that actually binds — the host has 31 GiB against the card's 32) and VRAM, and
+# names what is holding them. `free=1` asks ollama to unload first.
+#
+# Run this BEFORE a generation, not after wondering what went wrong. Driving a
+# Kontext run without it put the host at 414 MB available and the global kernel OOM
+# killer fired three times — twice on ComfyUI and once on ollama's llama-server,
+# which is a prod service that had nothing to do with it.
+# Usage: make comfy-preflight
+#        make comfy-preflight free=1
+comfy-preflight:
+	@./services/comfyui/comfy-preflight.sh $(if $(free),--free)
 
 # Who holds the GPU right now. The R9700 is shared with ollama, which keeps a 30B
 # model resident at ~20 GB — so this is the target to run before wondering why a
