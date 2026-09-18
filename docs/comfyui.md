@@ -247,11 +247,18 @@ count nobody is watching. `docker inspect` even reports `OOMKilled=false`, becau
 that flag means the *cgroup* limit was hit — this was the global kernel OOM
 killer, which is a different thing wearing the same word.
 
-The fix is two flags in `command:`. `--mmap-torch-files` makes weights file-backed
-rather than anonymous, so the kernel can evict them under pressure instead of
-OOMing; `--cache-none` stops ComfyUI retaining models between prompts. Peak drops
-to 30.2 GB and the same run completes. Both cost reload time per prompt, which is
-the right trade against being killed.
+The fix is one flag in `command:`. **`--cache-none`** stops ComfyUI retaining
+models between prompts; peak drops to 30.2 GB and the same run completes, at the
+cost of a reload per prompt — the right trade against being killed.
+
+`--mmap-torch-files` was tried alongside it and is **inert here**, which is worth
+recording so it is not re-added. `comfy/utils.py` reads `MMAP_TORCH_FILES` in
+exactly one place (line 188), inside the `else` branch of `load_torch_file` — the
+ckpt/pt path. Every model in this pipeline is `.safetensors`, which takes the
+`safe_open` branch above it and never consults the flag. The existence of the
+opposite flag, `--disable-mmap`, is the tell: safetensors are memory-mapped
+**already**, by default. So the weights were file-backed either way, and the
+credit for the fix belongs entirely to `--cache-none`.
 
 Two consequences:
 
@@ -336,8 +343,10 @@ Recorded here because it cost an afternoon and the failure is deceptive.
 source pushed through that path returned the reference itself: the Matterhorn,
 Zermatt and Glacier Express photographs all produced the Nikko waterfall, mean
 |pixel difference| 16.3 / 34.6 / 18.3 against the generated Nikko on a 128x170
-grayscale — near-identical, not merely similar. One run copied the reference's
-cream border as well.
+grayscale, on a scale where 0 is the same image and anything above about 40 is an
+unrelated one. Near-identical, not merely similar — and 34.6 is the loosest of the
+three, so read it against that ceiling rather than on its own. One run copied the
+reference's cream border as well.
 
 Three mechanisms, all the same: a chained second `ReferenceLatent`, the same chain
 with the order reversed, and `ImageStitch` with an instruction naming which half to

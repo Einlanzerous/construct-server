@@ -227,16 +227,21 @@ services:
       # healthy container and the only evidence is a RemoteDisconnected in
       # whatever was driving the API. Nothing here goes red.
       #
-      # --mmap-torch-files makes the weights file-backed rather than anonymous, so
-      # the kernel can evict them under pressure instead of OOMing; --cache-none
-      # stops ComfyUI retaining models between prompts. Together: peak 30.2 GB and
-      # the same run completes. They cost reload time on each prompt, which is the
-      # right trade when the alternative is being killed.
+      # --cache-none stops ComfyUI retaining models between prompts, and it is
+      # doing ALL of the work: peak 30.2 GB and the same run completes. It costs a
+      # reload on each prompt, which is the right trade against being killed.
+      #
+      # --mmap-torch-files was here too and was INERT. comfy/utils.py reads
+      # MMAP_TORCH_FILES in exactly one place (line 188), inside the `else` branch
+      # of load_torch_file — the ckpt/pt path. Every model here is .safetensors,
+      # which takes the safe_open branch above it and never consults the flag. The
+      # opposite flag, --disable-mmap, is the tell: safetensors are memory-mapped
+      # ALREADY, by default, which is why the weights were file-backed regardless.
+      # Removed rather than left in as a charm.
       #
       # Consequence for the bake-off, and it is a real one: FLUX.2 dev is ~32 GB of
       # weights at fp8, which cannot be staged in 31 GB of RAM at all. On this box
       # it is ruled out by host memory before VRAM is even consulted.
-      - --mmap-torch-files
       - --cache-none
 
     healthcheck:
