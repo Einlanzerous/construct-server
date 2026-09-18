@@ -85,6 +85,35 @@ RUN git clone https://github.com/city96/ComfyUI-GGUF /opt/ComfyUI/custom_nodes/C
     && git -C /opt/ComfyUI/custom_nodes/ComfyUI-GGUF checkout -q ${GGUF_REF} \
     && pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt
 
+# Track B (IDEA-52): SDXL + ControlNet + IP-Adapter. These two exist because Track A
+# could not separate structure from style — Kontext's ReferenceLatent carries a
+# reference image's composition along with its style and offers no weight to turn
+# that down, so every source came back as the reference. ControlNet holds the
+# geometry and IP-Adapter holds the style, each with its OWN strength, which is the
+# knob that was missing.
+#
+# IPAdapter_plus supplies the adapter nodes; controlnet_aux supplies the depth and
+# lineart preprocessors (the objective asks for both, not just Canny — Canny on a
+# full-res mirrorless frame picks up snow texture and cobblestones).
+ARG IPADAPTER_REF=a0f451a5113cf9becb0847b92884cb10cbdec0ef
+RUN git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus \
+      /opt/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus \
+    && git -C /opt/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus checkout -q ${IPADAPTER_REF}
+
+# controlnet_aux pins opencv and friends; --no-deps is NOT used, but note it pulls a
+# large preprocessor stack. Its requirements name `torch` nowhere, which is checked:
+# a node whose requirements did would reinstall this image's ROCm torch from PyPI's
+# CUDA build, and Manager's PIPFixer rollback is not present to catch it (the manager
+# is not loaded here at all — see docker-compose.comfyui.yml).
+ARG CONTROLNET_AUX_REF=59b1fc411ede8623b2997855b8018f0b3b6cf49f
+RUN git clone https://github.com/Fannovel16/comfyui_controlnet_aux \
+      /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux \
+    && git -C /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux checkout -q ${CONTROLNET_AUX_REF} \
+    && ! grep -qiE '^\s*torch(vision|audio)?\s*[=<>]' \
+         /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux/requirements.txt \
+    && pip install --no-cache-dir \
+         -r /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux/requirements.txt
+
 # Let git READ /opt/ComfyUI as the uid this container runs as. The clone happens
 # here as root, so without this every git call from inside the app fails with
 # `detected dubious ownership in repository` — which is not cosmetic: the

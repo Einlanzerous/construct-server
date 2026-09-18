@@ -157,6 +157,16 @@ services:
       # thrown away on every recreate and paid again on the next generation.
       - MIOPEN_USER_DB_PATH=/data/.cache/miopen
       - MIOPEN_CUSTOM_CACHE_DIR=/data/.cache/miopen
+      # comfyui_controlnet_aux downloads preprocessor checkpoints at RUN time, and
+      # by default into its own directory under /opt/ComfyUI — which is root-owned
+      # precisely so ComfyUI cannot modify itself, so the download fails with
+      # `PermissionError: .../comfyui_controlnet_aux/ckpts`. Only SOME preprocessors
+      # hit it: the depth one fetches through huggingface_hub and lands in HF_HOME
+      # below, which is writable, while the lineart one uses a direct torch download
+      # into that path and dies. So the failure looks preprocessor-specific and is
+      # really a permissions one. Pointing it at the mount also means the checkpoint
+      # is fetched once rather than on every recreate.
+      - AUX_ANNOTATOR_CKPTS_PATH=/data/.cache/controlnet_aux
       - HF_HOME=/data/.cache/huggingface
       - TORCHINDUCTOR_CACHE_DIR=/data/.cache/torchinductor
 

@@ -379,3 +379,48 @@ style channel: **IP-Adapter (Track B)** or a trained LoRA. Track A's failure is 
 argument for the classic SDXL + ControlNet + IP-Adapter route rather than a
 detour from it — ControlNet holds geometry, the adapter holds style, each with its
 own strength.
+
+
+## Track B: SDXL + ControlNet + IP-Adapter
+
+The answer to what Track A could not do. Two channels with **independent weights**,
+which is exactly the knob `ReferenceLatent` does not expose:
+
+```
+geometry -> lineart or depth map -> ControlNet   --cn-strength
+style    -> the Nikko artwork    -> IP-Adapter   --ip-weight
+```
+
+`services/comfyui/workflows/sdxl_trackb.py`. It works: the style lands as the house
+palette and flat-vector treatment while the photograph's composition survives —
+mountain, lake and reflection all present, which no Track A run with a style
+reference achieved.
+
+### Lineart beats depth for a subject defined by its outline
+
+Worth knowing before reaching for depth by default, which is what the objective's
+phrasing suggests. The first Matterhorn run used `DepthAnythingPreprocessor` and
+lost the peak's silhouette entirely: the mountain renders as a near-black,
+undifferentiated far-field mass, so the ControlNet had almost no geometry to hold
+and produced a generic green hill.
+
+The lineart map of the same frame captures the asymmetric peak *and* its
+reflection in the lake cleanly. Depth remains the right choice for layered scenes,
+where it supplies the foreground/midground/background banding a poster is built
+from — it is subject-dependent, not one-better-than-the-other. Pair each
+preprocessor with its matching ControlNet (`--preprocessor` and `--controlnet`
+move together).
+
+### A permissions trap that looks like a preprocessor bug
+
+`comfyui_controlnet_aux` downloads preprocessor checkpoints at **run** time, by
+default into its own directory under `/opt/ComfyUI` — which is root-owned
+precisely so ComfyUI cannot modify itself. The lineart preprocessor therefore dies
+with `PermissionError: .../comfyui_controlnet_aux/ckpts` while the depth one works
+fine, because depth fetches through `huggingface_hub` into the writable `HF_HOME`
+and lineart uses a direct torch download into that path.
+
+So it presents as "lineart is broken" and is really a permissions problem.
+`AUX_ANNOTATOR_CKPTS_PATH=/data/.cache/controlnet_aux` in the compose file fixes
+it, and puts the checkpoint in the mount so it is fetched once rather than on
+every recreate.
