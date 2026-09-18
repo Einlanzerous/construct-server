@@ -85,6 +85,54 @@ RUN git clone https://github.com/city96/ComfyUI-GGUF /opt/ComfyUI/custom_nodes/C
     && git -C /opt/ComfyUI/custom_nodes/ComfyUI-GGUF checkout -q ${GGUF_REF} \
     && pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt
 
+# Track B (IDEA-52): SDXL + ControlNet + IP-Adapter. These two exist because Track A
+# could not separate structure from style — Kontext's ReferenceLatent carries a
+# reference image's composition along with its style and offers no weight to turn
+# that down, so every source came back as the reference. ControlNet holds the
+# geometry and IP-Adapter holds the style, each with its OWN strength, which is the
+# knob that was missing.
+#
+# IPAdapter_plus supplies the adapter nodes; controlnet_aux supplies the depth and
+# lineart preprocessors (the objective asks for both, not just Canny — Canny on a
+# full-res mirrorless frame picks up snow texture and cobblestones).
+ARG IPADAPTER_REF=a0f451a5113cf9becb0847b92884cb10cbdec0ef
+RUN git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus \
+      /opt/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus \
+    && git -C /opt/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus checkout -q ${IPADAPTER_REF}
+
+# controlnet_aux pulls a large preprocessor stack, and its requirements.txt DOES
+# name torch — line 1 is a bare `torch` and line 10 a bare `torchvision` at the
+# pinned ref. That is safe, and the distinction is the whole point of the guard
+# below: pip treats an unpinned requirement as already satisfied by this image's
+# torch 2.11.0+rocm7.2, so nothing is fetched. A VERSIONED one is a different
+# thing entirely — `torch~=2.12`, `torch!=2.11.0` or a `torch @ https://…` direct
+# reference all make pip go and get it, and what it gets from PyPI is the CUDA
+# build, which replaces the ROCm torch and dies at import with
+# `libcudart.so.13: cannot open shared object file` (see the top of this file).
+# ComfyUI-Manager's PIPFixer would normally roll that back; it is not loaded here
+# at all, so this guard is the only thing between a ref bump and that failure.
+#
+# The character class is therefore every character a pip specifier can START with
+# — = ! < > ~ @ — and NOT just [=<>], which was the first attempt and matched
+# neither `torch~=2.12` nor a direct reference. It fails with a sentence rather
+# than a bare exit 1, because a guard that stops a build without saying why is
+# the thing this repo keeps having to fix.
+ARG CONTROLNET_AUX_REF=59b1fc411ede8623b2997855b8018f0b3b6cf49f
+RUN git clone https://github.com/Fannovel16/comfyui_controlnet_aux \
+      /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux \
+    && git -C /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux checkout -q ${CONTROLNET_AUX_REF} \
+    && if grep -qiE '^[[:space:]]*torch(vision|audio)?[[:space:]]*[=!<>~@]' \
+            /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux/requirements.txt; then \
+         echo "ERROR: comfyui_controlnet_aux at ${CONTROLNET_AUX_REF} pins a torch version:"; \
+         grep -inE '^[[:space:]]*torch(vision|audio)?[[:space:]]*[=!<>~@]' \
+            /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux/requirements.txt; \
+         echo "Installing it would pull PyPI's CUDA torch over this image's ROCm build."; \
+         echo "Install that requirements file with the torch lines stripped, or hold the ref."; \
+         exit 1; \
+       fi \
+    && pip install --no-cache-dir \
+         -r /opt/ComfyUI/custom_nodes/comfyui_controlnet_aux/requirements.txt
+
 # Let git READ /opt/ComfyUI as the uid this container runs as. The clone happens
 # here as root, so without this every git call from inside the app fails with
 # `detected dubious ownership in repository` — which is not cosmetic: the

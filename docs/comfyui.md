@@ -379,3 +379,84 @@ style channel: **IP-Adapter (Track B)** or a trained LoRA. Track A's failure is 
 argument for the classic SDXL + ControlNet + IP-Adapter route rather than a
 detour from it — ControlNet holds geometry, the adapter holds style, each with its
 own strength.
+
+
+## Track B: SDXL + ControlNet + IP-Adapter
+
+The answer to what Track A could not do. Two channels with **independent weights**,
+which is exactly the knob `ReferenceLatent` does not expose:
+
+```
+geometry -> lineart or depth map -> ControlNet   --cn-strength
+style    -> the Nikko artwork    -> IP-Adapter   --ip-weight
+```
+
+`services/comfyui/workflows/sdxl_trackb.py`. It works: the style lands as the house
+palette and flat-vector treatment while the photograph's composition survives —
+mountain, lake and reflection all present, which no Track A run with a style
+reference achieved.
+
+### Lineart beats depth for a subject defined by its outline
+
+Worth knowing before reaching for depth by default, which is what the objective's
+phrasing suggests. The first Matterhorn run used `DepthAnythingPreprocessor` and
+lost the peak's silhouette entirely: the mountain renders as a near-black,
+undifferentiated far-field mass, so the ControlNet had almost no geometry to hold
+and produced a generic green hill.
+
+The lineart map of the same frame captures the asymmetric peak *and* its
+reflection in the lake cleanly. Depth remains the right choice for layered scenes,
+where it supplies the foreground/midground/background banding a poster is built
+from — it is subject-dependent, not one-better-than-the-other. Pair each
+preprocessor with its matching ControlNet (`--preprocessor` and `--controlnet`
+move together).
+
+### The weights this workflow needs
+
+`/srv/comfyui` is outside git by design, so after a host rebuild nothing in the
+repo would say what to fetch or where it goes. `models/ipadapter/` in particular
+is a directory only the custom node knows about.
+
+| file | `models/` subdir | source repo (all ungated) |
+|---|---|---|
+| `sd_xl_base_1.0.safetensors` | `checkpoints/` | `stabilityai/stable-diffusion-xl-base-1.0` |
+| `controlnet-depth-sdxl.safetensors` | `controlnet/` | `xinsir/controlnet-depth-sdxl-1.0` (`diffusion_pytorch_model.safetensors`, renamed) |
+| `controlnet-scribble-sdxl.safetensors` | `controlnet/` | `xinsir/controlnet-scribble-sdxl-1.0` (same filename, renamed) — this is the **lineart** pairing |
+| `ip-adapter-plus_sdxl_vit-h.safetensors` | `ipadapter/` | `h94/IP-Adapter`, `sdxl_models/` |
+| `CLIP-ViT-H-14-laion2B.safetensors` | `clip_vision/` | `h94/IP-Adapter`, `models/image_encoder/model.safetensors`, renamed |
+
+~14.5 GB total. The preprocessor checkpoints are fetched on first use into
+`/data/.cache/` and are not listed here because nothing chooses them by hand.
+
+**The custom nodes live in the image, so a `git pull` alone does not get them:**
+
+```
+make comfy-build && make comfy-recreate
+```
+
+`make comfy-up` runs `up -d` with no `--build`, and the image tag is keyed only to
+`COMFYUI_REF` — so on a box where that tag already exists, a compose change
+recreates the container against the OLD image and the workflow then fails at
+submit with an unknown node type, while the container is healthy and on the
+"right" tag.
+
+### A permissions trap that looks like a preprocessor bug
+
+`comfyui_controlnet_aux` downloads preprocessor checkpoints at **run** time, by
+default into its own directory under `/opt/ComfyUI` — which is root-owned
+precisely so ComfyUI cannot modify itself. The lineart preprocessor therefore dies
+with `PermissionError: .../comfyui_controlnet_aux/ckpts` while the depth one works
+fine, because depth fetches through `huggingface_hub` into the writable `HF_HOME`
+and lineart uses a direct torch download into that path.
+
+So it presents as "lineart is broken" and is really a permissions problem.
+`AUX_ANNOTATOR_CKPTS_PATH=/data/.cache/controlnet_aux` in the compose file fixes
+it, and puts the checkpoint in the mount so it is fetched once rather than on
+every recreate.
+
+**Do not verify that fix from the boot log.** `util.py` logs `Using ckpts path: …`
+from the value computed *before* it consults the environment variable, so the line
+keeps printing `/opt/ComfyUI/custom_nodes/comfyui_controlnet_aux/ckpts` however the
+variable is set. The fix works — the lineart preprocessor runs — but the log says
+it did not. Check `/srv/comfyui/.cache/controlnet_aux` for the downloaded
+checkpoint instead.
