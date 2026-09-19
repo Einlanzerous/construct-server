@@ -98,28 +98,23 @@ func main() {
 
 	// The art panel sits inside the frame on the top and both sides. Its height
 	// comes from the art's own aspect unless --title-band pins the bottom band.
-	panelX, panelY := *border, *border
-	panelW := *wmm - 2**border
-	var panelH float64
-	if *titleH > 0 {
-		panelH = *hmm - *border - *titleH
-	} else {
+	var artW, artH int
+	if *titleH <= 0 {
 		cfg, err := png.DecodeConfig(strings.NewReader(string(artData)))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "poster: cannot read the size of --art %q to derive "+
 				"the layout: %v\nPass --title-band to set the bottom band by hand.\n", *art, err)
 			os.Exit(1)
 		}
-		panelH = panelW * float64(cfg.Height) / float64(cfg.Width)
+		artW, artH = cfg.Width, cfg.Height
 	}
-	bandTop := panelY + panelH // the bottom band runs from here to the trim
-	bandH := *hmm - bandTop
-	if panelW <= 0 || panelH <= 0 || bandH < *border {
-		fmt.Fprintf(os.Stderr, "poster: a %.1fmm frame and this art's aspect leave no room "+
-			"for a bottom band in %.1fx%.1fmm (band would be %.1fmm)\n",
-			*border, *wmm, *hmm, bandH)
+	g, err := computeLayout(*wmm, *hmm, *border, *titleH, artW, artH)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "poster: %v\n", err)
 		os.Exit(1)
 	}
+	panelX, panelY, panelW, panelH := g.panelX, g.panelY, g.panelW, g.panelH
+	bandTop, bandH := g.bandTop, g.bandH
 
 	// Bleed grows the canvas and shifts the origin, so trim coordinates stay the
 	// numbers above and the frame colour simply runs past the cut.
@@ -163,24 +158,17 @@ func main() {
 	// its cap height — about 0.66 of the size for Liberation Serif. With no country
 	// line the name sits alone and is centred in the whole band; with one, the pair
 	// is centred as a block.
-	const capRatio = 0.66
-	var placeY, countryY float64
-	if *country == "" {
-		placeY = oy + bandTop + bandH/2 + *placePt*capRatio/2
-	} else {
-		gap := 2.2
-		block := *placePt*capRatio + gap + *countryPt*capRatio
-		top := oy + bandTop + (bandH-block)/2
-		placeY = top + *placePt*capRatio
-		countryY = placeY + gap + *countryPt*capRatio
-	}
+	placeY, countryY := titleBaselines(bandTop, bandH, *placePt, *countryPt, *country != "")
+	placeY += oy
+	countryY += oy
 
 	// The country line is omitted entirely rather than emitted empty, so the SVG
 	// carries nothing a print shop could mistake for a missing field.
 	countryLine := ""
 	if *country != "" {
 		countryLine = fmt.Sprintf("\n  <text class=\"country\" x=\"%.2f\" y=\"%.2f\" "+
-			"text-anchor=\"middle\">%s</text>", ox+*wmm/2, countryY, html.EscapeString(*country))
+			"text-anchor=\"middle\">%s</text>",
+			ox+*wmm/2+countryTrack(*track)/2, countryY, html.EscapeString(*country))
 	}
 
 	svg := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
@@ -210,7 +198,7 @@ func main() {
 		canvasW, canvasH, canvasW, canvasH,
 		fontCSS,
 		*fontFam, *placePt, *track, *ink,
-		*fontFam, *countryPt, *track*0.6, *ink,
+		*fontFam, *countryPt, countryTrack(*track), *ink,
 		canvasW, canvasH, *cream,
 		ox+panelX, oy+panelY, panelW, panelH,
 		ox+panelX, oy+panelY, panelW, panelH,
@@ -262,3 +250,54 @@ func wellFormed(doc string) error {
 		}
 	}
 }
+
+// layout is the geometry of one magnet, in trim millimetres.
+type layout struct {
+	panelX, panelY, panelW, panelH float64
+	bandTop, bandH                 float64 // the bottom band, panel edge to trim
+}
+
+// computeLayout places the art panel inside a frame on the top and both sides.
+// With titleBand <= 0 the panel height is DERIVED from the art's aspect, so the
+// panel matches the image exactly and nothing is cropped; otherwise titleBand
+// pins the bottom band. Pure so the arithmetic is testable without rendering —
+// the review on #219 pointed out that the visual change had no test at all.
+func computeLayout(w, h, border, titleBand float64, artW, artH int) (layout, error) {
+	g := layout{panelX: border, panelY: border, panelW: w - 2*border}
+	if titleBand > 0 {
+		g.panelH = h - border - titleBand
+	} else {
+		if artW <= 0 || artH <= 0 {
+			return layout{}, fmt.Errorf("art has no usable size (%dx%d)", artW, artH)
+		}
+		g.panelH = g.panelW * float64(artH) / float64(artW)
+	}
+	g.bandTop = g.panelY + g.panelH
+	g.bandH = h - g.bandTop
+	if g.panelW <= 0 || g.panelH <= 0 || g.bandH < border {
+		return layout{}, fmt.Errorf("a %.1fmm frame and this art's aspect leave no room for "+
+			"a bottom band in %.1fx%.1fmm (band would be %.1fmm)", border, w, h, g.bandH)
+	}
+	return g, nil
+}
+
+// capRatio is cap height over font size for Liberation Serif. SVG positions text
+// by its BASELINE, so centring an all-caps line means offsetting by half of this.
+const capRatio = 0.66
+
+// titleBaselines returns the baselines, in trim mm, that centre the title in the
+// bottom band — the name alone, or the name and country as one block.
+func titleBaselines(bandTop, bandH, placePt, countryPt float64, hasCountry bool) (placeY, countryY float64) {
+	if !hasCountry {
+		return bandTop + bandH/2 + placePt*capRatio/2, 0
+	}
+	const gap = 2.2
+	block := placePt*capRatio + gap + countryPt*capRatio
+	top := bandTop + (bandH-block)/2
+	placeY = top + placePt*capRatio
+	return placeY, placeY + gap + countryPt*capRatio
+}
+
+// countryTrack is the country line's letter-spacing, lighter than the place
+// line's. One function so the CSS and the centring correction cannot disagree.
+func countryTrack(track float64) float64 { return track * 0.6 }
