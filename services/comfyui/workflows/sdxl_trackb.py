@@ -26,12 +26,17 @@ API = "http://127.0.0.1:8188"
 
 # Treatment, not content — the Track A lesson applies unchanged. Naming scene
 # elements makes the model draw them and discard the photograph.
-# DESCRIBES TREATMENT AND VALUE, NEVER HUE. An earlier version prescribed the
-# palette outright ("deep navy and dark teal shadows … sage and olive greens") and
-# that fought the photograph: the Glacier Express's scarlet train came out blue-
-# white, and the Matterhorn's grey rock and white snow came out as a green hill.
-# The IP-Adapter is already supplying the reference's palette; prescribing one in
-# words as well leaves the subject's own colour nowhere to go.
+# DESCRIBES TREATMENT AND VALUE, NEVER HUE — AND NEVER SATURATION EITHER.
+# The previous version of this string ended "strong graphic value contrast,
+# limited muted palette", and `muted` was the whole problem: it desaturated the
+# subject, so the Glacier Express's scarlet train rendered blue-white and the
+# Matterhorn's grey rock and white snow rendered as a green hill. Two words, and
+# no hue was ever named.
+#
+# The IP-Adapter is already supplying the reference's palette, so any instruction
+# here about colour — its hue OR its intensity — only subtracts from what the
+# photograph brought. Ask for value contrast, which is about light and dark, and
+# leave chroma to the image and to --accent.
 #
 # Naming a subject's REAL colours is not the content-prompting mistake Track A
 # made — that was naming scene elements which were not in the photograph. Use
@@ -160,13 +165,20 @@ if __name__ == "__main__":
     # Lineart captures exactly the edge that depth throws away. Depth is still
     # right for layered scenes, where it gives the fore/mid/background banding a
     # poster is built from. Pair each with its matching --controlnet.
-    ap.add_argument("--preprocessor", choices=["depth", "lineart"], default="depth")
-    ap.add_argument("--cn-strength", type=float, default=0.7,
+    # DEFAULTS ARE THE RECORDED RECIPE. They were depth / 0.7 / 0.8, which was
+    # reasonable when Track B landed and is now the two known failures in one
+    # invocation: depth hallucinates garbled display lettering on any subject
+    # containing a town, and ip 0.8 is ABOVE the 0.7 measured to bleed the
+    # reference's own content into the output — waterfalls under the Glacier
+    # Express viaduct. That last one is Track A's failure arriving gently, in the
+    # track that exists to avoid it, so a bare invocation must not reproduce it.
+    ap.add_argument("--preprocessor", choices=["depth", "lineart"], default="lineart")
+    ap.add_argument("--cn-strength", type=float, default=0.9,
                     help="how hard the depth map holds the geometry")
     ap.add_argument("--cn-end", type=float, default=0.8,
                     help="release the ControlNet before the end so late steps can "
                          "simplify shapes rather than tracing the depth map")
-    ap.add_argument("--ip-weight", type=float, default=0.8,
+    ap.add_argument("--ip-weight", type=float, default=0.55,
                     help="how hard the style reference pulls")
     ap.add_argument("--positive", default=POSITIVE)
     # Per-image colour notes, appended to the positive prompt. This is what keeps a

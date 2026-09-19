@@ -396,6 +396,39 @@ palette and flat-vector treatment while the photograph's composition survives �
 mountain, lake and reflection all present, which no Track A run with a style
 reference achieved.
 
+### The recipe
+
+```
+--preprocessor lineart  --cn-strength 0.9  --ip-weight 0.55  --accent "<subject colours>"
+```
+
+These are the script's defaults. They were `depth / 0.7 / 0.8`, which was
+reasonable when Track B landed and became, once the findings below were measured,
+the two known failures in one invocation — depth hallucinating display lettering
+on any subject containing a town, and `ip 0.8` sitting above the 0.7 that bleeds
+the reference's own content into the output.
+
+`ip` is the band that matters: 0.4 under-styles, 0.7 bleeds waterfalls out of the
+Nikko reference and under the Glacier Express viaduct. `cn 0.9` holds the
+silhouette — and lowering it does **not** simplify the output, which was tested:
+0.45, 0.65 and 0.90 are comparably dense and 0.45 merely loosens fidelity until
+the Matterhorn becomes a generic rounded hill.
+
+### Depth hallucinates type on a town
+
+| subject | depth | lineart |
+|---|---|---|
+| Matterhorn, Matterhorn alt (landscape) | clean | clean |
+| Glacier Express (single viaduct) | clean | clean |
+| **Zermatt, St Moritz (towns)** | **garbled display type** | clean |
+
+A depth map of dense facades and windows gives blocks of rectangular mid-tone that
+the model reads as lettering, and "vintage travel poster" pulls hard that way.
+Lineart traces the same buildings as outlines and produces none. A single large
+structure like the viaduct does not trigger it. **So use lineart for anything with
+buildings** — which also keeps the Phase 2 plan intact, since typography
+post-generation only holds if the model is not drawing type itself.
+
 ### Lineart beats depth for a subject defined by its outline
 
 Worth knowing before reaching for depth by default, which is what the objective's
@@ -442,12 +475,21 @@ submit with an unknown node type, while the container is healthy and on the
 
 ### Describe treatment and value, never hue
 
-The positive prompt prescribed a palette outright — *"deep navy and dark teal
-shadows … sage and olive greens"* — and that fought the photograph. The Glacier
-Express's scarlet train came out blue-white; the Matterhorn's grey rock and white
-snow came out as a green hill. The IP-Adapter is already supplying the reference's
-palette, so prescribing one in words as well leaves the subject's own colour
-nowhere to go.
+Two words did it. The Track B prompt ended `strong graphic value contrast,
+limited muted palette`, and **`muted` desaturated the subject**: the Glacier
+Express's scarlet train rendered blue-white, and the Matterhorn's grey rock and
+white snow rendered as a green hill. No hue was ever named.
+
+That is the surprising part and the reason this is worth a section. The
+IP-Adapter is already supplying the reference's palette, so any instruction here
+about colour — its hue *or* its intensity — only subtracts from what the
+photograph brought. Ask for value contrast, which is about light and dark, and
+leave chroma to the image and to `--accent`.
+
+(Track A's `kontext.py` does prescribe hue outright — "deep navy and dark teal
+shadows … sage and olive greens". It is left alone deliberately: that track is
+abandoned, its prompt is part of the recorded negative result, and editing it
+would make the record of what was actually run untrue.)
 
 Removing the prescribed hues and naming the subject's **real** colours per image
 recovers them: the train is scarlet again, the mountain is grey stone with white
