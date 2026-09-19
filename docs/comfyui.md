@@ -268,6 +268,20 @@ Two consequences:
 - Headroom is still thin at 30.2 GB. Stopping ollama frees ~9.5 GB and is the
   largest single lever if a run needs it.
 
+## Looking at what you generated
+
+`--enable-assets` is on, and it is the difference between a gallery and opening
+runs one node at a time. Without it the UI's only view of past generations is the
+**queue history**, which stores filename references rather than the files — so
+anything tidied off disk shows as "cannot load image" for ever, and the only way
+to see an old result is to expand its node.
+
+If that happens, the history is stale rather than the install broken:
+
+```
+curl -X POST http://127.0.0.1:8188/history -H 'Content-Type: application/json' -d '{"clear":true}'
+```
+
 ## Before you run: `make comfy-preflight`
 
 Two layers stop a generation run taking the box down, because one already did.
