@@ -487,6 +487,29 @@ recreates the container against the OLD image and the workflow then fails at
 submit with an unknown node type, while the container is healthy and on the
 "right" tag.
 
+### The reference brings its subject matter, not just its look
+
+The most persistent failure in this track, and the one that survived three
+rounds of tuning. **IP-Adapter carries the style reference's SUBJECT MATTER along
+with its rendering.** The Nikko poster is a lush green gorge, so every alpine
+scene came back overgrown: a viaduct of pale grey limestone rendered as a jungle,
+a fogbound village attacked by moss, bare rock with grass growing on it.
+
+Two things fix it together — neither alone was enough:
+
+- **`weight_type: style transfer`**, not `linear`. It isolates the reference's
+  rendering from its content. Because less is carried it wants a *higher* weight:
+  0.8 here against linear's 0.55. On its own this recovered the scarlet train but
+  left the vegetation.
+- **Vegetation terms in the negative prompt.** The negative had no colour or
+  subject terms at all, and SDXL at cfg 6 genuinely uses it (unlike FLUX at cfg 1,
+  where it is discarded). Adding `lush green vegetation, jungle, moss, overgrown,
+  tropical, dense foliage, summer greenery` is what actually cleared it.
+
+**That negative is tuned for the alpine set** — rock, snow, water. For a genuinely
+verdant subject, drop those terms with `--negative`, or the greens that belong
+there are suppressed too.
+
 ### Describe treatment and value, never hue
 
 Two words did it. The Track B prompt ended `strong graphic value contrast,
