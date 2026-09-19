@@ -1,5 +1,22 @@
 # Changelog
 
+## [4.33.0](https://github.com/Einlanzerous/construct-server/compare/v4.32.1...v4.33.0) (2026-09-19)
+
+
+### Features
+
+* **comfyui:** FLUX.1 Kontext poster workflow, and survive the host OOM it exposed (IDEA-52) ([#210](https://github.com/Einlanzerous/construct-server/issues/210)) ([cf8135f](https://github.com/Einlanzerous/construct-server/commit/cf8135fe87f27dc8740769b17992bdabdada7d65))
+* **comfyui:** run ComfyUI on the R9700 as its own compose project (IDEA-52) ([#207](https://github.com/Einlanzerous/construct-server/issues/207)) ([9660edb](https://github.com/Einlanzerous/construct-server/commit/9660edb3da5f21733c876cd19730bac6d65f30d2))
+* **comfyui:** Track B — SDXL + ControlNet + IP-Adapter, with the weights Track A lacked (IDEA-52) ([#212](https://github.com/Einlanzerous/construct-server/issues/212)) ([6309fdc](https://github.com/Einlanzerous/construct-server/commit/6309fdc99b9b823c41548e06d9d534a3211b0ab9))
+* **comfyui:** turn on the asset browser (IDEA-52) ([#214](https://github.com/Einlanzerous/construct-server/issues/214)) ([e8bbab5](https://github.com/Einlanzerous/construct-server/commit/e8bbab5e8edad34ff9af00ab30750ca3a44caa5d))
+* **poster:** SVG magnet template — frame, title band, embedded type (IDEA-52) ([#215](https://github.com/Einlanzerous/construct-server/issues/215)) ([6c2893b](https://github.com/Einlanzerous/construct-server/commit/6c2893bcfbe1a4779543f9d575d24c09c0368883))
+
+
+### Bug Fixes
+
+* **comfyui:** record that Kontext reproduces a style reference rather than applying it (IDEA-52) ([#211](https://github.com/Einlanzerous/construct-server/issues/211)) ([ae8989e](https://github.com/Einlanzerous/construct-server/commit/ae8989e3c038c982a41ba0ef63067dd4502ffede))
+* **comfyui:** stop the prompt prescribing a palette, add --accent for subject colour (IDEA-52) ([#213](https://github.com/Einlanzerous/construct-server/issues/213)) ([35e88a8](https://github.com/Einlanzerous/construct-server/commit/35e88a899cd7c6431e83aa2ab131906755226c03))
+
 ## [4.32.1](https://github.com/Einlanzerous/construct-server/compare/v4.32.0...v4.32.1) (2026-09-17)
 
 
