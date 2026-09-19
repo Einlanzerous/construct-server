@@ -24,25 +24,46 @@ title around it. The type is real vector type, identical on every magnet.
 The output is a physical object, so the SVG carries real `mm` dimensions. A print
 shop opening it gets the intended size without anyone agreeing a DPI first.
 
-Defaults are the chosen **8 × 5.5 cm** magnet in portrait, laid out like the Nikko
-reference — art panel inside a cream frame, title band beneath:
+Defaults are the chosen **8 × 5.5 cm** magnet in portrait, laid out as a
+**polaroid**: a thin even frame on the top and both sides, and a deeper band at the
+bottom carrying the place name alone.
 
 | | |
 |---|---|
 | trim | 55 × 80 mm |
 | bleed | 3 mm |
-| cream frame | 4 mm all round |
-| title band | 11 mm |
-| **art panel** | **47 × 61 mm → 0.7705** |
+| frame, top and sides | 3 mm |
+| art panel | 49 × 63 mm — **derived** |
+| bottom band | 14 mm — **derived** |
 
-The workflow generates 896 × 1152 (0.7778), so `preserveAspectRatio="xMidYMid slice"`
-crops about 1% of the height rather than letterboxing the art against the frame.
-That is 484 DPI across the panel — no upscale step is needed for print.
+**The bottom band is derived, not chosen.** Given the frame width, the panel's
+height follows from the art's own aspect, so the panel matches the image exactly
+and nothing is cropped; whatever remains is the band. At 3 mm that lands on a real
+Polaroid's proportions (bottom about 4.7× the side) without being tuned for it.
+Pass `--title-band` to pin the band instead.
 
-**The border and title-band figures are assumed, not measured** off the physical
-magnets. They were chosen so the art panel lands on the aspect already being
-generated. Measuring may shift them: that is a flag here and a one-line `W, H`
-change in `sdxl_trackb.py`.
+The first layout copied the Nikko reference — a 4 mm frame all round and a
+two-line title with the country beneath. It spent the top of a small object on a
+frame. `--country` still works and centres the pair as a block; it is off by
+default.
+
+**One type size for the set, set by the longest name.** At 6 mm "GLACIER EXPRESS"
+measured 60.6 mm against a 49 mm panel. 4.6 mm with 0.25 mm tracking fits it with
+1.2 / 1.6 mm to spare. Sizing each name to its own width would read as three
+different posters.
+
+**The frame width is assumed, not measured** off the physical magnets. Note that a
+thin frame is where trim tolerance shows: a ±1 mm cut makes a 3 mm border read
+anywhere from 2 to 4 mm, so ask the vendor what their tolerance is.
+
+## The output is validated before it is written
+
+XML forbids `--` inside a comment. An earlier version of this template had a
+comment naming the `--title-band` flag, and produced an SVG that Chrome showed as
+a parse error while this program exited 0. The output is now parsed before it is
+written and the program refuses rather than writing a broken file; the place name
+is also made comment-safe, since it is interpolated into one. `go test` covers
+both, including that the guard actually rejects the original failure.
 
 ## Fonts are embedded, not referenced
 
