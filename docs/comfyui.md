@@ -276,7 +276,46 @@ runs one node at a time. Without it the UI's only view of past generations is th
 anything tidied off disk shows as "cannot load image" for ever, and the only way
 to see an old result is to expand its node.
 
-If that happens, the history is stale rather than the install broken:
+**Generated files are only "generated" while they keep their prompt lineage.** An
+asset written by a run carries `prompt_id`, `job_id` and its pixel dimensions; the
+UI's generated view filters on that. A file `mv`'d or `cp`'d into place afterwards
+is indexed — it appears in `/api/assets` tagged `output`, and its preview returns
+200 — but with no lineage, so the UI reports **"no generated files found"** while
+listing the inputs you imported perfectly well.
+
+Tidying outputs into folders after the fact is therefore how they disappear.
+Generate *into* the folder instead, which `SaveImage` supports through a slash:
+
+```
+--prefix idea52-final/matterhorn      # -> /data/output/idea52-final/matterhorn_00001_.png
+```
+
+Anything produced outside ComfyUI — the SVG magnets from `tools/poster`, for
+instance — will never have lineage and is correctly a file rather than a
+generation.
+
+**The index never prunes, and never updates in place.** It is append-only per
+path: delete an output and its row stays, overwrite a filename and you get a
+*second* row rather than an updated one. A recreate does not reconcile either —
+after a round of experiments and cleanup this sat at 54 rows for 15 real files,
+9 of them pointing at deleted files and 9 duplicated. That is where a blank entry
+in the gallery comes from.
+
+The index is `user/comfyui.db`, and it holds **only** asset tables — settings and
+saved workflows are files under `user/default/`, so removing it is safe and it
+rebuilds on the next start:
+
+```
+make comfy-down && rm -f /srv/comfyui/user/comfyui.db* && make comfy-up
+```
+
+**But a rebuild scans the filesystem, which carries no lineage**, so everything
+comes back as a plain file and the generated view is empty again. To get both a
+clean index and working lineage, delete the files *and* the database, then
+regenerate — which is the only order that produces neither orphans nor duplicates.
+
+If instead the gallery shows a wall of broken thumbnails, the history is stale
+rather than the install broken:
 
 ```
 curl -X POST http://127.0.0.1:8188/history -H 'Content-Type: application/json' -d '{"clear":true}'
