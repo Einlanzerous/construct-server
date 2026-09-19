@@ -253,6 +253,12 @@ services:
       # weights at fp8, which cannot be staged in 31 GB of RAM at all. On this box
       # it is ruled out by host memory before VRAM is even consulted.
       - --cache-none
+      # The output browser. Without this the UI's only view of past generations is
+      # the queue history, which holds filename references rather than the files —
+      # so anything tidied off disk shows as "cannot load image" for ever, and the
+      # only way to look at a run is to open it one node at a time. With it,
+      # /data/output is indexed and browsable as a gallery.
+      - --enable-assets
 
     healthcheck:
       # A real HTTP GET of the API, not a process check: ComfyUI's server can be
