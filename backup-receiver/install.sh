@@ -80,7 +80,7 @@ load_config() {
   : "${REST_USER:?REST_USER is not set in .env}"
 
   if [ -z "${REST_PASSWORD:-}" ]; then
-    die "REST_PASSWORD is empty in .env. Generate one with:  openssl rand -base64 24"
+    die "REST_PASSWORD is empty in .env. Generate one with:  openssl rand -hex 24"
   fi
 }
 
