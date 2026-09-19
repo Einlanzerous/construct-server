@@ -294,6 +294,26 @@ Anything produced outside ComfyUI — the SVG magnets from `tools/poster`, for
 instance — will never have lineage and is correctly a file rather than a
 generation.
 
+**The index never prunes, and never updates in place.** It is append-only per
+path: delete an output and its row stays, overwrite a filename and you get a
+*second* row rather than an updated one. A recreate does not reconcile either —
+after a round of experiments and cleanup this sat at 54 rows for 15 real files,
+9 of them pointing at deleted files and 9 duplicated. That is where a blank entry
+in the gallery comes from.
+
+The index is `user/comfyui.db`, and it holds **only** asset tables — settings and
+saved workflows are files under `user/default/`, so removing it is safe and it
+rebuilds on the next start:
+
+```
+make comfy-down && rm -f /srv/comfyui/user/comfyui.db* && make comfy-up
+```
+
+**But a rebuild scans the filesystem, which carries no lineage**, so everything
+comes back as a plain file and the generated view is empty again. To get both a
+clean index and working lineage, delete the files *and* the database, then
+regenerate — which is the only order that produces neither orphans nor duplicates.
+
 If instead the gallery shows a wall of broken thumbnails, the history is stale
 rather than the install broken:
 
