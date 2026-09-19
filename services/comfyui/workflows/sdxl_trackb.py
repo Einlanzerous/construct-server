@@ -45,8 +45,19 @@ POSITIVE = ("vintage screen-printed travel poster, flat blocks of solid colour, 
             "crisp hard edges, no gradients, bold simplified shapes, strong graphic "
             "value contrast between deep shadows and pale highlights, keeping the "
             "subject's own real colours, vivid and saturated")
+# THE VEGETATION TERMS ARE LOAD-BEARING, not filler. The IP-Adapter carries the
+# style reference's SUBJECT MATTER as well as its rendering, and the Nikko poster
+# is a lush green gorge — so every alpine scene came back overgrown. A viaduct of
+# pale grey limestone rendered as a jungle; a fogbound village "attacked by
+# vibrant moss"; bare rock with grass growing on it.
+#
+# This negative is tuned for the ALPINE set — rock, snow, water. For a genuinely
+# verdant subject, drop these terms with --negative, or the greens that belong
+# there will be suppressed too.
 NEGATIVE = ("photograph, photorealistic, 3d render, gradient, soft focus, blurry, "
-            "noise, grain, text, letters, words, watermark, signature, frame, border")
+            "noise, grain, text, letters, words, watermark, signature, frame, border, "
+            "lush green vegetation, jungle, moss, overgrown, tropical, dense foliage, "
+            "summer greenery")
 
 # An SDXL native bucket close to the house portrait format (0.746). Off-bucket
 # sizes cost quality on SDXL far more than on FLUX.
@@ -104,7 +115,7 @@ def build(a):
                "inputs": {"clip_name": "CLIP-ViT-H-14-laion2B.safetensors"}},
         "12": {"class_type": "IPAdapterAdvanced", "inputs": {
             "model": ["1", 0], "ipadapter": ["10", 0], "image": ["9", 0],
-            "weight": a.ip_weight, "weight_type": "linear", "combine_embeds": "concat",
+            "weight": a.ip_weight, "weight_type": a.weight_type, "combine_embeds": "concat",
             "start_at": 0.0, "end_at": 1.0, "embeds_scaling": "V only",
             "clip_vision": ["11", 0]}},
 
@@ -178,8 +189,17 @@ if __name__ == "__main__":
     ap.add_argument("--cn-end", type=float, default=0.8,
                     help="release the ControlNet before the end so late steps can "
                          "simplify shapes rather than tracing the depth map")
-    ap.add_argument("--ip-weight", type=float, default=0.55,
+    ap.add_argument("--ip-weight", type=float, default=0.8,
                     help="how hard the style reference pulls")
+    # `style transfer` isolates the reference's RENDERING from its subject matter;
+    # `linear` transfers both, which is what dragged Nikko's foliage into every
+    # alpine scene. Because less is carried, it wants a HIGHER weight than linear
+    # did — 0.8 here against linear's 0.55.
+    ap.add_argument("--weight-type", dest="weight_type", default="style transfer",
+                    choices=["linear", "style transfer", "style transfer precise",
+                             "strong style transfer", "composition", "style and composition"],
+                    help="how the reference is applied; style transfer keeps its look "
+                         "without its content")
     ap.add_argument("--positive", default=POSITIVE)
     # Per-image colour notes, appended to the positive prompt. This is what keeps a
     # subject's signature colour alive against the style reference's palette —
