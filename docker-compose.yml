@@ -1728,12 +1728,14 @@ services:
     # The provisioning surface (CANT-131 / SERV-202) is a SECOND, internal-only
     # listener on construct_net — CANT-33's approved plan, ruling 1: its own listener,
     # off the router, rather than a route on :4012 the way argosy's admin API rides its
-    # main port. `expose`, never `ports:` — the same distinction as above, but doubly so
-    # here: this port serves POST/GET/DELETE /accounts, and whoever holds
-    # CATENARY_PROVISION_TOKEN can mint an enrollment token for any existing person. No
-    # Traefik router, service or label may point at it, and none does — check-edge-auth.sh
-    # needs no CF_ACCESS_AUD_MAP entry for it because nothing on an entrypoint routes
-    # here at all, the same reason postgres needs none.
+    # main port. Confined the same way as above — no `ports:` entry for it, and this
+    # service sits on construct_net alone — doubly deliberate here: this port serves
+    # POST/GET/DELETE /accounts, and whoever holds CATENARY_PROVISION_TOKEN can mint an
+    # enrollment token for any existing person. `expose:` below is documentation, not a
+    # restriction — Compose reachability between containers on one network doesn't
+    # depend on it. No Traefik router, service or label may point at this port, and none
+    # does — check-edge-auth.sh needs no CF_ACCESS_AUD_MAP entry for it because nothing
+    # on an entrypoint routes here at all, the same reason postgres needs none.
     #
     # NOT provisioned by db/init-db.sh, and deliberately never will be: CANT-13 Ruling 3
     # keeps this out of a migration because migrations run AS the `catenary` role and a
@@ -1782,16 +1784,23 @@ services:
       - CATENARY_LOG_FORMAT=${CATENARY_LOG_FORMAT:-json}
       - CATENARY_SHUTDOWN_GRACE=${CATENARY_SHUTDOWN_GRACE:-20s}
       # Provisioning surface (CANT-131 / SERV-202) — Purser's `catenary` connector
-      # calls this to create, look up and deactivate accounts. Catenary refuses to
-      # boot with one of these two set and not the other, or with a token under 32
-      # bytes, or if this address matches CATENARY_PORT above — so both land together,
-      # and :4013 is a literal here rather than a `.env` default because there is
-      # deliberately no default in catenary's own code (catenary/deploy/README.md
-      # names :4013 only as the next free slot in the estate's 40xx block; this file
-      # is the authority). CATENARY_PROVISION_TOKEN is Signet-managed, generated
-      # without ever being displayed:
+      # calls this to create, look up and deactivate accounts. Catenary >= 0.10
+      # refuses to BOOT — not just refuses provisioning — with one of these two set
+      # and not the other, or with a token under 32 bytes, or if the address matches
+      # CATENARY_PORT above. :4013 is a literal here rather than a `.env` default
+      # because there is deliberately no default in catenary's own code
+      # (catenary/deploy/README.md names :4013 only as the next free slot in the
+      # estate's 40xx block; this file is the authority) — but a bare literal would
+      # make ADDR unconditional while TOKEN can legitimately go empty (a vault miss,
+      # a hand `force-recreate` that skips deploy.yml's assert-env-keys gate), which
+      # would take the whole chat service down rather than just its provisioning
+      # surface. `${TOKEN:+value}` derives ADDR from the token's presence instead, the
+      # same atomic-pair shape CHRONICLE_SWITCHYARD_URL uses for the same reason (see
+      # CLAUDE.md) — both empty is "unconfigured", never "half-configured".
+      # CATENARY_PROVISION_TOKEN is Signet-managed, generated without ever being
+      # displayed:
       #   signet set --project construct-server --name CATENARY_PROVISION_TOKEN --generate
-      - CATENARY_PROVISION_ADDR=:4013
+      - CATENARY_PROVISION_ADDR=${CATENARY_PROVISION_TOKEN:+:4013}
       - CATENARY_PROVISION_TOKEN=${CATENARY_PROVISION_TOKEN}
     expose:
       - "4013"
