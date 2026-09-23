@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.33.0](https://github.com/Einlanzerous/construct-server/compare/v4.32.1...v4.33.0) (2026-09-23)
+
+
+### Features
+
+* **backup:** a copyable receiver bundle that proves its own guarantees (SERV-167) ([#220](https://github.com/Einlanzerous/construct-server/issues/220)) ([2042573](https://github.com/Einlanzerous/construct-server/commit/2042573cb1f8665a3e9b3892e5b442ab44a6e310))
+* **catenary:** expose the provisioning port and wire purser's connector (SERV-202) ([#221](https://github.com/Einlanzerous/construct-server/issues/221)) ([bf894a1](https://github.com/Einlanzerous/construct-server/commit/bf894a1bc14b50ef1187845c523201d21c8fda1e))
+* **comfyui:** FLUX.1 Kontext poster workflow, and survive the host OOM it exposed (IDEA-52) ([#210](https://github.com/Einlanzerous/construct-server/issues/210)) ([cf8135f](https://github.com/Einlanzerous/construct-server/commit/cf8135fe87f27dc8740769b17992bdabdada7d65))
+* **comfyui:** run ComfyUI on the R9700 as its own compose project (IDEA-52) ([#207](https://github.com/Einlanzerous/construct-server/issues/207)) ([9660edb](https://github.com/Einlanzerous/construct-server/commit/9660edb3da5f21733c876cd19730bac6d65f30d2))
+* **comfyui:** Track B — SDXL + ControlNet + IP-Adapter, with the weights Track A lacked (IDEA-52) ([#212](https://github.com/Einlanzerous/construct-server/issues/212)) ([6309fdc](https://github.com/Einlanzerous/construct-server/commit/6309fdc99b9b823c41548e06d9d534a3211b0ab9))
+* **comfyui:** turn on the asset browser (IDEA-52) ([#214](https://github.com/Einlanzerous/construct-server/issues/214)) ([e8bbab5](https://github.com/Einlanzerous/construct-server/commit/e8bbab5e8edad34ff9af00ab30750ca3a44caa5d))
+* **poster:** polaroid layout — derived bottom band, one-line title (IDEA-52) ([#219](https://github.com/Einlanzerous/construct-server/issues/219)) ([2103504](https://github.com/Einlanzerous/construct-server/commit/2103504b3b55a6972237b44d6824150982a8074d))
+* **poster:** SVG magnet template — frame, title band, embedded type (IDEA-52) ([#215](https://github.com/Einlanzerous/construct-server/issues/215)) ([6c2893b](https://github.com/Einlanzerous/construct-server/commit/6c2893bcfbe1a4779543f9d575d24c09c0368883))
+* **repaint:** deterministic colour correction for the poster art (IDEA-52) ([#218](https://github.com/Einlanzerous/construct-server/issues/218)) ([2dcd290](https://github.com/Einlanzerous/construct-server/commit/2dcd290629734c7be8b8ed842ee50f68656a3000))
+
+
+### Bug Fixes
+
+* **comfyui:** record that Kontext reproduces a style reference rather than applying it (IDEA-52) ([#211](https://github.com/Einlanzerous/construct-server/issues/211)) ([ae8989e](https://github.com/Einlanzerous/construct-server/commit/ae8989e3c038c982a41ba0ef63067dd4502ffede))
+* **comfyui:** stop the prompt prescribing a palette, add --accent for subject colour (IDEA-52) ([#213](https://github.com/Einlanzerous/construct-server/issues/213)) ([35e88a8](https://github.com/Einlanzerous/construct-server/commit/35e88a899cd7c6431e83aa2ab131906755226c03))
+* **comfyui:** stop the style reference dragging its jungle into alpine scenes (IDEA-52) ([#217](https://github.com/Einlanzerous/construct-server/issues/217)) ([8fb8841](https://github.com/Einlanzerous/construct-server/commit/8fb8841113acb3937ff359ed327128acd41c2b6e))
+
 ## [4.32.1](https://github.com/Einlanzerous/construct-server/compare/v4.32.0...v4.32.1) (2026-09-17)
 
 
