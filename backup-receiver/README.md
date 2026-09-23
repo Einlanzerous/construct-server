@@ -25,8 +25,12 @@ Two containers sharing one network namespace:
 | `rest-server` | restic's HTTP receiver, running **inside** tailscale's namespace. |
 
 `network_mode: service:tailscale` is the design, not an implementation detail.
-rest-server publishes no ports, so the repository is reachable at the tailnet
-address and **nowhere else** — not on the host's LAN, not on its localhost.
+rest-server publishes no ports, so it is **not reachable on the host's LAN and
+not on the host's localhost** — the tailnet address is the only one a person or
+a script would think to use. (It also answers on the compose project's bridge
+network — that's how this script's own `verify` reaches it without this host
+being on the tailnet — but every request there still needs `REST_USER`/
+`REST_PASSWORD`, so it is not a way around the credential.)
 
 On the desktop that solves a second problem at the same time. WSL2 sits behind a
 NAT'd virtual NIC, so anything bound on the WSL2 side is invisible from the

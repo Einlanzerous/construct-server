@@ -6,9 +6,13 @@
 #   rest-server  restic's HTTP receiver, running INSIDE tailscale's namespace
 #
 # `network_mode: service:tailscale` is the whole security design. rest-server
-# publishes no ports and has no network of its own, so it is reachable at the
-# tailnet address and NOWHERE ELSE — not on the host's LAN, not on localhost of
-# the machine you are reading this on. On the desktop that matters twice over:
+# publishes no ports, so it is NOT reachable on the host's LAN and NOT on the
+# host's localhost — the tailnet address is the only address a person or a
+# script would think to use. (It is also technically present on the compose
+# project's bridge network, which is how install.sh's own verify step reaches
+# it without this host needing to be on the tailnet; that is not a
+# credential-bypassing path, since every request still needs REST_USER/
+# REST_PASSWORD.) On the desktop that matters twice over:
 # WSL2 sits behind a NAT'd virtual NIC, so a service bound on the WSL2 side is
 # invisible from the network anyway. Joining the tailnet from inside the
 # namespace sidesteps that entirely rather than fighting it with portproxy

@@ -104,7 +104,10 @@ ensure_credentials() {
   # -c truncates, so only use it when there is no file yet. Re-running this
   # script updates the password in place instead of wiping other users.
   local existing flag="-Bb" img
-  img=$(rest_image)
+  # `|| true`: rest_image's grep can itself fail (no match), and under
+  # `set -e` that would abort the script at this assignment before the die
+  # below ever ran, turning a clear message into a silent exit 1.
+  img=$(rest_image || true)
   [ -n "$img" ] || die "could not read the rest-server image out of docker-compose.yml"
 
   existing=$(docker run --rm -v backup_receiver_repo:/data --entrypoint sh \
@@ -123,6 +126,14 @@ ensure_credentials() {
 bring_up() {
   head_ "Starting the receiver"
   compose up -d
+  # ensure_credentials just rewrote /data/.htpasswd unconditionally, and
+  # rest-server reads that file at STARTUP only (see the comment there) — a
+  # bare `up -d` leaves an unchanged spec running unchanged, so a password
+  # rotation on a second ./install.sh run would silently keep authenticating
+  # against the OLD password with nothing here to show it. Force it, scoped to
+  # rest-server alone: recreating tailscale here would pull the tailnet node
+  # out from under the namespace both containers share.
+  compose up -d --force-recreate --no-deps rest-server
   ok "containers started"
 
   printf '  waiting for the tailnet address'
@@ -154,11 +165,16 @@ local_addr() {
 }
 
 probe() { # method url [user:pass] -> prints HTTP status
+  # curl's own -w already prints "000" on a connection failure, before it
+  # exits non-zero — `|| echo "000"` then runs too, on the same failure, and
+  # the two concatenate into "000000", which matches nothing verify() checks
+  # for. `|| true` only guards the exit status so a callable failure here
+  # doesn't matter under `set -e` (this always runs inside a $(...) capture).
   local method="$1" url="$2" auth="${3:-}"
   if [ -n "$auth" ]; then
-    curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$auth" -X "$method" "$url" 2>/dev/null || echo "000"
+    curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$auth" -X "$method" "$url" || true
   else
-    curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X "$method" "$url" 2>/dev/null || echo "000"
+    curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X "$method" "$url" || true
   fi
 }
 
@@ -225,8 +241,11 @@ verify() {
   esac
 
   # The probe repo cannot be removed through the API — that is the whole point —
-  # so clean it up on the filesystem, which is reachable from the host.
-  docker exec backup-rest-server sh -c "rm -rf /data/$PROBE_REPO /data/anon-check" 2>/dev/null || true
+  # so clean it up on the filesystem, which is reachable from the host. Warn
+  # rather than fail: append-only means a leftover here cannot be cleaned up
+  # through the API later either, so a silent failure would strand it for good.
+  docker exec backup-rest-server sh -c "rm -rf /data/$PROBE_REPO /data/anon-check" 2>/dev/null \
+    || warn "could not clean up /data/$PROBE_REPO and /data/anon-check — remove them by hand"
 
   if [ "$failed" -ne 0 ]; then
     printf '\n%sVerification failed.%s Do not point the construct server at this receiver yet.\n' "$RED" "$OFF"
