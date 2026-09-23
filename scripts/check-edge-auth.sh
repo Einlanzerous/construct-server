@@ -130,7 +130,7 @@ else
   # neither gated nor named here fails the check. Adding to it is a reviewable diff in
   # a security script, which is the point — the failure mode this exists to prevent is
   # an exemption nobody had to argue for.
-  EXEMPT_JSON='{"switchyard-github-webhook": "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET", "placard": "public by design (IDEA-22): every surface this host serves (mark mirror, front page, API) is contractually fetchable with no session — placard-host URLs are rendered sessionless in viewers browsers as launcher tiles and badges, and a gate turns them into silent login-HTML failures; content mirrors a public GitHub repo and the one write path is token-gated in the app"}'
+  EXEMPT_JSON='{"switchyard-github-webhook": "GitHub cannot authenticate to Access; the endpoint is HMAC-gated by GITHUB_WEBHOOK_SECRET", "placard": "public by design (IDEA-22): every surface this host serves (mark mirror, front page, API) is contractually fetchable with no session — placard-host URLs are rendered sessionless in viewers browsers as launcher tiles and badges, and a gate turns them into silent login-HTML failures; content mirrors a public GitHub repo and the one write path is token-gated in the app", "trestle-media": "path-bounded to /m/ + /healthz (SERV-134/SERV-206), nearer the webhook shape than the whole-host placard exemption: GitHub cannot authenticate to Access either, so a gate here serves login HTML to its camo image proxy where an embedded screenshot belongs — the same silent failure placard exists to avoid — while /v1 (the bearer-gated upload API) is loopback-only and does not exist on this host, every served blob was PUT there by a token the serve log names, and the allow-list, size caps and content-addressed URLs bound what is exposed"}'
 fi
 
 err() { printf '%s\n' "$*" >&2; }
@@ -553,20 +553,44 @@ with open(os.environ["PROBE_OUT"], "w") as fh:
         rule = (r.get("rule") or "").strip()
         eh = re.findall(r"Host\(`([^`]+)`\)", rule)
         ep = re.findall(r"Path\(`([^`]+)`\)", rule)
-        if len(eh) == 1 and len(ep) == 1:
+        # PathPrefix, added for trestle-media (SERV-206) — the first exemption
+        # whose rule is narrower than a whole host but broader than one exact
+        # Path: Host + an OR of PathPrefix and Path. `/` itself is refused as a
+        # "prefix" — it would match everything, i.e. actually be the whole-host
+        # shape below wearing a PathPrefix() spelling, and letting it through
+        # here would probe it as bounded when it is not.
+        epfx = [p for p in re.findall(r"PathPrefix\(`([^`]+)`\)", rule) if p not in ("", "/")]
+        if len(eh) == 1 and len(ep) == 1 and not epfx:
             fh.write(f"exempt {eh[0].lower()} {ep[0]}\n")
-        elif len(eh) == 1 and not ep and re.fullmatch(r"Host\(`[^`]+`\)", rule):
+        elif len(eh) == 1 and len(epfx) == 1 and len(ep) <= 1:
+            # Host + (PathPrefix(...) || Path(...)), trestle-media's shape.
+            # Traefik applies a router's middlewares to whatever matches its
+            # rule as a whole — there is no way to apply them to only one branch
+            # of an OR — so a guard-bypass probe against EITHER branch proves it
+            # for both. Probed against both anyway, one line each, so the live
+            # check exercises the exact paths the rule names rather than
+            # relying on that argument at run time.
+            fh.write(f"exempt {eh[0].lower()} {epfx[0]}\n")
+            for p in ep:
+                fh.write(f"exempt {eh[0].lower()} {p}\n")
+        elif len(eh) == 1 and not ep and not epfx and re.fullmatch(r"Host\(`[^`]+`\)", rule):
             # A whole-host exemption: the rule is exactly one bare Host() and
             # nothing else. Probed with the assertion INVERTED — the host must
             # serve a sessionless request, guard uninvolved — because for a
             # public-by-design host (placard, IDEA-22) "refuses without a
             # session" is the broken state, not the safe one.
+            #
+            # NOT what a path-restricted host like trestle-media wants: `/` does
+            # not match ITS rule at all, so the honest answer there is Traefik's
+            # 404 for an unrouted path, not a 200 — which is exactly why that
+            # entry is handled by the branch above instead of this one, and never
+            # reaches this "serves openly" assertion.
             fh.write(f"exempt-host {eh[0].lower()}\n")
         else:
-            # Anything else — Host + PathPrefix, multiple hosts, an OR — is
-            # broader than either exemption shape and cannot be probed, so it
-            # would sit here unverified. Refuse it.
-            bad(f"{name} is exempt but its rule is neither one Host + one exact Path nor one bare Host; too broad to verify")
+            # Anything else — multiple hosts, more than one Path/PathPrefix, an
+            # OR of two Hosts — is broader than any exemption shape above and
+            # cannot be probed, so it would sit here unverified. Refuse it.
+            bad(f"{name} is exempt but its rule is neither one Host + one exact Path, one Host + (PathPrefix || Path), nor one bare Host; too broad to verify")
 
 sys.exit(1 if fail else 0)
 PY

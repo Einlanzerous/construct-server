@@ -1826,6 +1826,69 @@ services:
     # would kill the process while it is still draining in-flight sends.
     stop_grace_period: 30s
 
+  # --- TRESTLE (public media host for PR screenshots) — SERV-134 / SERV-206 ---
+  # One static Go binary, no database, no ORM, no framework. Two surfaces in one
+  # process, split by TRAEFIK rather than by the binary: `/v1/*` is the
+  # bearer-gated upload API, reached ONLY over loopback (agents on this box —
+  # see `ports:` below, never construct_net's edge, the LAN or the WAN in v1);
+  # `/m/*` (plus `/healthz`) is the public, unauthenticated serve path, reached
+  # through the tunnel via the `trestle-media` router on Traefik's `internal`
+  # entrypoint (config/traefik/dynamic/routers.yml) — the THIRD exemption from
+  # origin auth, argued for there. An Access-gated API host
+  # (`trestle.zerogravity.industries`, browser access to the bare index plus
+  # off-box agents via an Access service token) is SERV-207, a separate ticket,
+  # because it needs an Access application and an AUD that only exists once that
+  # application does.
+  #
+  # Design of record: trestle's own docs/decisions/serv-134-trestle-v1.md.
+  trestle:
+    image: ghcr.io/einlanzerous/trestle:${TRESTLE_TAG:-latest}
+    container_name: trestle
+    restart: unless-stopped
+    # Loopback ONLY, and that is the whole of what confines /v1 in v1. Agents on
+    # this box upload over 127.0.0.1; the API is not reachable from the LAN, the
+    # WAN, or construct_net's edge — there is no network path to it at all from
+    # off-box, only a shell on the host. Widening that reach, or gating it behind
+    # Cloudflare Access, is SERV-207, not this ticket.
+    ports:
+      - "127.0.0.1:4014:4014"
+    environment:
+      # 4014: the next free slot in the estate's 40xx block after catenary's
+      # 4012/4013 (cf-access-guard holds 4020).
+      - TRESTLE_PORT=4014
+      - TRESTLE_DATA_DIR=/data
+      - TRESTLE_PUBLIC_BASE_URL=https://media.zerogravity.industries
+      # name=sha256hex,name=sha256hex,... — HASHES of consumer bearer tokens, not
+      # the tokens themselves (PRINCIPLES §5: minted per-consumer, never shared
+      # across components). Treat it as a vault key anyway: a blank value means
+      # no consumer can authenticate and trestle refuses to boot rather than
+      # serve with nobody able to upload. See .env.example for how to mint one.
+      - TRESTLE_TOKENS=${TRESTLE_TOKENS}
+      - TRESTLE_LOG_LEVEL=${TRESTLE_LOG_LEVEL:-info}
+      - TRESTLE_LOG_FORMAT=${TRESTLE_LOG_FORMAT:-json}
+      - TRESTLE_SHUTDOWN_GRACE=${TRESTLE_SHUTDOWN_GRACE:-20s}
+      # TRESTLE_MAX_IMAGE_BYTES, TRESTLE_MAX_VIDEO_BYTES and
+      # TRESTLE_QUOTA_BYTES_PER_TOKEN are deliberately UNSET here: the code
+      # defaults (10 MiB / 100 MiB / 2 GiB) are what the estate's likely rate —
+      # screenshots per PR, a video a month — needs. Set them only once that
+      # stops holding.
+    volumes:
+      - trestle_data:/data
+    networks:
+      - construct_net
+    # No `depends_on` — trestle has no database and nothing else in the stack to
+    # wait on. wget is available: the image is alpine + busybox, chosen for
+    # exactly this (same reasoning as catenary's and switchyard's healthchecks).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4014/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Must EXCEED TRESTLE_SHUTDOWN_GRACE (20s); Docker's own default is 10s,
+    # which would kill the process mid-drain.
+    stop_grace_period: 30s
+
   # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
   # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
   # ONLY Argosy + a deny-all catch-all; `internal` (:9080 HTTP, deliberately NOT
@@ -2159,6 +2222,7 @@ volumes:
   argosy_subtitles:
   argosy_transcode:
   lyceum_data:
+  trestle_data:
   # Zero Gravity Industries hybrid edge (SERV-19/20)
   traefik_letsencrypt:
   traefik_access_logs:
