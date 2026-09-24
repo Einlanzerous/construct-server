@@ -609,7 +609,7 @@ http:
     trestle-media:
       entryPoints:
         - internal
-      rule: "Host(`media.zerogravity.industries`) && (PathPrefix(`/m/`) || Path(`/healthz`))"
+      rule: "Host(`trestle.zerogravity.industries`) && (PathPrefix(`/m/`) || Path(`/healthz`))"
       service: trestle
       # No TLS: internal is plain HTTP, as above. No middlewares: the exemption.
 

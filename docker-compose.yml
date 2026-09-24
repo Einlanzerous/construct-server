@@ -1857,7 +1857,7 @@ services:
       # 4012/4013 (cf-access-guard holds 4020).
       - TRESTLE_PORT=4014
       - TRESTLE_DATA_DIR=/data
-      - TRESTLE_PUBLIC_BASE_URL=https://media.zerogravity.industries
+      - TRESTLE_PUBLIC_BASE_URL=https://trestle.zerogravity.industries
       # name=sha256hex,name=sha256hex,... — HASHES of consumer bearer tokens, not
       # the tokens themselves (PRINCIPLES §5: minted per-consumer, never shared
       # across components). Treat it as a vault key anyway: a blank value means
