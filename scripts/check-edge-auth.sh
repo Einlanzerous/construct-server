@@ -555,11 +555,15 @@ with open(os.environ["PROBE_OUT"], "w") as fh:
         ep = re.findall(r"Path\(`([^`]+)`\)", rule)
         # PathPrefix, added for trestle-media (SERV-206) — the first exemption
         # whose rule is narrower than a whole host but broader than one exact
-        # Path: Host + an OR of PathPrefix and Path. `/` itself is refused as a
-        # "prefix" — it would match everything, i.e. actually be the whole-host
-        # shape below wearing a PathPrefix() spelling, and letting it through
-        # here would probe it as bounded when it is not.
-        epfx = [p for p in re.findall(r"PathPrefix\(`([^`]+)`\)", rule) if p not in ("", "/")]
+        # Path: Host + an OR of PathPrefix and Path. `PathPrefix(\`/\`)` is
+        # REFUSED outright, not filtered: it matches everything, i.e. it is the
+        # whole-host shape wearing a PathPrefix() spelling, and silently dropping
+        # it would let `Host(x) && (PathPrefix(/) || Path(/healthz))` classify as
+        # one exact Path — bounded on paper, open in fact.
+        epfx = re.findall(r"PathPrefix\(`([^`]*)`\)", rule)
+        if any(p in ("", "/") for p in epfx):
+            bad(f"{name} is exempt with PathPrefix(`/`) — that is the whole host; spell it as a bare Host() rule or bound the prefix")
+            continue
         if len(eh) == 1 and len(ep) == 1 and not epfx:
             fh.write(f"exempt {eh[0].lower()} {ep[0]}\n")
         elif len(eh) == 1 and len(epfx) == 1 and len(ep) <= 1:

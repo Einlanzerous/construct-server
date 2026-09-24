@@ -1835,7 +1835,7 @@ services:
   # through the tunnel via the `trestle-media` router on Traefik's `internal`
   # entrypoint (config/traefik/dynamic/routers.yml) — the THIRD exemption from
   # origin auth, argued for there. An Access-gated API host
-  # (`trestle.zerogravity.industries`, browser access to the bare index plus
+  # (`trestle-api.zerogravity.industries`, browser access to the bare index plus
   # off-box agents via an Access service token) is SERV-207, a separate ticket,
   # because it needs an Access application and an AUD that only exists once that
   # application does.
