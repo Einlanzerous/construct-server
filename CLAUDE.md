@@ -4,7 +4,7 @@ The Imperial Construct: a self-hosted home operations center. This repo is the
 **stack definition**, not a service — `docker-compose.yml` plus the edge config,
 database bootstrap, and Ansible that stand it up. The services themselves
 (Argosy, Switchyard, Lyceum, Purser, Signet, Centrifuge, Interlock, Aperture,
-Cook Book) live in their own repos and land here as images.
+Cook Book, Trestle) live in their own repos and land here as images.
 
 Tracked in Switchyard under the **SERV** project. Cross-service delivery design
 lives in `docs/delivery-pipeline.md` (IDEA-19) — read it before changing how

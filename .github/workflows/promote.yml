@@ -112,6 +112,7 @@ on:
           - purser
           - signet
           - switchyard
+          - trestle
       version:
         description: "Target tag — major.minor (1.11). signet takes a FULL release tag (v1.9.1). A sha only to roll back to a pin from before SERV-125"
         required: true

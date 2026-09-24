@@ -564,6 +564,55 @@ http:
       rule: "Host(`placard.zerogravity.industries`)"
       service: placard
 
+    # THE THIRD EXEMPTION from origin auth (SERV-134 / SERV-206) — and, unlike
+    # placard's whole host, PATH-BOUNDED, which puts its shape nearer
+    # switchyard-github-webhook's than placard's: the rule restricts to `/m/`
+    # plus the bare `/healthz` probe, so `/v1/` — the bearer-gated upload API —
+    # simply does not exist on this host. `/v1/` is reached only over loopback on
+    # the box (see the `trestle` compose block); nothing here routes it, gated or
+    # not, so there is no bypass to guard against on that path at all.
+    #
+    # Why it cannot be gated: GitHub's own camo image proxy is what fetches every
+    # `/m/...` URL pasted into a PR body or rendered README, and camo holds no
+    # Cloudflare Access credential — it cannot solve a login challenge, retry
+    # with a cookie, or do anything but request the URL once and cache whatever
+    # comes back. An Access gate here does not secure the image, it replaces it:
+    # camo fetches and caches the login HTML instead, and every embed of that URL
+    # renders a broken image forever after, indistinguishable from the byte
+    # never having existed. That is the exact placard failure (IDEA-22) — a gate
+    # turning a public asset into a permanent silent failure — reproduced at a
+    # second host behind a second, unrelated proxy that cannot authenticate
+    # either.
+    #
+    # What this costs: anything that can reach the entrypoint can GET any
+    # `/m/<sha256>[.ext]` or `/healthz` on this host with no session, exactly as
+    # camo does.
+    #
+    # What bounds it, all four together:
+    #   - the path restriction itself — there is nothing else here to reach;
+    #   - every byte under `/m/` was PUT there by a request bearing a valid
+    #     TRESTLE_TOKENS bearer token, and the serve log names that token on
+    #     every hit, so a served blob is always attributable to the consumer
+    #     that uploaded it;
+    #   - the allow-list (image/video MIME types only, sniffed rather than
+    #     trusted; SVG served as an attachment, never inline) and the per-upload
+    #     and per-token size caps bound what can be hosted at all;
+    #   - the URL is the content's SHA-256, so nothing here is enumerable —
+    #     reading a blob means already holding the exact hash, which means
+    #     already holding the URL.
+    #
+    # check-edge-auth.sh knows this router by name. Its host carries no AUD in
+    # CF_ACCESS_AUD_MAP — the media host is exempt and must keep serving these
+    # two paths openly, so an Access application here would put the edge and the
+    # origin in disagreement about whether it is open, exactly as it would for
+    # placard.
+    trestle-media:
+      entryPoints:
+        - internal
+      rule: "Host(`trestle.zerogravity.industries`) && (PathPrefix(`/m/`) || Path(`/healthz`))"
+      service: trestle
+      # No TLS: internal is plain HTTP, as above. No middlewares: the exemption.
+
   services:
     argosy:
       loadBalancer:
@@ -621,6 +670,15 @@ http:
         # same-origin on :4009 (PCAD-4).
         servers:
           - url: "http://placard:4009"
+
+    trestle:
+      loadBalancer:
+        # One Go binary on :4014 — the next free slot in the estate's 40xx block
+        # after catenary's 4012/4013 (cf-access-guard holds 4020). Same
+        # container the loopback-bound `/v1` API listens on; the trestle-media
+        # router above only ever reaches it via `/m/` and `/healthz`.
+        servers:
+          - url: "http://trestle:4014"
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.

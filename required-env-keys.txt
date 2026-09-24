@@ -121,6 +121,12 @@ PLACARD_UPLOAD_TOKEN
 # --- cook book ---
 COOK_BOOK_PORT
 
+# --- trestle (SERV-134 / SERV-206) ---
+# name=sha256hex,... consumer token hashes. A blank list means no consumer can
+# authenticate, and trestle refuses to boot rather than serve with nobody able
+# to upload — the same "skip loudly" shape as every other required key here.
+TRESTLE_TOKENS
+
 # --- third-party services with no first-party fallback ---
 DD_API_KEY
 DD_SITE
