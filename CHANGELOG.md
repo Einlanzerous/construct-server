@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.34.0](https://github.com/Einlanzerous/construct-server/compare/v4.33.0...v4.34.0) (2026-09-26)
+
+
+### Features
+
+* **trestle:** onboard Trestle — public media router, third edge-auth exemption, tag pin (SERV-206) ([#222](https://github.com/Einlanzerous/construct-server/issues/222)) ([ff2dde1](https://github.com/Einlanzerous/construct-server/commit/ff2dde1f2f091251d176e89843c017682f21f523))
+
 ## [4.33.0](https://github.com/Einlanzerous/construct-server/compare/v4.32.1...v4.33.0) (2026-09-23)
 
 
