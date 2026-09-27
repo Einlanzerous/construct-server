@@ -158,21 +158,61 @@ everything else in the plan.
 
 ## Miss semantics and the claim/observation split
 
-For each destination: `restic copy` from the hub (bounded by its own
-per-invocation `timeout`), then read that destination's **own** snapshot list
-back and record *that* as the last success — never the script's memory of
-having run `copy`. This is PRINCIPLES §4's report-versus-observation rule
-applied to backups: a `copy` that exits 0 without actually landing a new
-snapshot at the destination must read as stale, not fresh, and is recorded as
-a miss.
+**One destination gets one attempt and one miss/success per NIGHT, covering
+every configured cluster — never one per (cluster × destination) pair.**
+`hub_backup_cluster` captures the hub's own snapshot id for each cluster
+right after backing it up (`HUB_SNAPSHOT_ID[label]`); `fanout_destination` is
+called once per destination with every cluster's label, and copies each in
+turn (`copy_one_cluster`) before deciding the whole night's outcome for that
+destination. **Getting this wrong was PR #226's review finding #2**: an
+earlier version called the per-destination update once per cluster, so a
+destination serving two clusters gained two misses in one bad night (tripping
+the 3-miss threshold on the second night, not the third) and — worse — a
+cluster that permanently failed was invisibly reset to "succeeded" every night
+by a second cluster that kept landing, since the second call always
+overwrote the first's miss with its own success. `make backup-test`'s T18/T19
+exercise both shapes with two clusters, which is the one thing a
+single-cluster conf structurally cannot see.
 
-One bounded retry per destination per run; still failing, the destination is
-marked attempted-and-failed and the run moves to the next destination —
-nothing else is touched. After 3 consecutive misses to one destination the
-unit exits non-zero (in addition to that destination's own failure). Delay is
-allowed and structural; a destination skipped because it was asleep must never
-read the same as one that succeeded, which is why success is read from the
-destination and not from the local attempt.
+**Freshness is checked against tonight's actual hub snapshot, not "any
+snapshot carrying the tag."** After a `copy` exits 0, the destination's own
+snapshot list is read back, and a match requires the destination to hold a
+snapshot whose `.original` (restic stamps this on every copied snapshot with
+the source snapshot's id — confirmed directly against the pinned binary,
+not assumed) equals the hub's own id for that cluster tonight. **This was
+review finding #3**: an earlier version accepted *any* snapshot at the
+destination carrying the right tag, of any age, and stamped `last_success_at`
+with the current time regardless — so a `copy` that silently failed to land
+anything new still read as a fresh success as long as last week's copy was
+still sitting there with the same tag. `make backup-test`'s T20 sets up
+exactly that (a destination snapshot whose `.original` doesn't match) and
+confirms it is recorded as a miss.
+
+One bounded retry per (destination, cluster) pair per run; still failing for
+that cluster, the run moves to the next cluster and then, having tried them
+all, records the whole night as a miss for that destination if *any* cluster
+failed — nothing about the destination's own credential or the other
+destinations is touched. After 3 consecutive missed nights to one destination
+the unit exits non-zero (in addition to that destination's own failure).
+Delay is allowed and structural; a destination skipped because it was asleep
+must never read the same as one that succeeded, which is why success is read
+from the destination and not from the local attempt.
+
+## Concurrency
+
+The `flock` on `$BACKUP_STATE_DIR/backup.lock` is taken **before** anything
+that touches `state.json` or the staging directory — including
+`preflight_retry_loop`, which writes `preflight_failed_count` on exhaustion.
+**Review finding #1** on PR #226: an earlier version took the lock only just
+before the dump loop, *after* `staging_setup` had already `rm -rf`'d the
+staging directory. A second invocation (a manual run colliding with the
+timer, or two manual runs) would delete the first run's in-progress dumps,
+fail its own lock check, and then delete the directory a *second* time via
+its own `EXIT` trap — corrupting the first run rather than merely being
+refused. `make backup-test`'s T17 hangs one database's dump deliberately (a
+mock-only hook) to open a real window for a second invocation and confirms it
+is refused immediately, before touching staging, while the first completes
+undisturbed.
 
 ## Container hygiene
 

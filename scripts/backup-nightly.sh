@@ -349,11 +349,20 @@ dump_cluster() {
 
 # ─── hub: snapshot, retention, integrity ─────────────────────────────────────
 
+declare -A HUB_SNAPSHOT_ID
+
 hub_backup_cluster() {
   local label="$1"
   RESTIC_REPOSITORY="$HUB_REPO" RESTIC_PASSWORD="${RESTIC_PASSWORD_HUB:-}" \
     run_restic backup --tag "$label" "$STAGING_DIR/$label" \
     || die "hub backup failed for cluster '$label' — refusing to continue (a hub failure exits immediately)"
+  # Tonight's own snapshot id for this cluster, on the hub — what fan-out
+  # later checks a destination's copy actually landed, rather than accepting
+  # any snapshot merely carrying the right tag (PR review finding #3).
+  HUB_SNAPSHOT_ID["$label"]="$(RESTIC_REPOSITORY="$HUB_REPO" RESTIC_PASSWORD="${RESTIC_PASSWORD_HUB:-}" \
+    run_restic snapshots --tag "$label" --json 2>/dev/null | jq -r 'sort_by(.time) | last | .id // empty')"
+  [ -n "${HUB_SNAPSHOT_ID[$label]}" ] \
+    || die "hub backup for '$label' reported success but no snapshot is findable afterward — refusing to continue"
 }
 
 hub_retain() {
@@ -413,17 +422,15 @@ hub_integrity() {
 
 ANY_THRESHOLD_TRIPPED=0
 
-fanout_destination() {
-  local spec="$1" label="$2" name url upper
-  name="${spec%%:*}"
-  url="${spec#*:}"
-  upper="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
-
-  local dest_pw dest_user dest_pass
-  dest_pw="$(eval "printf '%s' \"\${RESTIC_PASSWORD_${upper}:-}\"")"
-  dest_user="$(eval "printf '%s' \"\${REST_USER_${upper}:-}\"")"
-  dest_pass="$(eval "printf '%s' \"\${REST_PASSWORD_${upper}:-}\"")"
-
+# copy_one_cluster <url> <dest_pw> <dest_user> <dest_pass> <label> — one
+# retry-then-give-up attempt at copying a single cluster's tag to a
+# destination, verified against the HUB's OWN snapshot id for that cluster
+# tonight (captured in HUB_SNAPSHOT_ID by hub_backup_cluster) — not against
+# "any snapshot the destination happens to have with the right tag", which a
+# stale copy from a previous night would also satisfy (PR review finding #3).
+# Echoes nothing; returns 0 only once tonight's snapshot is confirmed present.
+copy_one_cluster() {
+  local url="$1" dest_pw="$2" dest_user="$3" dest_pass="$4" label="$5" name="$6"
   local ok=0 attempt
   for attempt in 1 2; do
     if RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
@@ -435,31 +442,60 @@ fanout_destination() {
     fi
     err "$name: copy attempt $attempt failed for cluster '$label'"
   done
+  [ "$ok" -eq 1 ] || return 1
 
-  local now newest
+  local hub_id match_count
+  hub_id="${HUB_SNAPSHOT_ID[$label]:-}"
+  match_count="$(RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic snapshots --tag "$label" --json 2>/dev/null \
+    | jq -r --arg hid "$hub_id" '[.[] | select(.original == $hid or .id == $hid)] | length')"
+  if [ -n "$hub_id" ] && [ "${match_count:-0}" -gt 0 ] 2>/dev/null; then
+    return 0
+  fi
+  err "$name: copy exited 0 but no snapshot at the destination matches tonight's hub snapshot for '$label' — treating as a miss"
+  return 1
+}
+
+# fanout_destination <spec> <label...> — one destination, EVERY configured
+# cluster, aggregated into a single per-night result. A destination that
+# serves two clusters gets one attempt and one miss/success per RUN, not one
+# per (cluster × destination) pair — the previous shape both tripped the miss
+# threshold too early (2 clusters down all night = 2 misses on night one, not
+# one) and hid a permanently failing cluster behind another that kept
+# succeeding, since the second call always reset consecutive_misses to 0 and
+# stamped last_success_at regardless of the first (PR review finding #2).
+fanout_destination() {
+  local spec="$1"; shift
+  local name url upper
+  name="${spec%%:*}"
+  url="${spec#*:}"
+  upper="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
+
+  local dest_pw dest_user dest_pass
+  dest_pw="$(eval "printf '%s' \"\${RESTIC_PASSWORD_${upper}:-}\"")"
+  dest_user="$(eval "printf '%s' \"\${REST_USER_${upper}:-}\"")"
+  dest_pass="$(eval "printf '%s' \"\${REST_PASSWORD_${upper}:-}\"")"
+
+  local all_ok=1 label
+  for label in "$@"; do
+    copy_one_cluster "$url" "$dest_pw" "$dest_user" "$dest_pass" "$label" "$name" || all_ok=0
+  done
+
+  local now
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-  state_update ".destinations[\"$name\"] //= {\"last_attempt_at\": null, \"last_success_at\": null, \"consecutive_misses\": 0, \"last_snapshot_id\": null}"
+  state_update ".destinations[\"$name\"] //= {\"last_attempt_at\": null, \"last_success_at\": null, \"consecutive_misses\": 0}"
   state_update ".destinations[\"$name\"].last_attempt_at = \"$now\""
 
-  if [ "$ok" -eq 1 ]; then
-    # Read success back from the destination itself — never trust `copy`'s own
-    # exit code as the record. A `copy` that exits 0 without actually landing
-    # a new snapshot must not read as fresh.
-    newest="$(RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
-      RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
-      run_restic snapshots --tag "$label" --json 2>/dev/null | jq -r 'sort_by(.time) | last | .id // empty')"
-    if [ -n "$newest" ]; then
-      state_update ".destinations[\"$name\"].last_success_at = \"$now\" | .destinations[\"$name\"].last_snapshot_id = \"$newest\" | .destinations[\"$name\"].consecutive_misses = 0"
-      return 0
-    fi
-    err "$name: copy exited 0 but no matching snapshot found at the destination — treating as a miss"
+  if [ "$all_ok" -eq 1 ]; then
+    state_update ".destinations[\"$name\"].last_success_at = \"$now\" | .destinations[\"$name\"].consecutive_misses = 0"
+    return 0
   fi
 
   local misses
   state_update ".destinations[\"$name\"].consecutive_misses += 1"
   misses="$(state_get ".destinations[\"$name\"].consecutive_misses")"
-  err "$name: attempted-and-failed for '$label' (consecutive_misses=$misses)"
+  err "$name: attempted-and-failed overall tonight (consecutive_misses=$misses)"
   if [ "$misses" -ge "$BACKUP_CONSECUTIVE_MISS_THRESHOLD" ]; then
     ANY_THRESHOLD_TRIPPED=1
   fi
@@ -475,16 +511,33 @@ cmd_init_hub() {
 }
 
 cmd_run() {
+  # Same empty-password guard as cmd_init_hub — a run must not discover a
+  # blank RESTIC_PASSWORD_HUB only after every database has already been
+  # dumped, which is where restic itself would first complain (PR review
+  # nit): an unset/empty credential is never a value (db/init-db.sh's own
+  # invariant), so this fails loudly, up front, naming the variable.
+  [ -n "${RESTIC_PASSWORD_HUB:-}" ] || die "RESTIC_PASSWORD_HUB is empty/unset — refusing to run"
+
   preflight_static
+
+  # The lock is taken BEFORE anything that touches state.json or staging —
+  # including preflight_retry_loop, which writes preflight_failed_count on
+  # exhaustion. Rev 1 of this script took it only just before the dump loop,
+  # after `staging_setup` had already `rm -rf`'d the staging directory: a
+  # second invocation (a manual run colliding with the timer, or two manual
+  # runs) would delete the first run's in-progress dumps, fail its own lock
+  # check, and then delete the directory a SECOND time via its own EXIT trap
+  # — corrupting run A rather than merely being refused (PR review finding
+  # #1). `mkdir` alone is idempotent and cheap enough to do ahead of the lock
+  # just so the lock file's own directory is guaranteed to exist.
+  mkdir -p "$BACKUP_STATE_DIR"
+  exec 200>"$LOCK_FILE"
+  flock -n 200 || die "another run is already in progress ($LOCK_FILE)"
+
   preflight_retry_loop || exit 1
 
   state_init_if_missing
   staging_setup
-
-  # Non-blocking: a concurrent invocation of this script is a problem to
-  # surface, not to queue behind.
-  exec 200>"$LOCK_FILE"
-  flock -n 200 || die "another run is already in progress ($LOCK_FILE)"
 
   local entry container label
   for entry in "${BACKUP_CLUSTERS[@]}"; do
@@ -496,13 +549,17 @@ cmd_run() {
   hub_retain
   hub_integrity
 
+  # Every configured cluster's label, passed to each destination as a whole
+  # so one destination gets one attempt and one miss/success per NIGHT —
+  # never one per (cluster × destination) pair. See fanout_destination.
+  local -a all_labels=()
   for entry in "${BACKUP_CLUSTERS[@]}"; do
-    label="${entry#*:}"
-    local dest
-    for dest in "${BACKUP_DESTINATIONS[@]}"; do
-      [ -z "$dest" ] && continue
-      fanout_destination "$dest" "$label"
-    done
+    all_labels+=("${entry#*:}")
+  done
+  local dest
+  for dest in "${BACKUP_DESTINATIONS[@]}"; do
+    [ -z "$dest" ] && continue
+    fanout_destination "$dest" "${all_labels[@]}"
   done
 
   if [ "$ANY_DUMP_FAILED" -eq 1 ]; then

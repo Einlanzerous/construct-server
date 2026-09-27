@@ -69,6 +69,7 @@ case "$1" in
             db="$(printf '%s' "$script" | sed -n "s/.*-d '\([^']*\)'.*/\1/p")"
             if [ "$db" = "${MOCK_FAIL_DB:-}" ]; then exit 1; fi
             if [ "$db" = "${MOCK_EMPTY_DB:-}" ]; then exit 0; fi
+            if [ "$db" = "${MOCK_DUMP_HANG_DB:-}" ]; then sleep "${MOCK_DUMP_HANG_SEC:-3}"; fi
             echo "mock-dump-of-$db"
             ;;
           *)
@@ -107,6 +108,17 @@ case "$1" in
 
     [ "${MOCK_COPY_HANG:-0}" = "1" ] && [ "${restic_args[0]:-}" = "copy" ] && sleep 30
 
+    # The tag this invocation carries, if any (`--tag VALUE`) — used both to
+    # scope a copy failure to one cluster (MOCK_COPY_FAIL_TAG) and to give the
+    # hub and the destination consistent, per-cluster snapshot ids below.
+    tag=""
+    for ((idx = 0; idx < ${#restic_args[@]}; idx++)); do
+      if [ "${restic_args[$idx]}" = "--tag" ]; then
+        tag="${restic_args[$((idx + 1))]}"
+        break
+      fi
+    done
+
     case "${restic_args[0]:-}" in
       init)
         [ "${MOCK_RESTIC_INIT_FAIL:-0}" = "1" ] && exit 1
@@ -130,13 +142,24 @@ case "$1" in
         ;;
       copy)
         [ "${MOCK_COPY_FAIL:-0}" = "1" ] && exit 1
+        [ -n "${MOCK_COPY_FAIL_TAG:-}" ] && [ "$tag" = "$MOCK_COPY_FAIL_TAG" ] && exit 1
         exit 0
         ;;
       snapshots)
-        if [ "${MOCK_SNAPSHOTS_EMPTY:-0}" = "1" ]; then
+        # Distinguished by RESTIC_REPOSITORY, which the real script always
+        # sets before invoking restic: a hub-side query (hub_backup_cluster's
+        # own post-backup id lookup) gets a fixed, per-tag id; a
+        # destination-side query gets a snapshot whose `.original` defaults
+        # to that SAME id (the happy path — a genuine copy landed) unless
+        # MOCK_DEST_SNAPSHOT_ORIGINAL overrides it to simulate a stale copy
+        # that merely shares the tag.
+        if [[ "${RESTIC_REPOSITORY:-}" == *restic-hub* ]]; then
+          echo "[{\"id\":\"hub-${tag}-snapshot\",\"tags\":[\"${tag}\"],\"time\":\"2026-09-27T00:00:00Z\"}]"
+        elif [ "${MOCK_SNAPSHOTS_EMPTY:-0}" = "1" ]; then
           echo "[]"
         else
-          echo '[{"id":"deadbeef0000","time":"2026-01-01T00:00:00Z"}]'
+          dest_original="${MOCK_DEST_SNAPSHOT_ORIGINAL:-hub-${tag}-snapshot}"
+          echo "[{\"id\":\"deadbeef0000\",\"original\":\"$dest_original\",\"tags\":[\"${tag}\"],\"time\":\"2026-01-01T00:00:00Z\"}]"
         fi
         ;;
       *)
