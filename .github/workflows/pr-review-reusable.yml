@@ -301,6 +301,12 @@ jobs:
       # one source of truth for "what is in scope", and it is this one.
       reviewable_b64: ${{ steps.triage.outputs.reviewable_b64 }}
       generated_b64: ${{ steps.triage.outputs.generated_b64 }}
+      # `false` only when triage could not classify the PR — the files listing
+      # failed, or reached the API's 3,000-file cap — and reviewed anyway
+      # (SERV-198). The lists above are then empty and mean "not classified",
+      # not "nothing in scope"; the review job puts the whole diff in scope
+      # rather than reading them.
+      classified: ${{ steps.triage.outputs.classified }}
 
     steps:
       # First, because every later step depends on these. The runner is a systemd
@@ -442,6 +448,68 @@ jobs:
       # and unknown resolves toward reviewing. The cost of being wrong
       # that way is one extra review; the cost of being wrong the other
       # way is this ticket.
+      #
+      # ── the changed-file list, and the two ways it was wrong (SERV-198) ──────
+      #
+      # `gh pr diff --name-only` fetches the WHOLE unified diff to read the paths
+      # out of it, and GitHub refuses to serve one past 20,000 lines:
+      #
+      #   could not find pull request diff: HTTP 406: Sorry, the diff exceeded
+      #   the maximum number of lines (20000)
+      #
+      # Under `set -euo pipefail` that failed triage, so `review` was SKIPPED and
+      # the only signal was a red job named for a classification problem, not for
+      # "nothing read this diff". The trigger is ordinary: any PR that introduces
+      # a committed generated artefact (chronicle#114 — a generated Dart client,
+      # 172 files, 24,094 added lines). `.github/review-ignore` cannot rescue it,
+      # twice over: it is read from the BASE ref, so it never exempts the PR that
+      # adds the artefact, and the 406 lands while fetching, before any path is
+      # classified. It hits exactly the PRs a Mode A reader merges unread.
+      #
+      # The list now comes from `pulls/{n}/files`, paginated — the endpoint the
+      # review job's `Scope the diff` already reads, so triage and scope classify
+      # ONE file set rather than two that could disagree. Not from
+      # `gh pr view --json files`, which reads as the obvious substitute and is
+      # not: it is GraphQL's first page, and on chronicle#114 it returned 100 of
+      # 172 files with exit 0. A truncation nothing notices is worse than the 406
+      # it replaces, which at least was loud.
+      #
+      # UNLISTABLE IS NOT EMPTY. If the call fails, `FILES` is "" — which is the
+      # `empty diff` skip's own test, so falling through would turn an API error
+      # into the same silent no-review this section is about. It is handled
+      # before anything reads `FILES`. Unreachable means unknown and unknown
+      # resolves toward reviewing (the same rule as `PRIOR` above), so triage
+      # reports `classified=false`, takes the deeper tier, and puts the whole
+      # diff in scope. That costs budget and not coverage: a PR too big or too
+      # awkward to classify is exactly the one that should get MORE review.
+      #
+      # The same goes for a list that may be TRUNCATED. The files endpoint
+      # returns at most 3,000 files and says nothing when it stops, and
+      # classification is also where the skips live: a PR whose first 3,000
+      # paths were all generated, or all docs, would hit `only generated files
+      # changed` / `documentation only` with code past the cap. A list that
+      # reaches 3,000 is therefore treated as unclassifiable. Exactly 3,000 is a
+      # false positive and costs one deep review, which is the safe direction.
+      #
+      # The failure path must survive its own error message. The text is read
+      # with `head -c 200 FILE | tr`, never `tr <FILE | head -c 200`: under
+      # pipefail the latter SIGPIPEs `tr` once the body outgrows the pipe buffer
+      # (measured: aborts from about 20 KiB, every run at 70 KiB), and a bare
+      # assignment then aborts triage — the red-triage, skipped-review outcome
+      # this section exists to prevent, reached through the safety net itself.
+      #
+      # What the degraded path does not do, so nobody assumes it does. It skips
+      # the release-PR rule, so a bot-authored release PR arriving here reaches
+      # the reviewer and goes red, as the fall-through above already does. And it
+      # does not touch misconfiguration: an empty or invalid `sensitive_paths`,
+      # or an invalid regex in `.github/review-ignore`, still fails triage on
+      # purpose. Those are the caller's own config, they fail every PR alike on
+      # the first one, and refusing rather than guessing is their design.
+      #
+      # One bound remains, and it is now stated rather than silent. The review
+      # job's scope step reads the same endpoint, so past 3,000 files the
+      # reviewer sees the first 3,000 only; scope.md says so. This does not lift
+      # the cap, it stops a PR from being skipped or half-read without saying.
       #
       # ── the release-PR skip, and why it is keyed on three things ─────────────
       #
@@ -737,7 +805,37 @@ jobs:
             fi
           fi
 
-          FILES=$(gh pr diff "$PR_NUMBER" --name-only)
+          # The files API, not `gh pr diff` (406 past 20,000 lines). A list that cannot be
+          # trusted is NOT empty: it reviews, deeper, whole diff in scope. Why: above the step.
+          LIST_ERR=$(mktemp)
+          NOLIST=""
+          if FILES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+                       --jq '.[].filename' 2>"$LIST_ERR"); then
+            [ "$(grep -c . <<<"$FILES")" -lt 3000 ] || NOLIST="the files API hit its 3,000-file cap, so the list may be truncated"
+          else
+            NOLIST="the files API call failed ($(head -c 200 "$LIST_ERR" | tr -d '\n'))"
+          fi
+          rm -f "$LIST_ERR"
+
+          if [ -n "$NOLIST" ]; then
+            echo "::warning::Could not classify PR #$PR_NUMBER: $NOLIST — reviewing without triage: whole diff in scope, at ${{ inputs.high_effort }} effort."
+            {
+              echo "## Reviewed without triage"
+              echo
+              echo "Triage could not classify this PR: ${NOLIST}. Reviewing at the deeper tier with the whole diff in scope, rather than skipping."
+            } >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "classified=false"
+              echo "reviewable_b64="
+              echo "generated_b64="
+              echo "effort=${{ inputs.high_effort }}"
+              echo "model=${{ inputs.high_effort_model }}"
+              echo "review=true"
+              echo "reason="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [ -z "$FILES" ]; then
             skip "empty diff"
           fi
@@ -894,6 +992,7 @@ jobs:
             echo "model=${{ inputs.low_effort_model }}" >> "$GITHUB_OUTPUT"
             echo "→ reviewing at ${{ inputs.low_effort }} effort"
           fi
+          echo "classified=true" >> "$GITHUB_OUTPUT"
           echo "review=true" >> "$GITHUB_OUTPUT"
           echo "reason=" >> "$GITHUB_OUTPUT"
 
@@ -1122,6 +1221,14 @@ jobs:
       # is a fact, and the whole failure being fixed is a budget the reviewer
       # cannot see itself spending.
       #
+      # When triage could not classify the PR it reviewed anyway and handed over
+      # EMPTY lists with `classified=false` (SERV-198). Empty there means "not
+      # classified", not "nothing in scope" — read as the latter it would give
+      # the reviewer an empty patch and a scope file saying there is nothing to
+      # review, a review of nothing. So the whole diff is put in scope instead,
+      # from the same files API this step already reads, and scope.md says why
+      # nothing was excluded.
+      #
       # The per-file breakdown matters as much as the exclusion. A single
       # `gh pr diff` of a 6,900-line PR overruns the Bash tool's output cap, so
       # the reviewer pages through it blind, one turn per chunk; scope.md lets it
@@ -1134,6 +1241,7 @@ jobs:
           BASE_REF: ${{ needs.triage.outputs.base_ref }}
           REVIEWABLE_B64: ${{ needs.triage.outputs.reviewable_b64 }}
           GENERATED_B64: ${{ needs.triage.outputs.generated_b64 }}
+          CLASSIFIED: ${{ needs.triage.outputs.classified }}
         run: |
           set -euo pipefail
           # No rm first: checkout runs `git clean -ffdx`, so nothing from a
@@ -1149,6 +1257,12 @@ jobs:
           # and avoids hand-rolling a unified-diff splitter.
           gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
             | jq -s 'add // []' > "$SCOPE_DIR/files.json"
+
+          # Unclassified means everything is in scope. Why: above the step.
+          if [ "$CLASSIFIED" != true ]; then
+            jq -r '.[].filename' "$SCOPE_DIR/files.json" > "$SCOPE_DIR/reviewable.txt"
+            : > "$SCOPE_DIR/generated.txt"
+          fi
 
           # Not a valid unified diff, and not trying to be — nothing applies this
           # patch, a reviewer reads it. Reconstructing faithful `---`/`+++`
@@ -1188,6 +1302,14 @@ jobs:
             echo
             echo "PR #${PR_NUMBER} against \`${BASE_REF}\` — ${TOTAL} changed in total."
             echo
+            if [ "$CLASSIFIED" != true ]; then
+              echo "**Triage could not classify this PR's changed files**, so nothing was excluded as generated: the whole diff is in scope, generated artifacts included. Budget from the sizes below, largest first."
+              echo
+            fi
+            if [ "$(jq length "$SCOPE_DIR/files.json")" -ge 3000 ]; then
+              echo "**GitHub lists at most 3,000 changed files and this PR reached that cap**, so files beyond it are neither listed nor in scope. Say so in your review rather than implying full coverage."
+              echo
+            fi
             echo "## In scope — ${IN_SCOPE}"
             echo
             echo "The hunks are in \`${SCOPE_DIR}/review-diff.patch\`, in this order."

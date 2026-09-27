@@ -280,7 +280,29 @@ source — for exactly the case the expression existed to serve.
    buys a fourth, no `review:always` needed. Deliberate — it is the one way back
    into a PR that opened conflicting and became mergeable with no push at all
    (the residual gap SERV-126 leaves open), for anyone who thinks to use it.
-4. Empty diff → skip.
+4. Empty diff → skip. **Changed files that cannot be listed, or whose list may be
+   truncated → review, not skip** (SERV-198). The list is read from the paginated `pulls/{n}/files` endpoint, the
+   same one the review job's scope step uses, and not from `gh pr diff`: that
+   fetches the whole unified diff and GitHub answers **HTTP 406 past 20,000
+   lines**, which failed triage and left `review` skipped on exactly the PRs that
+   introduce a committed generated artefact (chronicle#114: 172 files, 24,094
+   added lines). Not `gh pr view --json files` either — it is GraphQL's first
+   page and returns 100 of those 172 files with exit 0.
+
+   An API error is *unknown*, not *empty*, so it must not reach the `empty diff`
+   skip. It resolves toward reviewing, the same rule as the prior-review count in
+   rule 3: triage reports `classified=false`, takes the deeper tier, and the
+   review job puts the **whole diff in scope**, with `scope.md` saying nothing was
+   excluded. The release-PR rule is not applied on that path, and a misconfigured
+   `sensitive_paths` or an invalid `.github/review-ignore` regex still fails triage
+   on purpose.
+
+   A list that reaches **3,000 paths** takes the same route, because the files
+   endpoint stops there without saying so and classification is where the skips
+   live: a PR whose first 3,000 paths were all generated or all docs would skip
+   with code past the cap. Exactly 3,000 is a false positive and costs one deep
+   review. The cap itself is not lifted — the scope step reads the same endpoint,
+   so the reviewer sees the first 3,000 files, and `scope.md` says so.
 5. Bot-authored release PR whose changed paths are all generated release
    material → skip. The expected set is **derived from
    `release-please-config.json` on the base ref** — manifest, `changelog-path`,
