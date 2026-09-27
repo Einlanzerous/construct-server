@@ -301,10 +301,11 @@ jobs:
       # one source of truth for "what is in scope", and it is this one.
       reviewable_b64: ${{ steps.triage.outputs.reviewable_b64 }}
       generated_b64: ${{ steps.triage.outputs.generated_b64 }}
-      # `false` only when triage could not list the changed files and reviewed
-      # anyway (SERV-198). The lists above are then empty and mean "not
-      # classified", not "nothing in scope" — the review job puts the whole diff
-      # in scope rather than reading them.
+      # `false` only when triage could not classify the PR — the files listing
+      # failed, or reached the API's 3,000-file cap — and reviewed anyway
+      # (SERV-198). The lists above are then empty and mean "not classified",
+      # not "nothing in scope"; the review job puts the whole diff in scope
+      # rather than reading them.
       classified: ${{ steps.triage.outputs.classified }}
 
     steps:
@@ -482,6 +483,21 @@ jobs:
       # diff in scope. That costs budget and not coverage: a PR too big or too
       # awkward to classify is exactly the one that should get MORE review.
       #
+      # The same goes for a list that may be TRUNCATED. The files endpoint
+      # returns at most 3,000 files and says nothing when it stops, and
+      # classification is also where the skips live: a PR whose first 3,000
+      # paths were all generated, or all docs, would hit `only generated files
+      # changed` / `documentation only` with code past the cap. A list that
+      # reaches 3,000 is therefore treated as unclassifiable. Exactly 3,000 is a
+      # false positive and costs one deep review, which is the safe direction.
+      #
+      # The failure path must survive its own error message. The text is read
+      # with `head -c 200 FILE | tr`, never `tr <FILE | head -c 200`: under
+      # pipefail the latter SIGPIPEs `tr` once the body outgrows the pipe buffer
+      # (measured: aborts from about 20 KiB, every run at 70 KiB), and a bare
+      # assignment then aborts triage — the red-triage, skipped-review outcome
+      # this section exists to prevent, reached through the safety net itself.
+      #
       # What the degraded path does not do, so nobody assumes it does. It skips
       # the release-PR rule, so a bot-authored release PR arriving here reaches
       # the reviewer and goes red, as the fall-through above already does. And it
@@ -490,9 +506,10 @@ jobs:
       # purpose. Those are the caller's own config, they fail every PR alike on
       # the first one, and refusing rather than guessing is their design.
       #
-      # One bound remains. The files endpoint returns at most 3,000 files, so a
-      # larger PR is classified on the first 3,000. The review job's scope step
-      # reads the same endpoint and shares it; this does not lift it.
+      # One bound remains, and it is now stated rather than silent. The review
+      # job's scope step reads the same endpoint, so past 3,000 files the
+      # reviewer sees the first 3,000 only; scope.md says so. This does not lift
+      # the cap, it stops a PR from being skipped or half-read without saying.
       #
       # ── the release-PR skip, and why it is keyed on three things ─────────────
       #
@@ -788,25 +805,24 @@ jobs:
             fi
           fi
 
-          # The files API, not `gh pr diff` (406 past 20,000 lines). Unlistable is NOT
-          # empty: it reviews, deeper, whole diff in scope. Why: above the step.
+          # The files API, not `gh pr diff` (406 past 20,000 lines). A list that cannot be
+          # trusted is NOT empty: it reviews, deeper, whole diff in scope. Why: above the step.
           LIST_ERR=$(mktemp)
+          NOLIST=""
           if FILES=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
                        --jq '.[].filename' 2>"$LIST_ERR"); then
-            LISTED=yes
+            [ "$(grep -c . <<<"$FILES")" -lt 3000 ] || NOLIST="the files API hit its 3,000-file cap, so the list may be truncated"
           else
-            LISTED=no
-            FILES=""
+            NOLIST="the files API call failed ($(head -c 200 "$LIST_ERR" | tr -d '\n'))"
           fi
-          LIST_MSG=$(tr -d '\n' <"$LIST_ERR" | head -c 200)
           rm -f "$LIST_ERR"
 
-          if [ "$LISTED" = no ]; then
-            echo "::warning::Could not list the changed files of PR #$PR_NUMBER ($LIST_MSG) — reviewing without triage: whole diff in scope, at ${{ inputs.high_effort }} effort."
+          if [ -n "$NOLIST" ]; then
+            echo "::warning::Could not classify PR #$PR_NUMBER: $NOLIST — reviewing without triage: whole diff in scope, at ${{ inputs.high_effort }} effort."
             {
               echo "## Reviewed without triage"
               echo
-              echo "The changed files could not be listed, so nothing could be classified. Reviewing at the deeper tier with the whole diff in scope, rather than skipping."
+              echo "Triage could not classify this PR: ${NOLIST}. Reviewing at the deeper tier with the whole diff in scope, rather than skipping."
             } >> "$GITHUB_STEP_SUMMARY"
             {
               echo "classified=false"
@@ -1205,7 +1221,7 @@ jobs:
       # is a fact, and the whole failure being fixed is a budget the reviewer
       # cannot see itself spending.
       #
-      # When triage could not list the files it reviewed anyway and handed over
+      # When triage could not classify the PR it reviewed anyway and handed over
       # EMPTY lists with `classified=false` (SERV-198). Empty there means "not
       # classified", not "nothing in scope" — read as the latter it would give
       # the reviewer an empty patch and a scope file saying there is nothing to
@@ -1287,7 +1303,11 @@ jobs:
             echo "PR #${PR_NUMBER} against \`${BASE_REF}\` — ${TOTAL} changed in total."
             echo
             if [ "$CLASSIFIED" != true ]; then
-              echo "**Triage could not list the changed files**, so nothing was excluded as generated: the whole diff is in scope, generated artifacts included. Budget from the sizes below, largest first."
+              echo "**Triage could not classify this PR's changed files**, so nothing was excluded as generated: the whole diff is in scope, generated artifacts included. Budget from the sizes below, largest first."
+              echo
+            fi
+            if [ "$(jq length "$SCOPE_DIR/files.json")" -ge 3000 ]; then
+              echo "**GitHub lists at most 3,000 changed files and this PR reached that cap**, so files beyond it are neither listed nor in scope. Say so in your review rather than implying full coverage."
               echo
             fi
             echo "## In scope — ${IN_SCOPE}"
