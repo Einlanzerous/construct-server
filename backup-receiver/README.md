@@ -109,10 +109,16 @@ exiting non-zero.
 
 ## Then, on the construct server
 
+Pass the REST credentials as environment variables, never in the URL — a
+credential embedded in the URL sits in `restic`'s own argv, visible to anyone
+who runs `ps` on that host for as long as the command is running.
+
 ```bash
 tailscale ping <TS_HOSTNAME>
 
-restic -r rest:http://<user>:<password>@<TS_HOSTNAME>:8000/construct/ \
+export RESTIC_REST_USERNAME='<user>'
+export RESTIC_REST_PASSWORD='<password>'
+restic -r rest:http://<TS_HOSTNAME>:8000/construct/ \
   init --copy-chunker-params --from-repo <local hub repo>
 ```
 
@@ -146,7 +152,7 @@ manage it, which means `docker compose down -v` cannot delete your backups.
 `install.sh` creates it if it is missing.
 
 **Rotating the receiver password:** change `REST_PASSWORD` in `.env`, re-run
-`./install.sh`, then update the repository URL on the construct server. The
+`./install.sh`, then update `RESTIC_REST_PASSWORD` on the construct server. The
 credential is read at **startup**, not per request, so a change does not take
 effect until the container restarts — `install.sh` handles that.
 

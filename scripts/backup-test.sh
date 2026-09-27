@@ -475,5 +475,60 @@ grep -q "is mode 644, not 600" "$SCRATCH/log" && ok "refusal names the actual mo
 unset MOCK_DB_LIST
 scenario_teardown
 
+# ─── T23/T24: verify-destination's argument validation (SERV-215) ──────────
+# The real network/append-only proof this command makes is deliberately NOT
+# exercised here — see this file's header. What IS testable without a real
+# receiver is that it refuses cleanly before ever touching the network: no
+# name given, or a name that isn't in BACKUP_DESTINATIONS.
+head_ "T23: verify-destination with no name argument"
+scenario_setup
+write_conf '"desk:rest:http://mockhost:8000/construct/"'
+write_dest_creds
+rc=0; run_backup verify-destination || rc=$?
+assert_status "refuses" 1 "$rc"
+grep -q "needs a destination name" "$SCRATCH/log" && ok "refusal names the requirement" || bad "refusal names the requirement"
+scenario_teardown
+
+head_ "T24: verify-destination against an unconfigured name"
+scenario_setup
+write_conf '"desk:rest:http://mockhost:8000/construct/"'
+write_dest_creds
+rc=0; PATH="$MOCK_BIN:$PATH" MOCK_DOCKER_ROOT=/data \
+  BACKUP_CONF="$CONF" BACKUP_ENV_FILE="$ENVFILE" \
+  BACKUP_STATE_DIR="$STATE_DIR" BACKUP_DATA_DIR="$DATA_DIR" \
+  "$BACKUP_SCRIPT" verify-destination nosuchdest >"$SCRATCH/log" 2>&1 || rc=$?
+assert_status "refuses" 1 "$rc"
+grep -q "no destination named 'nosuchdest'" "$SCRATCH/log" && ok "refusal names the unknown destination" || bad "refusal names the unknown destination"
+scenario_teardown
+
+# ─── T25: verify-destination is excluded by the SAME lock cmd_run holds ────
+# ─── (PR #230 review: without this, a hand-run verify-destination during ──
+# ─── the nightly window force-removes the real run's in-flight container) ─
+head_ "T25: verify-destination refuses while a real run holds the lock, and can proceed once it's released"
+scenario_setup
+write_conf '"desk:rest:http://mockhost:8000/construct/"'
+write_dest_creds
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_DUMP_HANG_DB=beta
+export MOCK_DUMP_HANG_SEC=3
+PATH="$MOCK_BIN:$PATH" MOCK_DOCKER_ROOT=/data MOCK_DB_LIST="$MOCK_DB_LIST" \
+  MOCK_DUMP_HANG_DB="$MOCK_DUMP_HANG_DB" MOCK_DUMP_HANG_SEC="$MOCK_DUMP_HANG_SEC" \
+  RESTIC_PASSWORD_HUB=testpw \
+  BACKUP_CONF="$CONF" BACKUP_ENV_FILE="$ENVFILE" \
+  BACKUP_STATE_DIR="$STATE_DIR" BACKUP_DATA_DIR="$DATA_DIR" \
+  "$BACKUP_SCRIPT" run >"$SCRATCH/log.a" 2>&1 &
+run_a_pid=$!
+sleep 1
+rc_b=0; PATH="$MOCK_BIN:$PATH" MOCK_DOCKER_ROOT=/data \
+  BACKUP_CONF="$CONF" BACKUP_ENV_FILE="$ENVFILE" \
+  BACKUP_STATE_DIR="$STATE_DIR" BACKUP_DATA_DIR="$DATA_DIR" \
+  "$BACKUP_SCRIPT" verify-destination desk >"$SCRATCH/log.b" 2>&1 || rc_b=$?
+assert_status "verify-destination refuses while the real run holds the lock" 1 "$rc_b"
+grep -q "a nightly run is in progress" "$SCRATCH/log.b" && ok "refusal names the reason" || bad "refusal names the reason"
+wait "$run_a_pid"; rc_a=$?
+assert_status "the real run still succeeds, undisturbed" 0 "$rc_a"
+unset MOCK_DB_LIST MOCK_DUMP_HANG_DB MOCK_DUMP_HANG_SEC
+scenario_teardown
+
 head_ "Summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

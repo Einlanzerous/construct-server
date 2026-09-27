@@ -7,8 +7,10 @@
 # reasoning behind every choice below: docs/backups.md.
 #
 # Usage:
-#   ./backup-nightly.sh              run the nightly job
-#   ./backup-nightly.sh init-hub      one-time: create the hub repository
+#   ./backup-nightly.sh                       run the nightly job
+#   ./backup-nightly.sh init-hub               one-time: create the hub repository
+#   ./backup-nightly.sh verify-destination N   occasional: prove append-only
+#                                               still holds for destination N
 #
 # Env overrides (mainly for testing — see scripts/backup-test.sh):
 #   BACKUP_CONF        path to backup.conf              (default: ../config/backup/backup.conf)
@@ -526,6 +528,142 @@ fanout_destination() {
   fi
 }
 
+# ─── destination append-only proof (SERV-215) ───────────────────────────────
+#
+# `fanout_destination` above only ever ADDS to a destination — it has no
+# reason to ever discover whether append-only has quietly been turned off.
+# This proves it, from the credential path the nightly job actually uses
+# (over the tailnet, with the destination's real REST credentials), which is
+# NOT what backup-receiver/install.sh's own `verify` proves: that one runs ON
+# the receiver host itself, against the docker bridge address, as a one-time
+# setup check. This is the ongoing one — meant to be re-run occasionally by
+# hand, never wired into cmd_run, and never exercised by backup-test.sh's
+# mock suite (see that file's header for why).
+#
+# Uses a FIXED, REUSED probe repository — a sibling of the real one on the
+# same REST server, never the real repository itself. Idempotent: the probe
+# repo is created only if it doesn't already exist; the fixture it backs up
+# is the same few bytes every time, so repeated runs cost nothing new to
+# store (restic dedups identical content) beyond one small snapshot entry.
+VERIFY_PROBE_FIXTURE_CONTENT="backup-nightly verify-destination fixture (SERV-215) — do not delete by hand"
+
+cmd_verify_destination() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "verify-destination needs a destination name, e.g.: $0 verify-destination desk"
+
+  # The SAME lock cmd_run takes, before the first run_restic call. Every
+  # run_restic invocation opens with `docker rm -f "$RESTIC_CONTAINER_NAME"`
+  # against a FIXED name (backup-nightly-restic) — with no lock here, a
+  # hand-run verify-destination during the nightly window force-removes
+  # whichever restic container the real run is mid-operation with, and a kill
+  # landing during the real run's own `forget`/`copy` corrupts that run rather
+  # than merely being refused (PR #230 review). This makes the two mutually
+  # exclusive, the same as two real runs of cmd_run.
+  mkdir -p "$BACKUP_STATE_DIR"
+  exec 200>"$LOCK_FILE"
+  flock -n 200 || die "verify-destination($name): a nightly run is in progress ($LOCK_FILE) — retry after it finishes"
+
+  local spec="" d
+  for d in "${BACKUP_DESTINATIONS[@]}"; do
+    [ "${d%%:*}" = "$name" ] && spec="$d"
+  done
+  [ -n "$spec" ] || die "no destination named '$name' in BACKUP_DESTINATIONS"
+
+  local url upper dest_pw dest_user dest_pass
+  url="${spec#*:}"
+  upper="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
+  dest_pw="$(eval "printf '%s' \"\${RESTIC_PASSWORD_${upper}:-}\"")"
+  dest_user="$(eval "printf '%s' \"\${REST_USER_${upper}:-}\"")"
+  dest_pass="$(eval "printf '%s' \"\${REST_PASSWORD_${upper}:-}\"")"
+  [ -n "$dest_pw" ] || die "RESTIC_PASSWORD_${upper} is empty/unset"
+
+  # A sibling path on the same REST server — same host:port, never the real
+  # repo name. Works for any "rest:http://host:port/reponame/" url, which is
+  # the only shape a destination in this file ever takes.
+  local base probe_repo probe_http
+  base="${url%/}"; base="${base%/*}"
+  probe_repo="${base}/backup-nightly-verify-probe/"
+  probe_http="${probe_repo#rest:}"
+
+  local fixture="$BACKUP_DATA_DIR/verify-probe-fixture"
+  mkdir -p "$BACKUP_DATA_DIR"
+  printf '%s\n' "$VERIFY_PROBE_FIXTURE_CONTENT" >"$fixture"
+
+  if ! RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+       RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+       run_restic snapshots >/dev/null 2>&1; then
+    err "verify-destination($name): probe repository absent — initializing $probe_repo"
+    RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+      RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+      run_restic init \
+      || die "verify-destination($name): could not initialize the probe repository"
+  fi
+
+  RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic backup --tag verify-probe "$fixture" \
+    || die "verify-destination($name): backing up the probe fixture failed — is the receiver reachable?"
+
+  local failed=0
+
+  # `forget <id>` — an EXPLICIT snapshot id, not a retention policy. `--keep-last
+  # 0` is that flag's zero value, which restic reads as "not set" and refuses
+  # with "no policy was specified" before it ever touches the repository — a
+  # refusal that looks identical whether or not append-only is even on (PR
+  # #230 review, reproduced against a plain local repo with no append-only
+  # anywhere: `Fatal: no policy was specified, no snapshots will be removed`,
+  # exit 1). An explicit id has no policy to evaluate, so restic issues the
+  # DELETE unconditionally.
+  local snap_id
+  snap_id="$(RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic snapshots --tag verify-probe --latest 1 --json 2>/dev/null \
+    | jq -r '.[0].id // empty')"
+  [ -n "$snap_id" ] || die "verify-destination($name): could not read back the snapshot just backed up"
+
+  # `forget`'s own EXIT CODE is not trustworthy here — measured directly, not
+  # assumed. Against a receiver that refuses the delete with 403, restic logs
+  # "unable to remove snapshot ... from the repository" to stderr and STILL
+  # exits 0 (confirmed on the pinned restic/restic:0.18.1, forget always
+  # exits 0 whether or not the underlying remove succeeded). So this ignores
+  # forget's exit status and instead re-reads the snapshot list afterward,
+  # asking whether the snapshot is STILL there — report-vs-observation
+  # (PRINCIPLES §4), the same shape `copy_one_cluster`'s own freshness check
+  # already uses, rather than trusting what the command claims.
+  RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic forget "$snap_id" >/dev/null 2>&1 || true
+
+  local still_present
+  still_present="$(RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic snapshots --json 2>/dev/null \
+    | jq -r --arg id "$snap_id" '[.[] | select(.id == $id)] | length')"
+
+  if [ "${still_present:-0}" -gt 0 ] 2>/dev/null; then
+    err "verify-destination($name): ok — snapshot survived 'restic forget' (append-only holds)"
+  else
+    err "verify-destination($name): FAIL — snapshot is GONE after 'restic forget' — append-only is NOT in force"
+    failed=1
+  fi
+
+  # The second, independent proof — same discriminating probe as
+  # backup-receiver/install.sh's own verify() and for the same reason:
+  # DELETE on the repo root answers 405 whether or not append-only is on,
+  # DELETE on .../config is 403 vs 200 and is the one that discriminates.
+  local code
+  code="$(printf 'user = "%s:%s"\n' "$dest_user" "$dest_pass" \
+    | curl -s -o /dev/null -w '%{http_code}' --max-time 10 -K - -X DELETE "${probe_http}config" || echo 000)"
+  case "$code" in
+    403) err "verify-destination($name): ok — raw DELETE .../config refused (403)" ;;
+    *)   err "verify-destination($name): FAIL — raw DELETE .../config returned $code, expected 403"
+         failed=1 ;;
+  esac
+
+  [ "$failed" -eq 0 ] || die "verify-destination($name): append-only is not fully proven — see above"
+  err "verify-destination($name): append-only confirmed"
+}
+
 # ─── main ────────────────────────────────────────────────────────────────────
 
 cmd_init_hub() {
@@ -613,5 +751,6 @@ cmd_run() {
 case "${1:-run}" in
   run) cmd_run ;;
   init-hub) cmd_init_hub ;;
-  *) die "unknown command '$1'. Use: run | init-hub" ;;
+  verify-destination) cmd_verify_destination "${2:-}" ;;
+  *) die "unknown command '$1'. Use: run | init-hub | verify-destination <name>" ;;
 esac
