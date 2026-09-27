@@ -438,5 +438,26 @@ assert_eq "recorded as a miss instead" "$(state_get '.destinations.desk.consecut
 unset MOCK_DB_LIST MOCK_DEST_SNAPSHOT_ORIGINAL
 scenario_teardown
 
+# ─── T21: an exhausted preflight on a FRESH state dir must not corrupt ─────
+# ─── state.json — round-2 review finding: state_init_if_missing ran AFTER ──
+# ─── preflight_retry_loop, so its failure path's state_update targeted a ──
+# ─── file that did not exist yet, and jq's failure there still got moved ──
+# ─── into place as a 0-byte file, silently disabling every later check ────
+head_ "T21: an exhausted preflight on a fresh state dir leaves state.json valid"
+scenario_setup
+write_conf
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_DOCKER_DOWN=1
+rc=0; run_backup || rc=$?
+assert_status "run fails (preflight exhausted)" 1 "$rc"
+[ -s "$STATE_DIR/state.json" ] && ok "state.json is non-empty after an exhausted preflight" || bad "state.json is non-empty after an exhausted preflight"
+jq -e . "$STATE_DIR/state.json" >/dev/null 2>&1 && ok "state.json is still valid JSON" || bad "state.json is still valid JSON"
+assert_eq "preflight_failed_count recorded" "$(state_get '.preflight_failed_count')" "1"
+unset MOCK_DOCKER_DOWN
+rc=0; run_backup || rc=$?
+assert_status "second run, preflight now healthy, proceeds normally" 0 "$rc"
+unset MOCK_DB_LIST
+scenario_teardown
+
 head_ "Summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

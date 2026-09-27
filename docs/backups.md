@@ -214,6 +214,28 @@ mock-only hook) to open a real window for a second invocation and confirms it
 is refused immediately, before touching staging, while the first completes
 undisturbed.
 
+**`state_init_if_missing` runs before `preflight_retry_loop`, not after — and
+`state_update` fails closed on any `jq` error, not just this one.** Round 2 of
+the same PR's review: the first fix moved the lock ahead of
+`preflight_retry_loop`, but not `state_init_if_missing` itself, so a fresh
+state directory whose very first run exhausts preflight (a rebooted host
+whose docker/tailscale/postgres aren't up yet — exactly what the retry loop
+exists for) hit `state_update` against a `STATE_FILE` that did not exist.
+`jq` against a missing file fails, but the unconditional `mv` that followed
+moved its empty output into place anyway, installing a 0-byte `state.json`.
+`state_init_if_missing`'s own existence check (`-f`) is satisfied by an empty
+file exactly as well as a valid one, so nothing ever replaced it — the weekly
+check, the monthly read-data-subset and the miss threshold would all have
+gone permanently, silently inert, with every run still exiting 0. Reproduced
+directly with the script's own `state_update` against a missing file before
+fixing it: `jq` exits 2, and the move still lands a 0-byte file regardless.
+Two fixes, not one: the ordering (so this exact path can't recur), and
+`state_update` itself checking `jq`'s exit status before the `mv` (so no
+future `jq` failure — a bad filter, a permissions problem, a full disk —
+can ever corrupt a working `state.json` into an empty one silently). T21
+exhausts preflight on a fresh state dir and confirms `state.json` comes out
+valid, then confirms a second, healthy run proceeds normally.
+
 ## Container hygiene
 
 Every `restic` invocation runs in a container this script starts under a

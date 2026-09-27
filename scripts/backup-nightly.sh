@@ -83,10 +83,21 @@ state_get() { jq -r "$1" "$STATE_FILE"; }
 # state_update <jq filter> — filter receives "." as the current state and must
 # emit the new state. Written to a tmp file in the same directory, then
 # renamed, so a crash mid-write cannot leave a torn state.json.
+#
+# Fails closed on jq itself failing, for any reason — not just the specific
+# missing-STATE_FILE case that motivated it (PR review round 2). The
+# unconditional `mv` this replaces moved jq's tmp file into place whether jq
+# succeeded or not, and a failed jq run's tmp file is a 0-byte file (jq wrote
+# nothing to it before exiting), so ANY future jq failure — a bad filter, a
+# permissions problem, a full disk mid-write — would have corrupted a working
+# state.json into an empty one with no error surfaced anywhere.
 state_update() {
   local tmp
   tmp="$(mktemp "$BACKUP_STATE_DIR/state.json.XXXXXX")"
-  jq "$1" "$STATE_FILE" >"$tmp"
+  if ! jq "$1" "$STATE_FILE" >"$tmp"; then
+    rm -f "$tmp"
+    die "state_update failed (jq filter: $1) — state.json left untouched"
+  fi
   mv -f "$tmp" "$STATE_FILE"
 }
 
@@ -534,9 +545,24 @@ cmd_run() {
   exec 200>"$LOCK_FILE"
   flock -n 200 || die "another run is already in progress ($LOCK_FILE)"
 
+  # Also before preflight_retry_loop, which was still missed in the first
+  # review round: its own exhaustion path calls `state_update` (records
+  # preflight_failed_count), and on a state dir that has never been
+  # initialized, `state_init_if_missing` had not yet run either — so
+  # `state_update` targeted a STATE_FILE that did not exist at all (PR review
+  # round 2). `jq` against a missing file fails, but `state_update` moved its
+  # empty tmp file into place regardless, installing a 0-byte state.json.
+  # `state_init_if_missing`'s own existence check (`-f`) is satisfied by an
+  # empty file just as well as a valid one, so nothing ever replaced it again:
+  # the weekly check, the monthly read-data-subset and the miss threshold
+  # would all have gone permanently, silently inert on exactly the box that
+  # had just rebooted into a not-yet-ready docker/tailscale/postgres — the
+  # case the retry loop exists for in the first place. Reproduced directly
+  # with the script's own state_update against a missing file before fixing
+  # this: `jq` exits 2, and the move still lands a 0-byte file.
+  state_init_if_missing
   preflight_retry_loop || exit 1
 
-  state_init_if_missing
   staging_setup
 
   local entry container label
