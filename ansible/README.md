@@ -46,7 +46,8 @@ The main playbook for managing personal infrastructure.
 *   **`server` (server host only)**:
     *   **Docker & GPU drivers**: For running local LLMs and containers.
     *   **Construct Repo**: Clones the main repo for the stack.
-*   **`tailscale`, `github_runner`, `sunshine`**: server-only roles for VPN mesh, CI runner, and game streaming respectively.
+*   **`tailscale`, `sunshine`**: server-only roles for VPN mesh and game streaming respectively.
+*   **CI runners are not an ansible concern.** They are registered by hand under `~/runners/<name>/`, one systemd unit each (SERV-181 retired the `github_runner` role, which would have re-registered the live `imperial-construct` runner from a second directory). `make runner-node-path` audits them.
 *   **`signet`** (server host only): installs the Signet credential-vault host daemon as a systemd unit (`signet serve` on `127.0.0.1:4010`), consumed by Switchyard's connector. Requires `signet_api_token` in SOPS secrets; see [`roles/signet/README.md`](roles/signet/README.md). Run in isolation with `--tags signet`.
 
 ### 2. `work.yml` (Work Laptop)

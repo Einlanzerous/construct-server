@@ -288,12 +288,15 @@ anything deploys or gets versioned.
   the shell that ran `config.sh` had, and an fnm shell's PATH names a per-shell
   `/run/user/…/fnm_multishells/` directory — tmpfs, gone on reboot, after which node
   silently falls through to the system v18 (EOL April 2025). Nine of thirteen runners
-  carried one; five had already flipped. Every `.path` on the box now names fnm's
-  `default` alias instead — the thirteen under `~/runners/` and the one the ansible
-  `github_runner` role left half-registered at `~/actions-runner` (SERV-181), which the
-  script walks precisely because a check scoped to `~/runners/` printed green over it —
-  so all fourteen resolve the same node and the answer was chosen rather than
-  inherited. `runsvc.sh` reads `.path` **once, at unit start**, so a
+  carried one; five had already flipped. Every `.path` under `~/runners/` now names
+  fnm's `default` alias instead, so they all resolve the same node and the answer was
+  chosen rather than inherited. **Runners are registered by hand, and ansible has no
+  role for them** (SERV-181). The `github_runner` role that used to exist passed
+  `--replace` with no `--name`, so a completed `site.yml` run would have re-registered
+  the live `imperial-construct` runner from a second directory, `~/actions-runner`, on
+  the tarball's 2.321.0 and a bare system PATH. It never got that far — its
+  registration token had expired — and the role and the directory are both gone.
+  `runsvc.sh` reads `.path` **once, at unit start**, so a
   rewrite changes nothing until the runner restarts; the script reports the live
   listener's PATH beside the file for that reason. **Never copy another runner's
   `.path`** when adding one — run the script, which is what `~/runners/POOL-README.md`
