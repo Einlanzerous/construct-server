@@ -74,7 +74,6 @@
     - amd_gpu
     - server
     - tailscale
-    - github_runner
     - role: signet
       tags: signet
     # Tagged so it can be applied on its own: the token it needs is the only
