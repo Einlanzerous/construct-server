@@ -1,0 +1,99 @@
+---
+# Nightly Postgres backup — host wiring (SERV-43 / SERV-214). See
+# docs/backups.md for the full design; this role wires the host side only.
+
+- name: Check whether the backup script has been deployed
+  stat:
+    path: "{{ construct_backup_script }}"
+  register: construct_backup_script_stat
+
+# The script arrives via deploy.yml's rsync, not this role. On a cold host
+# ansible runs before any deploy has happened, so install the wiring and
+# leave the timer disabled — which this role always does anyway (see below)
+# — rather than failing the play over it.
+- name: Warn if the backup script is missing
+  debug:
+    msg: >-
+      {{ construct_backup_script }} not found — installing the unit and timer
+      regardless (the timer is never started by this role either way). It is
+      deployed by .github/workflows/deploy.yml (rsync of scripts/); re-run
+      this role after the first deploy before turning the timer on by hand.
+  when: not construct_backup_script_stat.stat.exists
+
+# Signet is the ONLY writer of /etc/construct-backup/backup.env (SERV-43's
+# plan ruling) — this role creates the directory and never templates the
+# file itself, unlike delivery_prober's env file. 0700: nothing else needs
+# group access. Note this directory's permissions are defense-in-depth, not
+# the only guard — `signet render` does NOT set a restrictive mode on the
+# file it writes (measured directly, 2026-09-26: a fresh render came out
+# 0664, driven by the ambient umask, not anything signet enforces), which is
+# why scripts/render-backup-env.sh chmods after every render and
+# backup-nightly.sh itself refuses to source anything but a 0600 file.
+- name: Create the backup credential directory
+  file:
+    path: /etc/construct-backup
+    state: directory
+    owner: "{{ construct_backup_user }}"
+    group: "{{ construct_backup_user }}"
+    mode: "0700"
+
+# backup-nightly.sh's own `mkdir -p "$BACKUP_STATE_DIR"` (default
+# /var/lib/construct-backup) would otherwise fail on a cold host: /var/lib is
+# root:root 0755, and the unit runs as {{ construct_backup_user }}, not root
+# — confirmed directly (`stat -c '%U %G %a' /var/lib` → root root 755), not
+# assumed from the script working in earlier manual/by-hand runs, which never
+# hit this because a human ran them with their own home-directory-adjacent
+# override rather than the real default path.
+- name: Create the backup state directory
+  file:
+    path: /var/lib/construct-backup
+    state: directory
+    owner: "{{ construct_backup_user }}"
+    group: "{{ construct_backup_user }}"
+    mode: "0700"
+
+- name: Deploy the backup systemd unit
+  template:
+    src: construct-backup.service.j2
+    dest: /etc/systemd/system/construct-backup.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd daemon
+
+- name: Deploy the backup systemd timer
+  template:
+    src: construct-backup.timer.j2
+    dest: /etc/systemd/system/construct-backup.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd daemon
+
+- name: Flush handlers so the rendered unit is loaded before verification
+  meta: flush_handlers
+
+# Proven to actually catch a bad unit before trusting its pass on a good one
+# (SERV-213's own plan review): a Type=oneshot unit carrying
+# RestartForceExitStatus= is refused by systemd at load — checked directly
+# on this box. Never trust a validator's "0 findings" that has not also been
+# seen to fail; this task is that proof, run on every apply, not a one-time
+# check taken on faith.
+- name: Validate the rendered unit with systemd-analyze verify
+  command: systemd-analyze verify /etc/systemd/system/construct-backup.service
+  register: construct_backup_verify
+  changed_when: false
+  failed_when: construct_backup_verify.rc != 0
+
+# Deliberately no "enable and start" task, in either direction. The timer
+# stays disabled until the desktop destination exists (SERV-215) — this role
+# only ever installs the unit and timer files. Turning the timer on is a
+# separate, later, deliberate action, not something a re-run of this role
+# should do on its own; nor does a re-run disable a timer someone already
+# turned on by hand. This role takes no enable/disable action either way.
+- name: Note that the backup timer is left exactly as found
+  debug:
+    msg: >-
+      construct-backup.timer installed/updated but not touched otherwise —
+      this role never enables, disables, starts or stops it. Turn it on by
+      hand once SERV-215 lands: systemctl enable --now construct-backup.timer

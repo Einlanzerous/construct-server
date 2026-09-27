@@ -5,7 +5,7 @@
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve \
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
         comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight \
-        backup-test
+        backup-test backup-status
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -168,6 +168,12 @@ lint-gate-uninstall:
 # proves and why the append-only proof itself deliberately isn't one of them.
 backup-test:
 	@./scripts/backup-test.sh
+
+# Did last night's backup actually happen, and did it land everywhere it was
+# supposed to — not just "is the timer enabled" (SERV-214). Reads state.json
+# directly; never touches the lock or triggers a run.
+backup-status:
+	@./scripts/backup-status.sh
 
 # Assert the ORIGIN rejects a spoofed Host (SERV-106), rather than merely being hard to
 # reach (SERV-107). Two halves: a config check that every router on the `internal`

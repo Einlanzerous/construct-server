@@ -46,6 +46,9 @@ scenario_setup() {
   ENVFILE="$SCRATCH/backup.env"
   mkdir -p "$DATA_DIR" "$STATE_DIR"
   echo "RESTIC_PASSWORD_HUB=testpw" >"$ENVFILE"
+  # backup-nightly.sh now refuses to source anything but a 0600 file (SERV-214
+  # — signet render does not enforce this itself, measured directly).
+  chmod 0600 "$ENVFILE"
 }
 
 scenario_teardown() { rm -rf "$SCRATCH"; }
@@ -456,6 +459,19 @@ assert_eq "preflight_failed_count recorded" "$(state_get '.preflight_failed_coun
 unset MOCK_DOCKER_DOWN
 rc=0; run_backup || rc=$?
 assert_status "second run, preflight now healthy, proceeds normally" 0 "$rc"
+unset MOCK_DB_LIST
+scenario_teardown
+
+# ─── T22: a credential file that isn't 0600 is refused, not trusted ───────
+# ─── (signet render does not enforce this itself — measured, not assumed) ──
+head_ "T22: backup.env at the wrong mode is refused before it's ever sourced"
+scenario_setup
+write_conf
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+chmod 0644 "$ENVFILE"
+rc=0; run_backup || rc=$?
+assert_status "run refuses" 1 "$rc"
+grep -q "is mode 644, not 600" "$SCRATCH/log" && ok "refusal names the actual mode" || bad "refusal names the actual mode"
 unset MOCK_DB_LIST
 scenario_teardown
 

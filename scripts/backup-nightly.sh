@@ -53,6 +53,19 @@ die()  { err "backup-nightly: $*"; exit 1; }
 # An empty or unset credential is not a value (the estate's own db/init-db.sh
 # invariant) — read it as absent, never proceed with a blank one silently.
 if [ -f "$BACKUP_ENV_FILE" ]; then
+  # `signet render` does NOT set a restrictive mode on the file it writes —
+  # measured directly against the real binary (2026-09-26): a fresh render
+  # came out 0664 (group- and other-readable), driven by the calling
+  # process's ambient umask, not by anything signet itself enforces. This
+  # would otherwise be the one place a wrong assumption from the plan (that
+  # Signet delivers this file at 0600) turns into a real credential exposure
+  # rather than a config mismatch — so it's checked here rather than
+  # trusted. scripts/render-backup-env.sh is the wrapper that chmods after
+  # every render; this is the backstop if that step is ever skipped or a
+  # future render silently reverts it.
+  actual_mode="$(stat -c %a "$BACKUP_ENV_FILE")"
+  [ "$actual_mode" = "600" ] \
+    || die "$BACKUP_ENV_FILE is mode $actual_mode, not 600 — refusing to source a credential file that isn't private. Run scripts/render-backup-env.sh, which renders AND chmods."
   set -a
   # shellcheck disable=SC1090
   . "$BACKUP_ENV_FILE"

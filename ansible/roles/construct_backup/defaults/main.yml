@@ -1,0 +1,37 @@
+---
+# Nightly Postgres backup — host wiring (SERV-43 / SERV-214). Design of
+# record: docs/backups.md.
+
+construct_backup_user: magos
+
+# Lives in the repo (scripts/), reaches the box via deploy.yml's rsync — the
+# same split delivery_prober uses: ansible bootstraps the host-level wiring
+# (directory, unit, timer), the workflow owns steady state.
+construct_backup_script: "{{ deploy_root }}/scripts/backup-nightly.sh"
+
+# TimeoutStartSec — the run's one wall-clock bound. docs/backups.md's
+# Concurrency and "Boot-time preflight" sections explain why there is
+# exactly one bound, not this plus a systemd-level restart timeout: the unit
+# carries no Restart= at all. Budget, not a guess:
+#
+#   preflight max          1200s  (BACKUP_PREFLIGHT_MAX_SEC in backup.conf)
+# + hub duration             600s  (measured ~16s for both clusters on
+#                                   2026-09-26 at ~818 MiB combined and no
+#                                   destination configured; 600s leaves
+#                                   >20x headroom for data growth)
+# + destination margin      600s  (placeholder — no destination is wired
+#                                   yet as of this role; revisit once
+#                                   SERV-215 has real fan-out timing)
+# + margin                   300s
+# = 2700s (45 minutes)
+#
+# Provisional on the destination-margin term specifically, not on the rest.
+construct_backup_timeout_start_sec: 2700
+
+# Nightly at 02:30 local, clear of the 00:00 timers already on this box
+# (logrotate, cloudflared-update, dpkg-db-backup). Persistent=true — unlike
+# delivery_prober's timer, which deliberately leaves this off: a prober's
+# observation is a claim about the present, so replaying a missed one on
+# boot would be meaningless, but a backup missed because the box was down
+# should still run once it's back.
+construct_backup_schedule: "*-*-* 02:30:00"
