@@ -618,23 +618,60 @@ not gzip once and then restic again on top of it).
 uses** — `backup-nightly.sh verify-destination desk`, added for exactly this
 (see "Container hygiene" and the function's own comment): inits a fixed,
 reused `backup-nightly-verify-probe` repository on the same REST server
-(never `/construct/` itself) if absent, backs up one tiny fixed fixture, then
-confirms both `restic forget --keep-last 0` and a raw `DELETE
-.../config` are refused. Run twice, live, back to back:
+(never `/construct/` itself) if absent, backs up one tiny fixed fixture, backs
+`forget` by an explicit snapshot id, and asks two independent questions: is
+the snapshot still there afterward, and does a raw `DELETE .../config` still
+get refused.
 
-- **First run**: probe repo absent → initialized, fixture backed up,
-  `forget` refused, `DELETE .../config` → 403. `append-only confirmed`, exit 0.
+**Two things about `restic forget` turned out to matter, both caught by PR
+#230's review and reproduced directly, not assumed:**
+
+- **`--keep-last 0` is not a policy — it's that flag's zero value, which
+  restic reads as "not set."** `restic forget --keep-last 0` refuses with
+  `Fatal: no policy was specified, no snapshots will be removed` (exit 1)
+  before it ever touches the repository, on a plain repo with no append-only
+  anywhere. The refusal looked identical whether append-only held or not,
+  which made the first version of this check pass for the wrong reason. Fixed
+  by forgetting an explicit snapshot id instead, which has no policy to
+  evaluate.
+- **`forget`'s own exit code is not trustworthy either way.** Against a
+  receiver that refuses the delete with a genuine 403, restic logs `unable to
+  remove snapshot ... from the repository` to stderr and still **exits 0** —
+  confirmed directly on the pinned `restic/restic:0.18.1`: exit 0 whether the
+  underlying remove succeeded or was refused. So the check ignores `forget`'s
+  exit status entirely and instead re-reads the snapshot list afterward,
+  asking whether the snapshot is **still there** — report-vs-observation
+  (PRINCIPLES §4), the same shape `copy_one_cluster`'s own freshness check
+  already uses.
+
+Both proofs confirmed to actually discriminate, against three throwaway
+servers, not just against the real one: with append-only off, both the
+snapshot-survival check and the raw `DELETE` reported `FAIL` (snapshot gone;
+`DELETE .../config` → 200); with it on, both reported `ok`. Only then run
+against the real desktop, twice, live:
+
+- **First run**: probe repo absent → initialized, fixture backed up, snapshot
+  survived `forget`, `DELETE .../config` → 403. `append-only confirmed`, exit 0.
 - **Second run**: probe repo already present → no re-init (idempotence
   confirmed), fixture backed up again (restic dedups the content; a tiny
   amount of new tree/metadata is stored per run, not zero, but bounded — the
   same accepted growth as a real destination's own append-only cost), same
-  two refusals, same result.
+  two results.
+
+`cmd_verify_destination` also takes the same `flock` on `backup.lock` that
+`cmd_run` does, before its first `run_restic` call — every `run_restic`
+invocation force-removes a fixed container name (`backup-nightly-restic`), so
+without the shared lock a hand-run `verify-destination` during the nightly
+window would kill whichever restic container the real run is mid-operation
+with (also caught by PR #230's review). `make backup-test`'s T25 proves the
+exclusion with a hung mock run.
 
 This is the ongoing check (`make backup-status` doesn't run it; nothing does
 automatically) — re-run it by hand occasionally, and always after any change
 to the receiver's `docker-compose.yml` `OPTIONS`. `make backup-test`'s mock
-suite covers only `verify-destination`'s argument validation (T23, T24) —
-never the real network calls, deliberately (see that file's header).
+suite covers only `verify-destination`'s argument validation and lock
+exclusion (T23–T25) — never the real network calls that prove append-only
+itself, deliberately (see that file's header).
 
 ## Not yet in this file
 

@@ -551,6 +551,18 @@ cmd_verify_destination() {
   local name="${1:-}"
   [ -n "$name" ] || die "verify-destination needs a destination name, e.g.: $0 verify-destination desk"
 
+  # The SAME lock cmd_run takes, before the first run_restic call. Every
+  # run_restic invocation opens with `docker rm -f "$RESTIC_CONTAINER_NAME"`
+  # against a FIXED name (backup-nightly-restic) — with no lock here, a
+  # hand-run verify-destination during the nightly window force-removes
+  # whichever restic container the real run is mid-operation with, and a kill
+  # landing during the real run's own `forget`/`copy` corrupts that run rather
+  # than merely being refused (PR #230 review). This makes the two mutually
+  # exclusive, the same as two real runs of cmd_run.
+  mkdir -p "$BACKUP_STATE_DIR"
+  exec 200>"$LOCK_FILE"
+  flock -n 200 || die "verify-destination($name): a nightly run is in progress ($LOCK_FILE) — retry after it finishes"
+
   local spec="" d
   for d in "${BACKUP_DESTINATIONS[@]}"; do
     [ "${d%%:*}" = "$name" ] && spec="$d"
@@ -594,17 +606,45 @@ cmd_verify_destination() {
 
   local failed=0
 
-  # `forget` (no `--prune` needed — deleting the snapshot object itself is
-  # already a DELETE the receiver's append-only flag must refuse) succeeding
-  # here means the flag is off. Confirmed against the live receiver before
-  # trusting this shape (docs/backups.md).
-  if RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
-       RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
-       run_restic forget --keep-last 0 >/dev/null 2>&1; then
-    err "verify-destination($name): FAIL — 'restic forget' SUCCEEDED against the probe repo — append-only is NOT in force"
-    failed=1
+  # `forget <id>` — an EXPLICIT snapshot id, not a retention policy. `--keep-last
+  # 0` is that flag's zero value, which restic reads as "not set" and refuses
+  # with "no policy was specified" before it ever touches the repository — a
+  # refusal that looks identical whether or not append-only is even on (PR
+  # #230 review, reproduced against a plain local repo with no append-only
+  # anywhere: `Fatal: no policy was specified, no snapshots will be removed`,
+  # exit 1). An explicit id has no policy to evaluate, so restic issues the
+  # DELETE unconditionally.
+  local snap_id
+  snap_id="$(RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic snapshots --tag verify-probe --latest 1 --json 2>/dev/null \
+    | jq -r '.[0].id // empty')"
+  [ -n "$snap_id" ] || die "verify-destination($name): could not read back the snapshot just backed up"
+
+  # `forget`'s own EXIT CODE is not trustworthy here — measured directly, not
+  # assumed. Against a receiver that refuses the delete with 403, restic logs
+  # "unable to remove snapshot ... from the repository" to stderr and STILL
+  # exits 0 (confirmed on the pinned restic/restic:0.18.1, forget always
+  # exits 0 whether or not the underlying remove succeeded). So this ignores
+  # forget's exit status and instead re-reads the snapshot list afterward,
+  # asking whether the snapshot is STILL there — report-vs-observation
+  # (PRINCIPLES §4), the same shape `copy_one_cluster`'s own freshness check
+  # already uses, rather than trusting what the command claims.
+  RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic forget "$snap_id" >/dev/null 2>&1 || true
+
+  local still_present
+  still_present="$(RESTIC_REPOSITORY="$probe_repo" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic snapshots --json 2>/dev/null \
+    | jq -r --arg id "$snap_id" '[.[] | select(.id == $id)] | length')"
+
+  if [ "${still_present:-0}" -gt 0 ] 2>/dev/null; then
+    err "verify-destination($name): ok — snapshot survived 'restic forget' (append-only holds)"
   else
-    err "verify-destination($name): ok — 'restic forget' was refused (append-only holds)"
+    err "verify-destination($name): FAIL — snapshot is GONE after 'restic forget' — append-only is NOT in force"
+    failed=1
   fi
 
   # The second, independent proof — same discriminating probe as
