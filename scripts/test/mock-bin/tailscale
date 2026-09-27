@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Mock `tailscale` for backup-nightly.sh's test harness. Only `status` is used
+# by the preflight probe.
+set -euo pipefail
+case "$1" in
+  status)
+    [ "${MOCK_TAILSCALE_DOWN:-0}" = "1" ] && exit 1
+    exit 0
+    ;;
+  *)
+    echo "mock tailscale: unhandled subcommand '$1'" >&2
+    exit 95
+    ;;
+esac
