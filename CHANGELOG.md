@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.34.0](https://github.com/Einlanzerous/construct-server/compare/v4.33.0...v4.34.0) (2026-09-27)
+
+
+### Features
+
+* **backup:** nightly Postgres backup producer (SERV-213) ([#226](https://github.com/Einlanzerous/construct-server/issues/226)) ([486d235](https://github.com/Einlanzerous/construct-server/commit/486d2352b0c201a90f1301b338e507821f332896))
+* **trestle:** onboard Trestle — public media router, third edge-auth exemption, tag pin (SERV-206) ([#222](https://github.com/Einlanzerous/construct-server/issues/222)) ([ff2dde1](https://github.com/Einlanzerous/construct-server/commit/ff2dde1f2f091251d176e89843c017682f21f523))
+
+
+### Bug Fixes
+
+* **ansible:** retire the github_runner role that would replace a live runner (SERV-181) ([#227](https://github.com/Einlanzerous/construct-server/issues/227)) ([3636d65](https://github.com/Einlanzerous/construct-server/commit/3636d6581208bf8ab0d5c4bc9f9510ed1dea86a0))
+* **pr-review:** list changed files via the files API so triage survives a 20,000-line diff (SERV-198) ([#225](https://github.com/Einlanzerous/construct-server/issues/225)) ([e6ad725](https://github.com/Einlanzerous/construct-server/commit/e6ad72598ae41eb0a0e48c9b262dd13bde1758a2))
+
 ## [4.33.0](https://github.com/Einlanzerous/construct-server/compare/v4.32.1...v4.33.0) (2026-09-23)
 
 
