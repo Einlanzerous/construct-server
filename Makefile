@@ -4,7 +4,8 @@
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve \
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
-        comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight
+        comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight \
+        backup-test
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -159,6 +160,14 @@ lint-gate-test:
 
 lint-gate-uninstall:
 	@./scripts/install-lint-gate.sh --uninstall
+
+# Fault-injection suite for the nightly Postgres backup producer (SERV-43).
+# Runs scripts/backup-nightly.sh for real, against a mock docker/tailscale and
+# scratch state/data dirs — never against a real container, real Postgres, or
+# the real append-only receiver. See scripts/backup-test.sh for what each case
+# proves and why the append-only proof itself deliberately isn't one of them.
+backup-test:
+	@./scripts/backup-test.sh
 
 # Assert the ORIGIN rejects a spoofed Host (SERV-106), rather than merely being hard to
 # reach (SERV-107). Two halves: a config check that every router on the `internal`

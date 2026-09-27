@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Mock `docker` for backup-nightly.sh's test harness (make backup-test).
+#
+# Handles exactly the call shapes backup-nightly.sh makes — this is not a
+# general docker CLI emulator, and an "unhandled" branch below means the test
+# is exercising a call shape the mock doesn't know about, not that the mock
+# thinks the real docker would fail. Every fault mode is driven by env vars
+# the test scenario sets before invoking backup-nightly.sh; see
+# scripts/backup-test.sh for the full list.
+set -euo pipefail
+
+case "$1" in
+  info)
+    if [ "${2:-}" = "--format" ] && [ "${3:-}" = "{{.DockerRootDir}}" ]; then
+      printf '%s\n' "${MOCK_DOCKER_ROOT:?MOCK_DOCKER_ROOT must be set}"
+    else
+      [ "${MOCK_DOCKER_DOWN:-0}" = "1" ] && exit 1
+      exit 0
+    fi
+    ;;
+
+  rm)
+    # docker rm -f <name> — always a no-op success; run_restic calls this
+    # unconditionally before and after every restic invocation.
+    echo "rm" >>"${MOCK_LOG:-/dev/null}"
+    exit 0
+    ;;
+
+  exec)
+    shift
+    shift # container name — the mock doesn't distinguish between clusters
+    case "$1" in
+      pg_isready)
+        [ "${MOCK_PGISREADY_DOWN:-0}" = "1" ] && exit 1
+        exit 0
+        ;;
+      pg_dump)
+        # `pg_dump --version`
+        echo "pg_dump (PostgreSQL) ${MOCK_CLIENT_VERSION:-16.15}"
+        ;;
+      psql)
+        local_sql="${*: -1}"
+        case "$local_sql" in
+          *"pg_database where not datistemplate"*)
+            printf '%s\n' "${MOCK_DB_LIST:?MOCK_DB_LIST must be set}"
+            ;;
+          *pg_database_size*)
+            echo "${MOCK_DB_SIZE:-12345}"
+            ;;
+          *server_version_num*)
+            echo "${MOCK_SERVER_VERSION_NUM:-160003}"
+            ;;
+          *)
+            echo "mock docker exec psql: unhandled query: $local_sql" >&2
+            exit 90
+            ;;
+        esac
+        ;;
+      sh)
+        # $1=sh $2=-c $3=<script>
+        script="$3"
+        case "$script" in
+          *pg_dumpall*)
+            [ "${MOCK_GLOBALS_FAIL:-0}" = "1" ] && exit 1
+            [ "${MOCK_GLOBALS_EMPTY:-0}" = "1" ] && exit 0
+            echo "mock-globals-dump"
+            ;;
+          *pg_dump*)
+            db="$(printf '%s' "$script" | sed -n "s/.*-d '\([^']*\)'.*/\1/p")"
+            if [ "$db" = "${MOCK_FAIL_DB:-}" ]; then exit 1; fi
+            if [ "$db" = "${MOCK_EMPTY_DB:-}" ]; then exit 0; fi
+            echo "mock-dump-of-$db"
+            ;;
+          *)
+            echo "mock docker exec sh: unhandled script: $script" >&2
+            exit 91
+            ;;
+        esac
+        ;;
+      *)
+        echo "mock docker exec: unhandled command '$1'" >&2
+        exit 92
+        ;;
+    esac
+    ;;
+
+  run)
+    shift
+    # Skip docker-level flags to find the image, then treat everything after
+    # it as the restic subcommand + args. Flags backup-nightly.sh actually
+    # sends: --name VAL, --rm (no val), --network VAL, repeated -e VAL.
+    args=("$@")
+    i=0
+    n=${#args[@]}
+    while [ "$i" -lt "$n" ]; do
+      case "${args[$i]}" in
+        --name|--network) i=$((i + 2)) ;;
+        --rm) i=$((i + 1)) ;;
+        -e) i=$((i + 2)) ;;
+        *) break ;;
+      esac
+    done
+    # args[$i] is the image; the restic subcommand starts at $i+1.
+    shift_count=$((i + 1))
+    restic_args=("${args[@]:$shift_count}")
+
+    [ "${MOCK_COPY_HANG:-0}" = "1" ] && [ "${restic_args[0]:-}" = "copy" ] && sleep 30
+
+    case "${restic_args[0]:-}" in
+      init)
+        [ "${MOCK_RESTIC_INIT_FAIL:-0}" = "1" ] && exit 1
+        exit 0
+        ;;
+      backup)
+        [ "${MOCK_HUB_BACKUP_FAIL:-0}" = "1" ] && exit 1
+        exit 0
+        ;;
+      forget)
+        [ "${MOCK_HUB_FORGET_FAIL:-0}" = "1" ] && exit 1
+        exit 0
+        ;;
+      check)
+        if printf '%s\n' "${restic_args[@]}" | grep -q -- '--read-data-subset='; then
+          [ "${MOCK_HUB_READDATA_FAIL:-0}" = "1" ] && exit 1
+        else
+          [ "${MOCK_HUB_CHECK_FAIL:-0}" = "1" ] && exit 1
+        fi
+        exit 0
+        ;;
+      copy)
+        [ "${MOCK_COPY_FAIL:-0}" = "1" ] && exit 1
+        exit 0
+        ;;
+      snapshots)
+        if [ "${MOCK_SNAPSHOTS_EMPTY:-0}" = "1" ]; then
+          echo "[]"
+        else
+          echo '[{"id":"deadbeef0000","time":"2026-01-01T00:00:00Z"}]'
+        fi
+        ;;
+      *)
+        echo "mock docker run: unhandled restic subcommand '${restic_args[0]:-}'" >&2
+        exit 93
+        ;;
+    esac
+    ;;
+
+  *)
+    echo "mock docker: unhandled subcommand '$1'" >&2
+    exit 94
+    ;;
+esac
