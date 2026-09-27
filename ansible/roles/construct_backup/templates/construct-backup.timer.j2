@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+# Schedule for the nightly Postgres backup (SERV-43).
+[Unit]
+Description=Run the nightly Postgres backup at {{ construct_backup_schedule }}
+Documentation=https://github.com/Einlanzerous/construct-server/blob/main/docs/backups.md
+
+[Timer]
+OnCalendar={{ construct_backup_schedule }}
+
+# Unlike delivery_prober's timer, which deliberately leaves this off: a
+# backup missed because the box was down should still run once it's back,
+# where a replayed dev-tier observation would just be a stale claim about
+# the present. Up to a 48h RPO in that worst case either way — see
+# docs/backups.md's "Boot-time preflight" section.
+Persistent=true
+
+# A few minutes of jitter, clear of the box's other 00:00-ish timers
+# (logrotate, cloudflared-update, dpkg-db-backup) without needing to move
+# off 02:30 to get there.
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -82,6 +82,12 @@
     # and therefore skipped on a tagged run).
     - role: delivery_prober
       tags: delivery_prober
+    # No secret dependency (unlike delivery_prober) — Signet delivers
+    # /etc/construct-backup/backup.env separately, never this role. Tagged
+    # anyway for the same reason every host-timer role here is: apply it on
+    # its own with `--tags construct_backup`.
+    - role: construct_backup
+      tags: construct_backup
     - role: sunshine
       tags: sunshine
 

@@ -1,0 +1,46 @@
+# {{ ansible_managed }}
+# Nightly Postgres backup (SERV-43). Triggered by construct-backup.timer.
+# Documentation and the reasoning behind every choice below: docs/backups.md.
+[Unit]
+Description=Nightly Postgres backup (dump, hub snapshot, fan-out)
+Documentation=https://github.com/Einlanzerous/construct-server/blob/main/docs/backups.md
+# docker for the dumps and the restic container; tailscaled so a destination
+# over the tailnet is actually reachable; network-online.target so neither
+# is raced at boot. The script's own bounded preflight retry loop (up to
+# BACKUP_PREFLIGHT_MAX_SEC) is the real readiness check — this ordering only
+# saves it from starting against a box that plainly hasn't booted yet.
+After=docker.service tailscaled.service network-online.target
+Wants=docker.service tailscaled.service network-online.target
+
+[Service]
+Type=oneshot
+User={{ construct_backup_user }}
+Group={{ construct_backup_user }}
+ExecStart={{ construct_backup_script }} run
+
+# The ONE wall-clock bound on a run — see defaults/main.yml for the budget
+# this number is sized against, not guessed.
+TimeoutStartSec={{ construct_backup_timeout_start_sec }}
+
+# Deliberately NO Restart=, RestartForceExitStatus=, RestartSec= or
+# StartLimitBurst=. Checked directly on this box before choosing this
+# (systemd 255): RestartForceExitStatus= on a Type=oneshot unit is REFUSED
+# AT LOAD ("isn't allowed for Type=oneshot services. Refusing.") — such a
+# unit never runs at all. And any restart mechanism that DOES work
+# re-executes the whole script from the top, so a dump failure or the
+# exit-at-threshold path would increment consecutive_misses again and could
+# trip the 3-miss threshold from one bad night rather than three genuinely
+# separate ones. The script's own bounded preflight retry loop is where a
+# boot-time race gets retried instead — see docs/backups.md's Concurrency
+# section.
+
+# Hardening, matching delivery_prober's own reasoning: `full` rather than
+# `strict` because this talks to the Docker socket, which strict would
+# remount read-only. ReadWritePaths names the two trees the script actually
+# writes; /etc/construct-backup stays read-only, which is fine since the
+# script only ever reads backup.env from there.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/data/backups /var/lib/construct-backup
+PrivateTmp=true

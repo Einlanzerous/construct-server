@@ -289,9 +289,20 @@ TimeoutStartSec ≥ preflight max (BACKUP_PREFLIGHT_MAX_SEC)
                  + margin
 ```
 
-The exact number is SERV-214's to size against real timings once the desktop
-destination exists (SERV-215) and a few real nights have run; this file will
-carry that number once it's chosen rather than a placeholder guess.
+**`TimeoutStartSec=2700` (45 minutes)**, set on the systemd unit
+(`ansible/roles/construct_backup`), broken down:
+
+| Term | Seconds | Basis |
+|---|---|---|
+| preflight max | 1200 | `BACKUP_PREFLIGHT_MAX_SEC` |
+| hub duration | 600 | measured ~16s for both clusters on 2026-09-26 at ~818 MiB combined, no destination configured — >20x headroom for data growth |
+| destination margin | 600 | placeholder — no destination is wired yet; revisit once SERV-215 has real fan-out timing |
+| margin | 300 | |
+| **total** | **2700** | |
+
+Provisional on the destination-margin term specifically, not on the rest —
+`ansible/roles/construct_backup/defaults/main.yml` carries this same table and
+is where the number actually lives; update both together if it changes.
 
 The first seed against any new destination runs by hand, outside the unit —
 initial throughput to a new destination isn't known in advance and shouldn't
@@ -305,8 +316,8 @@ Two different kinds of check, deliberately not merged:
   immediately. Retrying a config file for 20 minutes helps nobody.
 - **Transient readiness** (docker, tailscale, and `pg_isready` on every
   configured cluster): one bounded retry loop, stated maximum 20 minutes,
-  counted *inside* `TimeoutStartSec` — relevant mainly right after boot, once
-  `Persistent=true` is wired (SERV-214).
+  counted *inside* `TimeoutStartSec` — relevant mainly right after boot, since
+  the timer carries `Persistent=true` (`ansible/roles/construct_backup`).
 
 Exhausting the retry loop exits non-zero and records `preflight_failed` in
 `state.json` — explicitly **not** a destination miss, and it touches no
@@ -333,7 +344,141 @@ destination's `consecutive_misses`.
 
 So the retry lives inside the script's own preflight loop, and the unit stays
 a single, bounded, non-restarting execution per timer firing. `systemd-analyze
-verify` on the rendered unit is SERV-214's guard against a regression here.
+verify` runs on the rendered unit on every `ansible-playbook` apply, not just
+once — the role's own `Validate the rendered unit with systemd-analyze verify`
+task, which fails the play on a non-zero exit rather than trusting a template
+that renders without error.
+
+## Host wiring (SERV-214)
+
+`ansible/roles/construct_backup` installs `construct-backup.service` and
+`construct-backup.timer`, and creates two directories (mode 0700,
+`magos:magos`) — nothing else:
+
+- `/etc/construct-backup`, for `backup.env`. Does **not** template the file
+  itself; see "Credential delivery" below for why that would be a second
+  writer.
+- `/var/lib/construct-backup`, for `state.json` and the lock file.
+  `backup-nightly.sh` already does its own `mkdir -p` for this path, but that
+  would fail on a cold host under the real unit: `/var/lib` is `root:root`
+  `0755` (confirmed directly — `stat -c '%U %G %a' /var/lib`), and the unit
+  runs as `magos`, not root. Manual runs during SERV-213 never hit this
+  because they used an override path instead of the real default; this role
+  is what makes the real default path actually usable.
+
+**The state from SERV-213's manual smoke test lives at
+`/data/backups/smoke-test-state`, not the real path.** It is not migrated —
+the real `state.json` starts fresh once this role creates
+`/var/lib/construct-backup` and the first real run populates it. The only
+practical effect is that the weekly check and the first monthly
+`--read-data-subset` slice both re-run on that first real night rather than
+waiting out the interval the smoke test had already partly satisfied —
+harmless, just slightly redundant. The scratch directory can be removed by
+hand once you're satisfied nothing else references it.
+
+**The timer is never enabled or started by this role, in either direction.**
+Per the ticket: it stays off until the desktop destination exists (SERV-215).
+A re-run of this role also never *disables* a timer someone has since turned
+on by hand — the role takes no enable/disable action either way, only
+`state: directory` / templated files. Turn it on with
+`systemctl enable --now construct-backup.timer` once SERV-215 lands.
+
+Applied by hand, like every role here: `ansible-playbook ansible/site.yml
+--tags construct_backup -K`. `ansible-lint` passes at the `moderate` profile.
+
+## Credential delivery (SERV-214)
+
+**A new, separate Signet project — `construct-backup` — not `construct-server`.**
+The plan's ruling says this explicitly, and it matters: `construct-server`'s
+own project deliberately has *no* host file target (SERV-94 — "prod has no
+host file target", one `PROD_ENV_FILE` render only, confirmed still true via
+`signet status` on 2026-09-26). Adding a file target to it would be exactly
+the second-writer hazard SERV-94 exists to prevent. A clean, separate project
+keeps that discipline intact.
+
+**Two things were proven against the real binary before relying on them, and
+one didn't hold as first diagnosed — corrected after PR #228's review, which
+measured the actual mechanism rather than accepting the first explanation:**
+
+- **The mechanism works.** `signet import <file>` registers a file target AT
+  THE EXACT PATH GIVEN and seeds the vault from that file's keys and values;
+  `signet render -project P` then writes the vault's current values back to
+  every path registered for that project. Tested end to end with a throwaway
+  secret and a throwaway path — real content lands.
+- **The permissions are not a umask issue.** A fresh `signet render` into a
+  path that already held a file came out mode `664`, which the first version
+  of this section blamed on the calling process's ambient umask. That was
+  wrong: signet's own atomic-write sets `0600` on a file it creates **fresh**,
+  and otherwise **preserves whatever mode the existing file already had** —
+  confirmed directly by deleting the target and re-rendering (came back
+  `600`) versus rendering onto a pre-existing `664` file (stayed `664`). The
+  664 traced to a hand-created seed file, not to signet. The fixes stand
+  regardless of the exact mechanism, and are now stable for the right reason:
+  **never** call `signet render -project construct-backup` directly — always
+  `scripts/render-backup-env.sh`, which renders then `chmod 0600`s — and
+  `backup-nightly.sh` itself refuses to source `backup.env` at any mode other
+  than `600`. Once the target file is created at `0600` (below), signet keeps
+  it there on every later render; the wrapper's `chmod` is the backstop, not
+  the thing doing the work every time.
+
+**`import` registers the target at the path you give it — not at whatever
+path you separately plan to deliver to.** The first version of this runbook
+imported from a scratch seed file elsewhere and expected `target add-key` to
+point delivery at `/etc/construct-backup/backup.env` afterward; `target
+add-key` refuses a path that was never imported ("no file target ... — signet
+import it first"), so that render would have silently landed on the SEED
+path forever, never on the real one. **Import the real target file itself.**
+
+**`import`'s direction is file → vault, not the reverse — a sequencing trap
+worth stating plainly, because it isn't the direction the word suggests.**
+Discovered by hitting it directly: `generate`-ing a secret first, then
+`import`-ing a placeholder-seeded file, overwrote the freshly-generated
+random value with the placeholder text — `import` reported "1 updated",
+meaning the VAULT's value changed to match the FILE, not the other way
+around. The runbook below avoids this by writing the REAL value into the
+target file first and importing that — import then seeds the vault with the
+value that's already correct, never a placeholder.
+
+**Runbook**, once SERV-215 exists and the passwords are ready (from SERV-212's
+and SERV-216's off-box copies). First-time bootstrap, on the box, as
+`{{ construct_backup_user }}` (after the ansible role has created the
+directory):
+
+```bash
+# Write the real values directly into the real target path, at 0600, before
+# signet ever touches it — this is what makes the eventual import seed the
+# vault correctly instead of with a placeholder.
+install -m 600 /dev/null /etc/construct-backup/backup.env
+echo "RESTIC_PASSWORD_HUB=<the real value>" >> /etc/construct-backup/backup.env
+
+# Register the target AT THAT EXACT PATH and seed the vault from it in one
+# step — no separate seed file, no target add-key needed for these first keys.
+signet import -project construct-backup /etc/construct-backup/backup.env
+
+# Confirms the mode is still 600 and the content still matches (render is a
+# no-op here content-wise, since the vault already matches what's on disk):
+./scripts/render-backup-env.sh
+```
+
+Adding a **new** key later (a second destination, say) — `target add-key`
+now works, because the target already exists at this exact path:
+
+```bash
+printf '%s' '<the real value>' | signet set -project construct-backup -name RESTIC_PASSWORD_DESK
+signet target add-key -project construct-backup \
+  -path /etc/construct-backup/backup.env -name RESTIC_PASSWORD_DESK
+./scripts/render-backup-env.sh
+```
+
+Rotating an **existing** key — no `import`, no `target add-key`, no
+`-replace` (that flag is meaningful only with `-generate`; a plain `set` with
+a real value overwrites the existing one unconditionally — confirmed
+directly, "version 2" with no complaint):
+
+```bash
+printf '%s' '<the new value>' | signet set -project construct-backup -name RESTIC_PASSWORD_HUB
+./scripts/render-backup-env.sh
+```
 
 ## Provenance: the roles the globals dump has to carry
 
