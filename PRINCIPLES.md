@@ -261,6 +261,37 @@ table, resolution-required-on-close, epic-close).
 
 `project_key` is immutable. Mis-routed tickets get deleted and recreated.
 
+### Show, don't describe
+
+A PR, ticket comment or README that changes something visible carries an image
+of it. Prose about what a change looks like is what SERV-134 was filed to end:
+reviewers either took it on trust or checked the branch out and booted it.
+
+The estate's image host is **Trestle** (`Einlanzerous/trestle`, SERV-134): upload
+bytes over a bearer token, get a stable public URL, paste it. On the box the
+credentials are Signet-rendered, so an agent session does exactly this:
+
+```sh
+set -a; . ~/.config/trestle/trestle.env; set +a
+trestle upload shot.png            # → https://trestle.zerogravity.industries/m/<sha256>.png
+```
+
+Then `![what it shows](<url>)` in the PR body. The URL renders through GitHub's
+camo proxy, in a Switchyard comment, and in a README, and it is content-addressed:
+the same bytes twice is the same URL, and it never changes underneath a review.
+
+Three things to know before pasting:
+
+- **GitHub does not render external video.** An `.mp4` URL degrades to a link
+  (measured, SERV-208). Embed a poster PNG and link the MP4 beneath it.
+- **The serve path is public and immutable.** Anyone with the URL can fetch the
+  bytes for as long as the blob exists, and edge caches keep a permanent blob for
+  up to a year after a `DELETE`. Never upload anything that must not be public;
+  use `--ttl` for evidence that should not outlive the review.
+- **Allow-listed types only**: png, jpeg, webp, gif, svg (served as an
+  attachment), mp4, webm — 10 MiB per image, 100 MiB per video, 2 GiB per
+  consumer token. Anything else is a 415, and the type is sniffed, not trusted.
+
 ## 6. Status hygiene
 
 Keep the status accurate while working a ticket. "In Progress is In Progress"
@@ -363,6 +394,8 @@ this file. Concrete checks:
 - A scaffolded React project without explicit justification → finding.
 - A credential reused across consumers rather than minted per-consumer → finding.
 - A new status that renames a canonical one → finding.
+- A PR that changes a visible surface and describes it in prose with no image →
+  finding (§5 *Show, don't describe*). A Nit, not a block: the fix is one upload.
 
 **A principles violation is a 🟡 Nit unless it has a concrete consequence**, in
 which case severity comes from the consequence, not from the violation. The
