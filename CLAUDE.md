@@ -851,6 +851,24 @@ anything deploys or gets versioned.
 - **`creds/` and `.env` stay gitignored** (SERV-31, #55). Credentials belong on
   the host or in a GitHub secret. A secret that reaches a committed file, a
   build arg, or an image layer is a rotation, not a revert.
+- **A credential is never a literal argument to a process — feed it via stdin
+  or a named env var** (SERV-215). Anything after a command on its own line is
+  that process's argv, and argv is visible to anyone who runs `ps` on the same
+  host for as long as the process runs — a `docker run` on the construct
+  server, not just a long-lived daemon. `backup-receiver/install.sh` had two:
+  `ensure_credentials()` passed the REST password as a positional argument to
+  `htpasswd`, and `verify()`'s probes passed it to `curl -u user:pass`. Fixed
+  by piping it in instead — `htpasswd -Bi` reads the password from stdin,
+  `curl -K -` reads a config (`user = "name:pass"`) from stdin — with the
+  value itself only ever reaching a shell builtin (`printf`), which spawns no
+  process of its own to have argv in the first place. `backup-nightly.sh`
+  already did this for every `restic` invocation (`docker run -e NAME`,
+  valueless — the container reads the value from the script's own
+  environment, never a literal); the eventual Switchyard heartbeat (SERV-218)
+  needs the same treatment for its bearer token. A masked value (`user:****@host`)
+  is not the fix — it still teaches the shape, and the guidance in
+  `install.sh`'s `next_steps()` and the receiver's README is what an operator
+  goes on to type themselves.
 - **A base image names a supported cycle, to cycle precision, in every first-party
   Dockerfile** (SERV-170). `alpine:3.23`, `node:24-alpine`, `golang:1.26-bookworm`;
   never `alpine:3`, `nginx:alpine` or `latest`. On 2026-09-05 four repos were on an

@@ -103,7 +103,7 @@ ensure_credentials() {
 
   # -c truncates, so only use it when there is no file yet. Re-running this
   # script updates the password in place instead of wiping other users.
-  local existing flag="-Bb" img
+  local existing flag="-Bi" img
   # `|| true`: rest_image's grep can itself fail (no match), and under
   # `set -e` that would abort the script at this assignment before the die
   # below ever ran, turning a clear message into a silent exit 1.
@@ -112,11 +112,16 @@ ensure_credentials() {
 
   existing=$(docker run --rm -v backup_receiver_repo:/data --entrypoint sh \
     "$img" -c 'test -s /data/.htpasswd && echo yes || echo no' 2>/dev/null || echo no)
-  [ "$existing" = "yes" ] || flag="-Bbc"
+  [ "$existing" = "yes" ] || flag="-Bic"
 
-  docker run --rm -v backup_receiver_repo:/data --entrypoint sh \
+  # -i reads the password from stdin instead of taking it as an argument.
+  # 'docker run' is a process on THIS host, and anything after the image name
+  # is visible to anyone who runs 'ps' here for as long as it's running — the
+  # username isn't secret, but the password would otherwise sit there in
+  # plain text. Piped in via a builtin (no argv of its own either).
+  printf '%s\n' "$REST_PASSWORD" | docker run --rm -i -v backup_receiver_repo:/data --entrypoint sh \
     "$img" -c \
-    "umask 027 && htpasswd $flag /data/.htpasswd \"\$1\" \"\$2\"" _ "$REST_USER" "$REST_PASSWORD" >/dev/null 2>&1 \
+    "umask 027 && htpasswd $flag /data/.htpasswd \"\$1\"" _ "$REST_USER" >/dev/null 2>&1 \
     || die "could not write the htpasswd file into the repo volume"
 
   ok "htpasswd entry for '$REST_USER' (bcrypt)"
@@ -164,15 +169,21 @@ local_addr() {
     backup-tailscale 2>/dev/null | head -1
 }
 
-probe() { # method url [user:pass] -> prints HTTP status
+probe() { # method url [user] [pass] -> prints HTTP status
   # curl's own -w already prints "000" on a connection failure, before it
   # exits non-zero — `|| echo "000"` then runs too, on the same failure, and
   # the two concatenate into "000000", which matches nothing verify() checks
   # for. `|| true` only guards the exit status so a callable failure here
   # doesn't matter under `set -e` (this always runs inside a $(...) capture).
-  local method="$1" url="$2" auth="${3:-}"
-  if [ -n "$auth" ]; then
-    curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$auth" -X "$method" "$url" || true
+  local method="$1" url="$2" user="${3:-}" pass="${4:-}"
+  if [ -n "$user" ]; then
+    # -K - reads a curl config from stdin instead of -u/--user, which would
+    # put the password in this curl process's own argv — visible in 'ps' on
+    # this host for as long as the request is in flight. printf is a shell
+    # builtin, so it never becomes a process of its own either. Verified live
+    # against curl 8.5.0, this host's own version, before relying on it.
+    printf 'user = "%s:%s"\n' "$user" "$pass" \
+      | curl -s -o /dev/null -w '%{http_code}' --max-time 10 -K - -X "$method" "$url" || true
   else
     curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X "$method" "$url" || true
   fi
@@ -190,7 +201,7 @@ verify() {
   [ -n "$addr" ] || die "could not find the receiver's address — is it running? (./install.sh status)"
   base="http://${addr}:8000"
 
-  code=$(probe GET "$base/" "$REST_USER:$REST_PASSWORD")
+  code=$(probe GET "$base/" "$REST_USER" "$REST_PASSWORD")
   if [ "$code" = "000" ]; then
     bad "no response from the receiver at $base"
     printf '     Logs:  docker logs backup-rest-server\n'
@@ -203,12 +214,12 @@ verify() {
   if [ "$code" = "401" ]; then ok "unauthenticated request rejected (401)"
   else bad "unauthenticated request returned $code, expected 401 — THE REPOSITORY IS OPEN"; failed=1; fi
 
-  code=$(probe GET "$base/$PROBE_REPO/config" "$REST_USER:definitely-not-the-password")
+  code=$(probe GET "$base/$PROBE_REPO/config" "$REST_USER" "definitely-not-the-password")
   if [ "$code" = "401" ]; then ok "wrong password rejected (401)"
   else bad "wrong password returned $code, expected 401"; failed=1; fi
 
   # Credentials work.
-  code=$(probe POST "$base/$PROBE_REPO/?create=true" "$REST_USER:$REST_PASSWORD")
+  code=$(probe POST "$base/$PROBE_REPO/?create=true" "$REST_USER" "$REST_PASSWORD")
   if [ "$code" = "200" ]; then ok "authenticated write accepted (200)"
   else bad "authenticated repo create returned $code, expected 200 — check REST_USER/REST_PASSWORD in .env"; failed=1; fi
 
@@ -227,7 +238,7 @@ verify() {
   #
   # So this asserts 403 on the config object. It holds on an empty repository
   # too — the object need not exist for the refusal to be the answer.
-  code=$(probe DELETE "$base/$PROBE_REPO/config" "$REST_USER:$REST_PASSWORD")
+  code=$(probe DELETE "$base/$PROBE_REPO/config" "$REST_USER" "$REST_PASSWORD")
   case "$code" in
     403) ok "append-only IS in force (delete refused with 403)" ;;
     200) bad "append-only is NOT in force — a delete was ACCEPTED (200)."
@@ -271,7 +282,8 @@ next_steps() {
 ${BOLD}Receiver is up.${OFF}
 
   Address on the tailnet : ${ip}  (${TS_HOSTNAME})
-  Repository URL         : rest:http://${REST_USER}:<password>@${TS_HOSTNAME}:8000/construct/
+  Repository URL         : rest:http://${TS_HOSTNAME}:8000/construct/
+  REST user              : ${REST_USER}  (REST_PASSWORD is in this host's .env)
 
 ${BOLD}Next, on the construct server${OFF} — not here:
 
@@ -281,9 +293,13 @@ ${BOLD}Next, on the construct server${OFF} — not here:
   2. Create the repository. It MUST be created with the hub's chunker
      parameters, or 'restic copy' re-chunks everything and cross-repo
      dedup collapses. This cannot be corrected later without starting
-     the repository over:
+     the repository over. Pass the REST credentials as environment
+     variables, never in the URL — a credential in the URL sits in this
+     process's own argv (visible in 'ps') for as long as restic runs:
 
-       restic -r rest:http://${REST_USER}:<password>@${TS_HOSTNAME}:8000/construct/ \\
+       export RESTIC_REST_USERNAME='${REST_USER}'
+       export RESTIC_REST_PASSWORD='<this host's REST_PASSWORD>'
+       restic -r rest:http://${TS_HOSTNAME}:8000/construct/ \\
          init --copy-chunker-params --from-repo <the local hub repo>
 
   3. Wire it into the nightly job as a 'restic copy' target (SERV-43).

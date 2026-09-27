@@ -475,5 +475,31 @@ grep -q "is mode 644, not 600" "$SCRATCH/log" && ok "refusal names the actual mo
 unset MOCK_DB_LIST
 scenario_teardown
 
+# ─── T23/T24: verify-destination's argument validation (SERV-215) ──────────
+# The real network/append-only proof this command makes is deliberately NOT
+# exercised here — see this file's header. What IS testable without a real
+# receiver is that it refuses cleanly before ever touching the network: no
+# name given, or a name that isn't in BACKUP_DESTINATIONS.
+head_ "T23: verify-destination with no name argument"
+scenario_setup
+write_conf '"desk:rest:http://mockhost:8000/construct/"'
+write_dest_creds
+rc=0; run_backup verify-destination || rc=$?
+assert_status "refuses" 1 "$rc"
+grep -q "needs a destination name" "$SCRATCH/log" && ok "refusal names the requirement" || bad "refusal names the requirement"
+scenario_teardown
+
+head_ "T24: verify-destination against an unconfigured name"
+scenario_setup
+write_conf '"desk:rest:http://mockhost:8000/construct/"'
+write_dest_creds
+rc=0; PATH="$MOCK_BIN:$PATH" MOCK_DOCKER_ROOT=/data \
+  BACKUP_CONF="$CONF" BACKUP_ENV_FILE="$ENVFILE" \
+  BACKUP_STATE_DIR="$STATE_DIR" BACKUP_DATA_DIR="$DATA_DIR" \
+  "$BACKUP_SCRIPT" verify-destination nosuchdest >"$SCRATCH/log" 2>&1 || rc=$?
+assert_status "refuses" 1 "$rc"
+grep -q "no destination named 'nosuchdest'" "$SCRATCH/log" && ok "refusal names the unknown destination" || bad "refusal names the unknown destination"
+scenario_teardown
+
 head_ "Summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

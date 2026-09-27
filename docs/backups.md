@@ -296,7 +296,7 @@ TimeoutStartSec ≥ preflight max (BACKUP_PREFLIGHT_MAX_SEC)
 |---|---|---|
 | preflight max | 1200 | `BACKUP_PREFLIGHT_MAX_SEC` |
 | hub duration | 600 | measured ~16s for both clusters on 2026-09-26 at ~818 MiB combined, no destination configured — >20x headroom for data growth |
-| destination margin | 600 | placeholder — no destination is wired yet; revisit once SERV-215 has real fan-out timing |
+| destination margin | 600 | the desktop's real first seed (SERV-215, below) took 10s for both clusters combined, well inside this — but that's happy-path, no-retry timing over an already-fast tailnet link, not the worst case this margin has to cover, so the figure stays as-is rather than being tightened on one data point |
 | margin | 300 | |
 | **total** | **2700** | |
 
@@ -528,11 +528,116 @@ found by. The real hub now exists at `/data/backups/restic-hub`.
   is a smoke test, not the drill: one database, not the full cluster, and no
   timing was recorded — both are SERV-217's.
 
+## The desktop destination's credentials (SERV-215)
+
+`backup-receiver/install.sh` had two argv leaks, both the same shape as the
+one `backup-nightly.sh` was already built to avoid (see Credentials, above):
+a real password reaching a **new process's own argv**, visible to anyone who
+runs `ps` on that host for as long as the process is running.
+
+- **`ensure_credentials()`** wrote the htpasswd entry with
+  `htpasswd -Bb … "$REST_USER" "$REST_PASSWORD"` — the password was a literal
+  argument to the `docker run` this script itself invokes. Fixed by switching
+  to `-Bi`/`-Bic` (create) and piping the password on stdin
+  (`printf '%s\n' "$REST_PASSWORD" | docker run -i …`); only the username,
+  which isn't secret, stays a literal argument. `printf` is a shell builtin,
+  so it never becomes a process with argv of its own either.
+- **`verify()`'s probes** authenticated with `curl -u "$user:$pass"`, which is
+  the same shape — the credential sat in `curl`'s own argv for the life of the
+  request. Fixed by switching to a curl config read from stdin
+  (`printf 'user = "%s:%s"\n' … | curl -K - …`), the same `-K -` shape
+  `backup-nightly.sh`'s eventual heartbeat token (SERV-218) will need to use
+  for the same reason.
+- **`next_steps()` and the README's "Then, on the construct server" and
+  rotation paragraphs** showed `restic -r rest:http://user:PASSWORD@host/…` —
+  no real value was ever printed (the password stayed the literal text
+  `<password>`), but the *shape* is exactly what's being fixed everywhere
+  else, and it's what an operator would go on to type. Replaced with the
+  `RESTIC_REST_USERNAME`/`RESTIC_REST_PASSWORD` environment-variable form,
+  matching the credential mapping table above.
+
+Both fixes were verified live against the pinned image
+(`restic/rest-server:0.14.0@sha256:d2aff06f…`), not assumed: `htpasswd -Bic`/
+`-Bi` over stdin correctly creates, adds a second user, and rotates an
+existing one (bcrypt hashes, `$2y$`), confirmed by round-tripping with
+`htpasswd -vi` afterwards; and a real rest-server container, started with
+`OPTIONS=--append-only` and a stdin-seeded `.htpasswd`, answered exactly as
+`verify()` expects to the new `-K -` probes — 401 unauthenticated, 200 on an
+authenticated create, 401 on a wrong password, 403 on `DELETE …/config`.
+
+## The desktop repository, first seed, and append-only proof (2026-09-27)
+
+Destination named `desk` (not `desktop`) — `backup-nightly.sh` derives each
+destination's credential variables from its short name, upper-cased, and the
+runbook example in "Credential delivery" above already used `DESK`.
+`config/backup/backup.conf`'s `BACKUP_DESTINATIONS` now carries
+`"desk:rest:http://imperial-prime-wsl:8000/construct/"`.
+
+**Created with `restic/restic:0.18.1@…` (the pinned image), the same
+container shape `run_restic()` uses** — `--network host`, `--user
+$(id -u):$(id -g)`, `-e HOME`, the hub bind-mounted, every credential passed
+by `-e NAME` (valueless):
+
+```
+RESTIC_REPOSITORY=rest:http://imperial-prime-wsl:8000/construct/
+RESTIC_PASSWORD=$RESTIC_PASSWORD_DESK
+RESTIC_FROM_REPOSITORY=/data/backups/restic-hub
+RESTIC_FROM_PASSWORD=$RESTIC_PASSWORD_HUB
+RESTIC_REST_USERNAME=$REST_USER_DESK
+RESTIC_REST_PASSWORD=$REST_PASSWORD_DESK
+restic init --copy-chunker-params --from-repo /data/backups/restic-hub
+```
+
+Ran in 4s, exit 0. **`--copy-chunker-params` confirmed, not assumed** —
+`restic cat config` on both repositories:
+
+| | hub | desktop |
+|---|---|---|
+| `chunker_polynomial` | `385cd265a9c695` | `385cd265a9c695` (match) |
+
+**First seed** — `restic copy --tag <label>` for each of the hub's two
+existing clusters, from the construct server, over the tailnet (DERP-relayed
+tonight, not a direct connection — `tailscale ping imperial-prime-wsl`
+showed `~11ms via DERP(ord)`, still well inside the per-call timeout):
+
+| Cluster | Snapshots copied | Elapsed |
+|---|---|---|
+| `shared` | 2 | 8s |
+| `argosy` | 1 | 2s |
+
+Each copied snapshot's `.original` was confirmed to equal its hub source
+snapshot's id (the exact check `copy_one_cluster` makes every night) —
+`26ba3fc7`→`47cf0016`, `b361562b`→`cbecc74a`, `35572eea`→`387aed30`, all
+matching. `restic stats --mode raw-data` on the desktop repo afterward: 3
+snapshots, 863.125 MiB uncompressed, **92.068 MiB stored (9.37x compression,
+89% space saved)** — restic's own repository-v2 compression, not the `-Z0`
+pg_dump flag (that one exists so restic's compression sees the data once,
+not gzip once and then restic again on top of it).
+
+**Append-only, proven from the credential path the nightly job actually
+uses** — `backup-nightly.sh verify-destination desk`, added for exactly this
+(see "Container hygiene" and the function's own comment): inits a fixed,
+reused `backup-nightly-verify-probe` repository on the same REST server
+(never `/construct/` itself) if absent, backs up one tiny fixed fixture, then
+confirms both `restic forget --keep-last 0` and a raw `DELETE
+.../config` are refused. Run twice, live, back to back:
+
+- **First run**: probe repo absent → initialized, fixture backed up,
+  `forget` refused, `DELETE .../config` → 403. `append-only confirmed`, exit 0.
+- **Second run**: probe repo already present → no re-init (idempotence
+  confirmed), fixture backed up again (restic dedups the content; a tiny
+  amount of new tree/metadata is stored per run, not zero, but bounded — the
+  same accepted growth as a real destination's own append-only cost), same
+  two refusals, same result.
+
+This is the ongoing check (`make backup-status` doesn't run it; nothing does
+automatically) — re-run it by hand occasionally, and always after any change
+to the receiver's `docker-compose.yml` `OPTIONS`. `make backup-test`'s mock
+suite covers only `verify-destination`'s argument validation (T23, T24) —
+never the real network calls, deliberately (see that file's header).
+
 ## Not yet in this file
 
-- **The desktop destination's specifics** — `restic init --copy-chunker-params`,
-  the append-only proof against a throwaway probe repository, and the
-  `install.sh` credential-handling fixes: SERV-215.
 - **The restore drill's numbers** — full-cluster restore time, the worst-case
   data-loss window, the ACL/role diff: SERV-217. CHRN-68's standard applies
   verbatim: a backup nobody has restored is a hypothesis.
