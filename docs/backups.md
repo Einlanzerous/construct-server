@@ -39,10 +39,19 @@ backup.
 Two Postgres clusters, each backed up from its own container so client/server
 version skew is structurally impossible:
 
-| Cluster | Container | Notes |
-|---|---|---|
-| `shared` | `postgres` | This stack's own cluster — 15 real service databases plus scratch/test copies. |
-| `argosy` | `argosy-db-1` | A second, separately-busy PG17 cluster in the `argosy` compose project (`~/projects/argosy/deploy`). In scope per SERV-43's plan ruling ("a cluster is a config entry"). |
+| Cluster | Container | Admin role | Notes |
+|---|---|---|---|
+| `shared` | `postgres` | `postgres` (default) | This stack's own cluster — 15 real service databases plus scratch/test copies. |
+| `argosy` | `argosy-db-1` | `argosy` | A second, separately-busy PG17 cluster in the `argosy` compose project (`~/projects/argosy/deploy`). In scope per SERV-43's plan ruling ("a cluster is a config entry"). |
+
+**The admin role is per-cluster config, not a constant** — found by the smoke
+test (2026-09-26), not assumed: the official postgres image's initdb creates
+whatever role `POSTGRES_USER` names, and `argosy-db-1` runs
+`POSTGRES_USER=argosy`, so it has no role literally called `postgres` at all.
+`-U postgres` against it fails with `role "postgres" does not exist` — the
+connection itself is fine, only the role name is wrong. `BACKUP_ADMIN_USER_<LABEL>`
+in `backup.conf` defaults to `postgres` and only needs an entry where a
+cluster differs.
 
 Per cluster: enumerate every non-template database, exclude by pattern
 (`swy*`, `*_test` — confirmed against the live shared cluster on 2026-09-26 to
@@ -174,6 +183,35 @@ invocation — never relying on `--rm` alone, since a `kill -9` or an expiring
 for `--rm` to never clean up. The script never touches a Postgres server
 container beyond `docker exec`; it neither removes nor recreates one.
 
+**Three things `make backup-test`'s mock could not catch, because it never
+launches a real container** — found only by the real smoke test against the
+real box (2026-09-26), and each cost a full re-run to fix:
+
+- **`--network host` shares the network namespace only.** The container's
+  filesystem is otherwise its own, with zero visibility into the host's
+  `/data` — a `restic backup` of the staging tree failed with "does not
+  exist, skipping" despite the files genuinely being there, on the host.
+  Fixed with `-v "$BACKUP_DATA_DIR:$BACKUP_DATA_DIR"`, which covers both the
+  hub repo and the staging tree at the same path inside and outside the
+  container, needing no path translation anywhere else in the script.
+- **The image runs as root by default, and a bind mount does no UID
+  remapping.** `restic init` "succeeded" the first time and reported creating
+  the repo at the right path — but that was root writing into the
+  container's own throwaway filesystem, since the bind mount wasn't wired
+  yet either; once it was, root wrote real, root-owned files onto the host
+  disk that `magos` (or the systemd unit SERV-214 wires, also `magos`,
+  matching `delivery_prober`'s convention) could not read back on the very
+  next invocation. Fixed with `--user "$(id -u):$(id -g)"`. The root-owned
+  leftover from the first attempt needed a throwaway root container
+  (`docker run --rm --entrypoint rm -v ...`) to remove, since `magos` itself
+  couldn't touch it — the same asymmetry that makes root worth avoiding here
+  in the first place.
+- **An arbitrary `--user` UID has no passwd entry, so `HOME` defaults to
+  `/`.** Harmless but noisy (a `/.cache` permission warning on every
+  invocation) and slower than it needs to be, since restic re-fetches what
+  its local cache would otherwise have kept. Fixed with
+  `-e HOME="$BACKUP_DATA_DIR"`, a directory already ours and already mounted.
+
 ## Wall-clock bounds
 
 Every external call — one `pg_dump`, one `restic` invocation — is individually
@@ -255,6 +293,33 @@ All three restore correctly from the globals dump regardless — `pg_dumpall
 got there. This table is about whether the repo can **explain and recreate**
 them, which the restore drill (SERV-217) does not itself test and should not
 be read as testing.
+
+## The producer's own smoke test (SERV-213, 2026-09-26)
+
+Run by hand, for real, against the live `postgres` and `argosy-db-1`
+clusters — this is what the three bugs in "Container hygiene" above were
+found by. The real hub now exists at `/data/backups/restic-hub`.
+
+- Both clusters dumped and snapshotted correctly: 15 databases from `shared`
+  (808 MiB), 2 from `argosy` (10.3 MiB). 19 scratch/test databases correctly
+  excluded and logged with size.
+- A second run against the same hub showed real dedup working: 16 changed
+  files added only 44 MiB (5 MiB stored after restic's own compression) on
+  top of the first run's 808 MiB.
+- `--group-by host,tags` retention confirmed to keep each cluster's snapshots
+  independently — `argosy` and `shared` each show their own daily/weekly
+  reasons in the same `forget` run, not a shared window.
+- The weekly `restic check` and the first monthly `--read-data-subset=1/12`
+  both ran and passed on this first-ever run (cursor is now `2`).
+- One database (`chronicle`, extracted from the hub via `restic dump`, not
+  from staging — staging is long gone by the time a human could look) was
+  restored with `pg_restore --create` into a scratch `postgres:16.15-alpine`
+  container on the default bridge network, not `construct_net`. Its restored
+  `datacl` — `{chronicle=CTc/chronicle,chronicle_tier1=c/chronicle}` — is
+  byte-identical to the live database's, confirming the PUBLIC-revoke and
+  tier-1/tier-2 grant hygiene from SERV-169/182 survives the round trip. This
+  is a smoke test, not the drill: one database, not the full cluster, and no
+  timing was recorded — both are SERV-217's.
 
 ## Not yet in this file
 

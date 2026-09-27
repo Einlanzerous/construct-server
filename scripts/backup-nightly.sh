@@ -110,14 +110,29 @@ preflight_static() {
     || die "$BACKUP_DATA_DIR is on the same block device as Docker's root ($root_dev) — the hub must survive losing the disk the database lives on"
 }
 
+# admin_user_for_label <label> — the superuser role to connect as for this
+# cluster. Found the hard way, against the real box (2026-09-26): the official
+# postgres image creates whatever role POSTGRES_USER names, not necessarily
+# one literally called "postgres" — argosy-db-1 runs POSTGRES_USER=argosy, so
+# `-U postgres` against it fails with "role \"postgres\" does not exist" even
+# though the connection itself works fine. Defaults to "postgres" (true for
+# the shared cluster) so only a cluster that actually differs needs an entry.
+admin_user_for_label() {
+  local label="$1" upper var
+  upper="$(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')"
+  var="BACKUP_ADMIN_USER_${upper}"
+  printf '%s' "${!var:-postgres}"
+}
+
 # One readiness probe. Echoes a reason on failure, prints nothing on success.
 preflight_probe() {
   docker info >/dev/null 2>&1 || { echo "docker not reachable"; return 1; }
   tailscale status >/dev/null 2>&1 || { echo "tailscale not reachable"; return 1; }
-  local entry container
+  local entry container label admin_user
   for entry in "${BACKUP_CLUSTERS[@]}"; do
-    container="${entry%%:*}"
-    docker exec "$container" pg_isready -U postgres >/dev/null 2>&1 \
+    container="${entry%%:*}"; label="${entry#*:}"
+    admin_user="$(admin_user_for_label "$label")"
+    docker exec "$container" pg_isready -U "$admin_user" >/dev/null 2>&1 \
       || { echo "$container: pg_isready failing"; return 1; }
   done
   return 0
@@ -175,8 +190,31 @@ run_restic() {
   local rc=0
   local -a env_flags
   readarray -t env_flags < <(restic_env_flags)
+  # `--network host` shares the network namespace ONLY — the container's
+  # filesystem is otherwise its own, with no view of the host's /data at all.
+  # Found by the real smoke test (2026-09-26), not by make backup-test: the
+  # mock never launches a real container, so nothing there could have caught
+  # a missing bind mount. Both the hub repo AND the staging tree it reads
+  # from live under $BACKUP_DATA_DIR, so mounting that one directory at the
+  # same path covers both without any path translation elsewhere.
+  #
+  # `--user`, same discovery: the restic image runs as root by default, and a
+  # bind mount does no UID remapping — root inside the container writes
+  # root-owned files straight onto the host disk. That is unreadable by
+  # whatever this script runs as on every LATER invocation (a check, a forget,
+  # a second night's backup), not just an ownership nit on the first one.
+  # Matching the invoking user is what makes the repo usable again afterwards.
+  #
+  # `HOME`, same root cause: with no passwd entry for an arbitrary --user UID,
+  # restic's own HOME defaults to "/", so it tries "/.cache" and warns
+  # ("unable to open cache") on every single invocation — harmless but noisy,
+  # and slower than it needs to be since restic re-fetches what a cache would
+  # have kept. Pointed at $BACKUP_DATA_DIR, already ours and already mounted.
   timeout "$BACKUP_RESTIC_TIMEOUT_SEC" \
     docker run --name "$RESTIC_CONTAINER_NAME" --rm --network host \
+      --user "$(id -u):$(id -g)" \
+      -e HOME="$BACKUP_DATA_DIR" \
+      -v "$BACKUP_DATA_DIR:$BACKUP_DATA_DIR" \
       "${env_flags[@]}" \
       "$RESTIC_IMAGE" "$@" \
     || rc=$?
@@ -217,18 +255,19 @@ FAILED_DATABASES=()
 # stdout, one per line. Sets ANY_DUMP_FAILED / FAILED_DATABASES on a failure
 # but never aborts — the databases that DID dump correctly still get snapshotted.
 dump_cluster() {
-  local container="$1" label="$2" upper floor_var
+  local container="$1" label="$2" upper floor_var admin_user
   upper="$(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')"
   floor_var="BACKUP_MUST_DUMP_${upper}"
   # Nameref, not eval-with-a-constructed-string: aliases `floor` to whichever
   # BACKUP_MUST_DUMP_<LABEL> array backup.conf defined for this cluster.
   local -n floor="$floor_var"
+  admin_user="$(admin_user_for_label "$label")"
 
   local cluster_dir="$STAGING_DIR/$label"
   mkdir -p "$cluster_dir"
 
   local all
-  all="$(docker exec "$container" psql -U postgres -At \
+  all="$(docker exec "$container" psql -U "$admin_user" -At \
     -c "select datname from pg_database where not datistemplate order by 1")"
 
   local -a dumped=() excluded=()
@@ -271,14 +310,14 @@ dump_cluster() {
   for n in "${excluded[@]}"; do
     [ -z "$n" ] && continue
     local size
-    size="$(docker exec "$container" psql -U postgres -At \
+    size="$(docker exec "$container" psql -U "$admin_user" -At \
       -c "select pg_database_size('$n')" 2>/dev/null || echo unknown)"
     err "$label: excluded '$n' (${size} bytes)"
   done
 
   local client_ver server_ver
   client_ver="$(docker exec "$container" pg_dump --version | grep -oE '[0-9]+' | head -1)"
-  server_ver="$(docker exec "$container" psql -U postgres -At -c "show server_version_num" | cut -c1-2)"
+  server_ver="$(docker exec "$container" psql -U "$admin_user" -At -c "show server_version_num" | cut -c1-2)"
   if [ "$client_ver" != "$server_ver" ]; then
     err "$label: pg_dump major $client_ver != server major $server_ver — dumper is not the server's own binary?"
     ANY_DUMP_FAILED=1
@@ -287,7 +326,7 @@ dump_cluster() {
   for n in "${dumped[@]}"; do
     [ -z "$n" ] && continue
     local out="$cluster_dir/$n.dump"
-    if docker exec "$container" sh -c "timeout ${BACKUP_PG_DUMP_TIMEOUT_SEC} pg_dump -Fc -Z0 -U postgres -d '$n'" >"$out" \
+    if docker exec "$container" sh -c "timeout ${BACKUP_PG_DUMP_TIMEOUT_SEC} pg_dump -Fc -Z0 -U ${admin_user} -d '$n'" >"$out" \
        && [ -s "$out" ]; then
       err "$label: dumped '$n' ($(stat -c %s "$out") bytes)"
     else
@@ -299,7 +338,7 @@ dump_cluster() {
   done
 
   local globals_out="$cluster_dir/globals.sql"
-  if ! docker exec "$container" sh -c "timeout ${BACKUP_PG_DUMP_TIMEOUT_SEC} pg_dumpall --globals-only -U postgres" >"$globals_out" \
+  if ! docker exec "$container" sh -c "timeout ${BACKUP_PG_DUMP_TIMEOUT_SEC} pg_dumpall --globals-only -U ${admin_user}" >"$globals_out" \
      || [ ! -s "$globals_out" ]; then
     err "$label: FAILED to dump globals"
     rm -f "$globals_out"

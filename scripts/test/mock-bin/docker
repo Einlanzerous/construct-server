@@ -88,13 +88,14 @@ case "$1" in
     shift
     # Skip docker-level flags to find the image, then treat everything after
     # it as the restic subcommand + args. Flags backup-nightly.sh actually
-    # sends: --name VAL, --rm (no val), --network VAL, repeated -e VAL.
+    # sends: --name VAL, --rm (no val), --network VAL, -v VAL, --user VAL,
+    # repeated -e VAL.
     args=("$@")
     i=0
     n=${#args[@]}
     while [ "$i" -lt "$n" ]; do
       case "${args[$i]}" in
-        --name|--network) i=$((i + 2)) ;;
+        --name|--network|-v|--user) i=$((i + 2)) ;;
         --rm) i=$((i + 1)) ;;
         -e) i=$((i + 2)) ;;
         *) break ;;
