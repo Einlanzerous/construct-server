@@ -2,12 +2,16 @@
 # render-backup-env.sh — render /etc/construct-backup/backup.env from the
 # `construct-backup` Signet project, and enforce its permissions (SERV-214).
 #
-# `signet render` does NOT set a restrictive mode on the file it writes —
-# measured directly against the real binary (2026-09-26): a fresh render into
-# an empty directory came out 0664, driven by the calling process's ambient
-# umask, not anything signet itself enforces. That is the one thing standing
-# between this and a credential file that is briefly group/world-readable, so
-# this wrapper is the only supported way to render it — never call
+# `signet render` does NOT enforce a restrictive mode on an EXISTING file —
+# corrected after PR #228's review measured the real mechanism, which this
+# comment first misdiagnosed as the calling process's umask. Signet's own
+# atomic-write path sets 0600 on a file it creates fresh, but on a file that
+# already exists at the target path it keeps that file's current mode. A
+# 0664 result means something already-existing at that path (most likely a
+# hand-written seed file created with a plain shell redirect) was 0664 to
+# begin with. The chmod below is what actually closes that, every time,
+# regardless of how the file got to whatever mode it was in — this wrapper
+# is the only supported way to render it; never call
 # `signet render -project construct-backup` directly.
 #
 # There is deliberately no timer for this. These credentials (the hub's

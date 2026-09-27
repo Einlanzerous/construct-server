@@ -10,25 +10,36 @@
 # The script arrives via deploy.yml's rsync, not this role. On a cold host
 # ansible runs before any deploy has happened, so install the wiring and
 # leave the timer disabled — which this role always does anyway (see below)
-# — rather than failing the play over it.
+# — rather than failing the play over it. Verification below is skipped in
+# this case too (PR #228 review): systemd-analyze verify fails on a missing
+# ExecStart target ("is not executable: No such file or directory",
+# confirmed directly), so without this guard a cold host — or a tagged
+# `--tags construct_backup` run before the first deploy — would fail this
+# role's own play and skip every role listed after it in site.yml, which
+# contradicts "installing regardless" below.
 - name: Warn if the backup script is missing
   debug:
     msg: >-
       {{ construct_backup_script }} not found — installing the unit and timer
-      regardless (the timer is never started by this role either way). It is
-      deployed by .github/workflows/deploy.yml (rsync of scripts/); re-run
-      this role after the first deploy before turning the timer on by hand.
+      regardless (the timer is never started by this role either way), but
+      skipping validation, since systemd-analyze verify would fail on a
+      missing ExecStart target for a reason that has nothing to do with the
+      unit's own correctness. It is deployed by .github/workflows/deploy.yml
+      (rsync of scripts/); re-run this role after the first deploy, which
+      re-enables validation, before turning the timer on by hand.
   when: not construct_backup_script_stat.stat.exists
 
 # Signet is the ONLY writer of /etc/construct-backup/backup.env (SERV-43's
 # plan ruling) — this role creates the directory and never templates the
 # file itself, unlike delivery_prober's env file. 0700: nothing else needs
-# group access. Note this directory's permissions are defense-in-depth, not
-# the only guard — `signet render` does NOT set a restrictive mode on the
-# file it writes (measured directly, 2026-09-26: a fresh render came out
-# 0664, driven by the ambient umask, not anything signet enforces), which is
-# why scripts/render-backup-env.sh chmods after every render and
-# backup-nightly.sh itself refuses to source anything but a 0600 file.
+# group access. This directory's permissions are defense-in-depth, not the
+# only guard — see docs/backups.md's "Credential delivery" section for what
+# actually governs backup.env's own mode (signet preserves an EXISTING
+# file's mode and only sets 0600 on a file it creates fresh; it is not the
+# umask, which was this role's own first, wrong guess — corrected after PR
+# #228's review measured the real mechanism). scripts/render-backup-env.sh
+# chmods after every render regardless, and backup-nightly.sh itself refuses
+# to source anything but a 0600 file.
 - name: Create the backup credential directory
   file:
     path: /etc/construct-backup
@@ -52,6 +63,64 @@
     group: "{{ construct_backup_user }}"
     mode: "0700"
 
+# ── validate BEFORE installing, not after (PR #228 review) ──────────────────
+#
+# The first version of this role templated straight to /etc/systemd/system
+# and validated afterward: a bad render replaced a good, already-loaded unit
+# before the play went red, so the timer would have kept firing the OLD unit
+# only until the next daemon-reload, then failed every night on the broken
+# one — costing little today only because the timer is off. Rendering to a
+# throwaway path first and verifying THAT means a bad template never reaches
+# the real unit file at all.
+#
+# The scratch path is named with a real `.service`/`.timer` suffix rather
+# than reusing ansible's own anonymous tmp file (what the `validate:` module
+# parameter would hand `systemd-analyze verify` via its `%s` substitution) —
+# confirmed directly that the extension is load-bearing: verify against an
+# extensionless copy of an otherwise-valid unit fails with "Failed to
+# prepare filename ... Invalid argument", which is a fact about verify's own
+# argument parsing and would fail a PERFECTLY GOOD unit for the wrong reason.
+- name: Render the unit to a scratch path for validation before installing it
+  template:
+    src: construct-backup.service.j2
+    dest: /tmp/construct-backup-verify.service
+    mode: "0644"
+  when: construct_backup_script_stat.stat.exists
+
+- name: Render the timer to a scratch path for validation before installing it
+  template:
+    src: construct-backup.timer.j2
+    dest: /tmp/construct-backup-verify.timer
+    mode: "0644"
+  when: construct_backup_script_stat.stat.exists
+
+# Proven to actually catch a bad unit before trusting its pass on a good one:
+# a Type=oneshot unit carrying RestartForceExitStatus= is refused by systemd
+# at load — checked directly on this box (systemd 255), once, during review,
+# not re-demonstrated on every apply. What DOES run on every apply is the
+# check itself, against whatever the templates currently render.
+- name: Validate the scratch-rendered unit with systemd-analyze verify
+  command: systemd-analyze verify /tmp/construct-backup-verify.service
+  register: construct_backup_verify_service
+  changed_when: false
+  failed_when: construct_backup_verify_service.rc != 0
+  when: construct_backup_script_stat.stat.exists
+
+- name: Validate the scratch-rendered timer with systemd-analyze verify
+  command: systemd-analyze verify /tmp/construct-backup-verify.timer
+  register: construct_backup_verify_timer
+  changed_when: false
+  failed_when: construct_backup_verify_timer.rc != 0
+  when: construct_backup_script_stat.stat.exists
+
+- name: Remove the scratch validation copies
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/construct-backup-verify.service
+    - /tmp/construct-backup-verify.timer
+
 - name: Deploy the backup systemd unit
   template:
     src: construct-backup.service.j2
@@ -70,20 +139,8 @@
     mode: "0644"
   notify: Reload systemd daemon
 
-- name: Flush handlers so the rendered unit is loaded before verification
+- name: Flush handlers so the daemon reload actually happens this run
   meta: flush_handlers
-
-# Proven to actually catch a bad unit before trusting its pass on a good one
-# (SERV-213's own plan review): a Type=oneshot unit carrying
-# RestartForceExitStatus= is refused by systemd at load — checked directly
-# on this box. Never trust a validator's "0 findings" that has not also been
-# seen to fail; this task is that proof, run on every apply, not a one-time
-# check taken on faith.
-- name: Validate the rendered unit with systemd-analyze verify
-  command: systemd-analyze verify /etc/systemd/system/construct-backup.service
-  register: construct_backup_verify
-  changed_when: false
-  failed_when: construct_backup_verify.rc != 0
 
 # Deliberately no "enable and start" task, in either direction. The timer
 # stays disabled until the desktop destination exists (SERV-215) — this role

@@ -397,51 +397,86 @@ the second-writer hazard SERV-94 exists to prevent. A clean, separate project
 keeps that discipline intact.
 
 **Two things were proven against the real binary before relying on them, and
-one didn't hold:**
+one didn't hold as first diagnosed — corrected after PR #228's review, which
+measured the actual mechanism rather than accepting the first explanation:**
 
-- **The mechanism works.** `signet import <file>` seeds a NEW file target
-  from an existing file's keys and values, then `signet render -project P`
-  writes the vault's current values back to that path. Tested end to end
-  with a throwaway secret and a throwaway path — real content lands.
-- **The permissions do not.** A fresh `signet render` came out mode `664`
-  (group- and other-readable), not `0600` — signet writes with whatever
-  umask the calling process had; it does not set a restrictive mode itself.
-  This directly contradicted the plan's assumption. Fixed two ways: **never**
-  call `signet render -project construct-backup` directly — always
+- **The mechanism works.** `signet import <file>` registers a file target AT
+  THE EXACT PATH GIVEN and seeds the vault from that file's keys and values;
+  `signet render -project P` then writes the vault's current values back to
+  every path registered for that project. Tested end to end with a throwaway
+  secret and a throwaway path — real content lands.
+- **The permissions are not a umask issue.** A fresh `signet render` into a
+  path that already held a file came out mode `664`, which the first version
+  of this section blamed on the calling process's ambient umask. That was
+  wrong: signet's own atomic-write sets `0600` on a file it creates **fresh**,
+  and otherwise **preserves whatever mode the existing file already had** —
+  confirmed directly by deleting the target and re-rendering (came back
+  `600`) versus rendering onto a pre-existing `664` file (stayed `664`). The
+  664 traced to a hand-created seed file, not to signet. The fixes stand
+  regardless of the exact mechanism, and are now stable for the right reason:
+  **never** call `signet render -project construct-backup` directly — always
   `scripts/render-backup-env.sh`, which renders then `chmod 0600`s — and
-  `backup-nightly.sh` itself now refuses to source `backup.env` at any mode
-  other than `600`, so a skipped or reverted chmod fails loudly rather than
-  silently running against a world-readable credential file.
+  `backup-nightly.sh` itself refuses to source `backup.env` at any mode other
+  than `600`. Once the target file is created at `0600` (below), signet keeps
+  it there on every later render; the wrapper's `chmod` is the backstop, not
+  the thing doing the work every time.
+
+**`import` registers the target at the path you give it — not at whatever
+path you separately plan to deliver to.** The first version of this runbook
+imported from a scratch seed file elsewhere and expected `target add-key` to
+point delivery at `/etc/construct-backup/backup.env` afterward; `target
+add-key` refuses a path that was never imported ("no file target ... — signet
+import it first"), so that render would have silently landed on the SEED
+path forever, never on the real one. **Import the real target file itself.**
 
 **`import`'s direction is file → vault, not the reverse — a sequencing trap
 worth stating plainly, because it isn't the direction the word suggests.**
 Discovered by hitting it directly: `generate`-ing a secret first, then
-`import`-ing a placeholder-seeded file to register the target, overwrote the
-freshly-generated random value with the placeholder text — `import` reported
-"1 updated", meaning the VAULT's value changed to match the FILE, not the
-other way around. For real secrets, either generate the value *before* ever
-importing (and import from a file that already holds the same value, so
-import reports "unchanged"), or accept that import's file content is what
-wins and seed accordingly. Getting this backwards on the real hub/destination
-passwords would silently replace a good random secret with whatever
-placeholder text was in the seed file.
+`import`-ing a placeholder-seeded file, overwrote the freshly-generated
+random value with the placeholder text — `import` reported "1 updated",
+meaning the VAULT's value changed to match the FILE, not the other way
+around. The runbook below avoids this by writing the REAL value into the
+target file first and importing that — import then seeds the vault with the
+value that's already correct, never a placeholder.
 
 **Runbook**, once SERV-215 exists and the passwords are ready (from SERV-212's
-and SERV-216's off-box copies):
+and SERV-216's off-box copies). First-time bootstrap, on the box, as
+`{{ construct_backup_user }}` (after the ansible role has created the
+directory):
 
 ```bash
-# One-time: register the target, seeding from a file that already holds the
-# real values — never a placeholder, per the trap above.
-signet import -project construct-backup /path/to/a/real/seed.env
+# Write the real values directly into the real target path, at 0600, before
+# signet ever touches it — this is what makes the eventual import seed the
+# vault correctly instead of with a placeholder.
+install -m 600 /dev/null /etc/construct-backup/backup.env
+echo "RESTIC_PASSWORD_HUB=<the real value>" >> /etc/construct-backup/backup.env
 
-# Per credential, going forward — set (not generate, since these values
-# already exist off-box) with the real value on stdin or via -generate only
-# for a genuinely new one:
-signet set -project construct-backup -name RESTIC_PASSWORD_HUB
+# Register the target AT THAT EXACT PATH and seed the vault from it in one
+# step — no separate seed file, no target add-key needed for these first keys.
+signet import -project construct-backup /etc/construct-backup/backup.env
+
+# Confirms the mode is still 600 and the content still matches (render is a
+# no-op here content-wise, since the vault already matches what's on disk):
+./scripts/render-backup-env.sh
+```
+
+Adding a **new** key later (a second destination, say) — `target add-key`
+now works, because the target already exists at this exact path:
+
+```bash
+printf '%s' '<the real value>' | signet set -project construct-backup -name RESTIC_PASSWORD_DESK
 signet target add-key -project construct-backup \
-  -path /etc/construct-backup/backup.env -name RESTIC_PASSWORD_HUB
+  -path /etc/construct-backup/backup.env -name RESTIC_PASSWORD_DESK
+./scripts/render-backup-env.sh
+```
 
-# Deliver it:
+Rotating an **existing** key — no `import`, no `target add-key`, no
+`-replace` (that flag is meaningful only with `-generate`; a plain `set` with
+a real value overwrites the existing one unconditionally — confirmed
+directly, "version 2" with no complaint):
+
+```bash
+printf '%s' '<the new value>' | signet set -project construct-backup -name RESTIC_PASSWORD_HUB
 ./scripts/render-backup-env.sh
 ```
 
