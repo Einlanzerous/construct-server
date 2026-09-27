@@ -244,7 +244,17 @@ record. Traced below rather than left as an open question, per this ticket's
 own must-dump-floor argument: an unexplained role is exactly the kind of
 silent gap this file exists to close.
 
-<!-- PROVENANCE: filled in once traced — see SERV-213 -->
+| Role | Provenance | Source |
+|---|---|---|
+| `catenary` | `CREATE ROLE catenary WITH LOGIN PASSWORD :'password'` — run once by hand as superuser. Deliberately not a migration (CANT-13 Ruling 3): migrations run *as* `catenary`, and a role cannot create itself. | `~/projects/catenary/deploy/provision.sql` |
+| `drydock_user` | Provisioned by hand directly against the running cluster; has no `ensure_db` line yet because adding one changes the shared `postgres` service's env and bounces every dependent service (17 of them) — deliberately deferred to its own change. | This repo's own `README.md` (database table + note), tracked and open as **SERV-72** |
+| `centrifuge` (bare, distinct from `centrifuge_user`) | **Not fully traced.** The literal name's origin is understood — centrifuge's own standalone dev-stack compose file defaults `POSTGRES_USER=centrifuge` for its *own* Postgres container, a separate instance from the shared cluster. How, or whether, that name was carried into the *shared* cluster specifically is not documented in construct-server, centrifuge, signet, or the deployed host — no script, migration, or prior ticket describes that move. Filed as **SERV-219**. | `~/projects/centrifuge/docker-compose.yaml`, `.env.example:87` (for the name's origin only) |
+
+All three restore correctly from the globals dump regardless — `pg_dumpall
+--globals-only` captures a role's definition by what it *is*, not by how it
+got there. This table is about whether the repo can **explain and recreate**
+them, which the restore drill (SERV-217) does not itself test and should not
+be read as testing.
 
 ## Not yet in this file
 
