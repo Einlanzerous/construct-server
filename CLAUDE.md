@@ -683,7 +683,22 @@ anything deploys or gets versioned.
   the **host** — an unpublished container port is still routable from there, which no
   container-side probe sees. `--dev` points the same script at the dev edge (SERV-93)
   rather than there being a second copy of it — one question, one implementation, and
-  the only difference in substance is that dev's exemption allowlist is empty. `deploy.yml` runs it as a post-deploy gate; locally it is
+  the only difference in substance is that dev's exemption allowlist is empty.
+  **"The origin authenticates" and "the host is Access-gated" are different claims, and
+  only the second needs Cloudflare** (SERV-171). Whether an Access *application* covers a
+  hostname is dashboard state no file here holds: catenary went live with its router,
+  middleware and AUD entry all correct and its application on a typo'd hostname, and this
+  script was green throughout. The guard 403'd everything, so nothing was exposed — but the
+  host was gated *shut* (no assertion obtainable, legitimate callers refused for ever) and
+  the estate had one layer where it believed it had two. So the live half also requests
+  each gated host through the public path, unauthenticated, and asserts a redirect to the
+  guard's team domain at **that host's** login whose `kid=` equals its `CF_ACCESS_AUD_MAP`
+  entry; the origin guard answering instead is the failure, and an unreachable edge is a
+  failure, not a skip. It asks **as a browser** (`Accept: text/html`) because `mcp.` has
+  Managed OAuth and answers a bare request `401` rather than redirecting. The closing
+  summary states the two claims separately. `make edge-auth-test` proves the check can still
+  go red, against stubbed `docker`/`curl` — a host with no application cannot be made on the
+  real edge without breaking prod. `deploy.yml` runs it as a post-deploy gate; locally it is
   `make edge-auth-check`. The guard is the one first-party image **built on the box**
   rather than pinned (stdlib-only Go, no deps), so `deploy.yml` builds it explicitly —
   `up -d` alone would keep running a stale image without complaint. Its image carries
@@ -1030,3 +1045,5 @@ There is no test suite — this repo is configuration, so validation is mostly
   Access applications still have no AUD recorded.
 - For edge or auth changes, the only real check is a request through the public
   path — internal container-to-container success proves nothing about Access.
+  `make edge-auth-check` now makes that request itself (SERV-171); after editing it,
+  `make edge-auth-test` is the one that shows it still goes red.
