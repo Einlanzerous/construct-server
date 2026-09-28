@@ -332,7 +332,7 @@ if not team_domain or "$" in team_domain:
     bad("the guard carries no literal CF_ACCESS_TEAM_DOMAIN, so the live probe has no team domain to check the Access redirect against")
     team_domain = ""
 
-unmapped =sorted(set(hosts) - set(aud_map) - open_hosts)
+unmapped = sorted(set(hosts) - set(aud_map) - open_hosts)
 dead = sorted(set(aud_map) - set(hosts))
 misgated = sorted(open_hosts & set(aud_map))
 if misgated:
