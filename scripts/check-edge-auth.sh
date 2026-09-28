@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# check-edge-auth.sh — Assert the origin rejects a spoofed Host (SERV-106).
+# check-edge-auth.sh — Assert the origin rejects a spoofed Host (SERV-106), and that
+# Cloudflare's edge gates every host in front of it (SERV-171).
 #
 # Cloudflare Access is enforced at Cloudflare's EDGE. The origin used to re-check
 # nothing, so anything that could open a connection to Traefik's `internal`
@@ -61,6 +62,23 @@
 #      the entrypoint unreachable from the app network (SERV-107) — and until this
 #      check existed, nothing asserted it: every probe above aims at the bound
 #      address, so a regression to `:9080` would pass all of them.
+#  11. LIVE: every gated host is fronted by a Cloudflare Access APPLICATION (SERV-171).
+#      An unauthenticated request through Cloudflare's edge must be redirected to the
+#      guard's own team domain, at the login for THAT host, and the audience in the
+#      redirect (`kid=`) must equal the host's CF_ACCESS_AUD_MAP entry.
+#
+# TWO CLAIMS, NOT ONE (SERV-171). Checks 1-10 prove the ORIGIN authenticates. They
+# cannot prove the host is Access-GATED, because whether an Access application exists
+# for a hostname is Cloudflare dashboard state and nothing in this repo reads it. That
+# gap was real: catenary went live with its router, its middleware and its AUD-map
+# entry all correct while the Access application had been created against a typo'd
+# hostname, and this script was green throughout. Nothing was exposed — the guard
+# refused every request, which is what it is for — but the host was gated SHUT rather
+# than gated: no assertion could be obtained for it, so the guard would have 403'd
+# legitimate callers for ever, and the estate had one layer of defence where it
+# believed it had two. Check 11 is the only one that speaks to the edge, so the
+# closing summary reports the two claims separately rather than implying the second
+# from the first.
 #
 # TWO EDGES, ONE SCRIPT (SERV-93). `--dev` points every one of the checks above at
 # the dev project's edge instead: config/traefik-dev/, docker-compose.dev.yml,
@@ -79,7 +97,7 @@
 #   ./scripts/check-edge-auth.sh --dev --config-only
 #
 # Exit codes:
-#   0  the origin authenticates
+#   0  the origin authenticates and the edge gates (--config-only: the config is sound)
 #   1  a property is violated
 #   2  usage / missing dependency error
 
@@ -299,6 +317,20 @@ else:
             continue
         host, _, aud = entry.partition("=")
         aud_map[host.strip().lower()] = aud.strip()
+
+# The team domain the live edge probe expects every Access redirect to point at, read
+# from the guard — the service holding the AUD map — because it is the domain the
+# guard verifies assertions against. A value the tracked file does not spell out
+# cannot be checked against, and must not quietly degrade to "any redirect will do".
+team_domain = ""
+for _svc in (compose_doc.get("services") or {}):
+    _env = service_env(_svc)
+    if "CF_ACCESS_AUD_MAP" in _env:
+        team_domain = (_env.get("CF_ACCESS_TEAM_DOMAIN") or "").strip()
+        break
+if not team_domain or "$" in team_domain:
+    bad("the guard carries no literal CF_ACCESS_TEAM_DOMAIN, so the live probe has no team domain to check the Access redirect against")
+    team_domain = ""
 
 unmapped = sorted(set(hosts) - set(aud_map) - open_hosts)
 dead = sorted(set(aud_map) - set(hosts))
@@ -544,8 +576,12 @@ with open(os.environ["PROBE_OUT"], "w") as fh:
     fh.write(f"addr {addr}\n")
     if pending:
         fh.write("pending 1\n")
+    if team_domain:
+        fh.write(f"team {team_domain}\n")
     for h in sorted(set(hosts) - open_hosts):
         fh.write(f"host {h}\n")
+        if h in aud_map:
+            fh.write(f"aud {h} {aud_map[h]}\n")
     for name in sorted(EXEMPT):
         r = internal.get(name)
         if not r:
@@ -604,6 +640,8 @@ if [ "$CONFIG_ONLY" -eq 1 ]; then
   echo "  NOTE  --config-only: the live probe did NOT run. A config that reads"
   echo "        correctly while the origin serves 200 is the failure this exists"
   echo "        to catch, so run without the flag on the box before believing it."
+  echo "        Whether a Cloudflare Access application covers each host is not in"
+  echo "        any file here and is only ever asked live (SERV-171)."
   echo
   if [ "$FAIL" -eq 0 ]; then
     if grep -q '^pending 1$' "$PROBES" 2>/dev/null; then
@@ -797,11 +835,116 @@ $OTHER_IPS
 EOF
 fi
 
+# 9. The EDGE, which nothing above has looked at (SERV-171). Every probe so far went
+# straight to Traefik and asked whether the ORIGIN refuses; none crossed Cloudflare, so
+# none could notice that a host has no Access application at all. This one goes the
+# public way, unauthenticated, and asks what Cloudflare itself does with the request.
+#
+# A gated host answers with a 302 to the team's login for that host, and the redirect
+# carries the application's audience as `kid=` — the same tag the guard holds in
+# CF_ACCESS_AUD_MAP, so it is compared, which also catches a map entry that names a
+# stale or wrong application. A host with no application is not redirected: the request
+# rides the tunnel to the origin and the GUARD answers, which is recognisable because
+# it stamps X-Cf-Access-Guard on everything it produces. Catenary looked exactly like
+# that for the length of the window SERV-171 was filed about.
+#
+# `Accept: text/html` is load-bearing. mcp.<domain> has Managed OAuth on (SERV-100), and
+# for a client that does not ask for HTML Access answers 401 with a Bearer challenge
+# instead of redirecting — measured, 2026-09-28. Asking as a browser gets the redirect
+# from every gated host, the mcp one included, so one probe shape covers them all.
+#
+# "Could not connect" is a FAIL here as everywhere else in this script: an unreachable
+# edge proves nothing about what it does when reached. The cost is that this gate now
+# depends on the runner reaching Cloudflare, which is the same edge the estate is
+# served through.
+ORIGIN_FAIL=$FAIL
+EDGE_FAIL=0
+TEAM="$(awk '$1=="team"{print $2}' "$PROBES")"
+declare -A WANT_AUD=()
+while read -r _ aud_host aud_value; do
+  WANT_AUD["$aud_host"]="$aud_value"
+done < <(awk '$1=="aud"' "$PROBES")
+LOGIN_RE='^https://([^/]+)/cdn-cgi/access/login/([^/?]+)\?(.*)$'
+
+echo
+if [ -z "$TEAM" ]; then
+  echo "  FAIL  edge: no team domain to check the Access redirect against (reported above)"
+  EDGE_FAIL=1
+else
+  for host in "${HOSTS[@]}"; do
+    head="$(curl -s -D- -o /dev/null --max-time 10 -H 'Accept: text/html' "https://$host/healthz" 2>/dev/null | tr -d '\r' || true)"
+    if ! printf '%s' "$head" | grep -qi '^HTTP/'; then
+      echo "  FAIL  edge: could not reach https://$host/healthz"
+      echo "        That is not a pass: this asks what Cloudflare does with an unauthenticated"
+      echo "        request, and an unreachable edge proves nothing about it."
+      EDGE_FAIL=1
+      continue
+    fi
+    code="$(printf '%s\n' "$head" | awk 'NR==1{print $2; exit}')"
+    loc="$(printf '%s\n' "$head" | awk 'tolower($1)=="location:"{print $2; exit}')"
+    guard="$(printf '%s\n' "$head" | awk 'tolower($1)=="x-cf-access-guard:"{print $2; exit}')"
+
+    if [ -n "$loc" ]; then
+      # Printed without its query: the `meta=` parameter is a signed token and is noise.
+      if ! [[ "$loc" =~ $LOGIN_RE ]] || [ "${BASH_REMATCH[1]}" != "$TEAM" ]; then
+        echo "  FAIL  edge: $host redirects to ${loc%%\?*}, not to the $TEAM login"
+        echo "        Whatever answered is not this team's Access application."
+        EDGE_FAIL=1
+        continue
+      fi
+      login_host="${BASH_REMATCH[2]}"
+      kid="$(printf '%s' "${BASH_REMATCH[3]}" | tr '&' '\n' | sed -n 's/^kid=//p' | head -n 1)"
+      want="${WANT_AUD[$host]:-}"
+      if [ "$login_host" != "$host" ]; then
+        echo "  FAIL  edge: $host is sent to the Access login for $login_host, not for itself"
+        EDGE_FAIL=1
+      elif [ -n "$want" ] && [ "$kid" != "$want" ]; then
+        echo "  FAIL  edge: $host is behind an Access application whose audience is not the mapped one"
+        echo "        live:                ${kid:-<none in the redirect>}"
+        echo "        CF_ACCESS_AUD_MAP:   $want"
+        echo "        The guard verifies assertions against the mapped tag, so every login that"
+        echo "        succeeds at Cloudflare is refused at the origin. One of the two is stale."
+        EDGE_FAIL=1
+      else
+        echo "  ok    edge: $host is gated by Access (login redirect, audience matches the map)"
+      fi
+    elif [ -n "$guard" ]; then
+      echo "  FAIL  edge: $host has no Cloudflare Access application — the ORIGIN guard answered ($code, $guard)"
+      echo "        A request through Cloudflare should be redirected to $TEAM to log in."
+      echo "        This one went straight through the tunnel and was stopped only by the"
+      echo "        origin guard (SERV-106): one layer of defence where there should be two,"
+      echo "        and no way to obtain an assertion for this host, so the guard will 403"
+      echo "        legitimate callers for ever. Check the hostname on the Access application"
+      echo "        for a typo (SERV-171)."
+      EDGE_FAIL=1
+    else
+      echo "  FAIL  edge: $host answered $code, which is neither an Access login redirect nor"
+      echo "        the origin guard — the edge is not gating it and something else is serving"
+      EDGE_FAIL=1
+    fi
+  done
+fi
+[ "$EDGE_FAIL" -eq 0 ] || FAIL=1
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "The origin authenticates: every tunneled host rejects a request with no valid"
   echo "Cloudflare Access assertion, and the guard is healthy and enforcing."
+  echo "The edge gates: every one of those hosts sits behind a Cloudflare Access"
+  echo "application whose audience is the one in CF_ACCESS_AUD_MAP, so a browser is"
+  echo "sent to log in and can obtain an assertion."
   exit 0
 fi
-echo "FAILED — see above. The origin is not (or not fully) authenticating requests."
+echo "FAILED — see above."
+if [ "$ORIGIN_FAIL" -eq 0 ]; then
+  echo "  origin: authenticating — every tunneled host rejects an unauthenticated request."
+else
+  echo "  origin: NOT (or not fully) authenticating requests."
+fi
+if [ "$EDGE_FAIL" -eq 0 ]; then
+  echo "  edge:   gated — every host is behind an Access application with the mapped audience."
+else
+  echo "  edge:   NOT confirmed gated — a host above has no Access application, the wrong"
+  echo "          audience, or could not be reached."
+fi
 exit 1

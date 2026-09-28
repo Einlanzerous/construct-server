@@ -97,7 +97,7 @@ Reasoning in full: [`docs/cf-access-verifier.md`](../../docs/cf-access-verifier.
 go test ./...                  # this service's own decisions
 (cd ../../pkg/cfaccess && go test ./...)   # the verification, incl. shared vectors
 gofmt -l . && go vet ./...
-make edge-auth-check           # assert the LIVE stack rejects a spoofed Host
+make edge-auth-check           # assert the LIVE stack rejects a spoofed Host, and Cloudflare gates each host
 ```
 
 The tests sign their own tokens with a throwaway RSA key and serve their own JWKS

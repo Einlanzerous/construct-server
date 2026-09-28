@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check versions assert-tokens assert-env-keys env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check edge-auth-test versions assert-tokens assert-env-keys env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-assert-env-keys dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
@@ -179,11 +179,20 @@ backup-status:
 # reach (SERV-107). Two halves: a config check that every router on the `internal`
 # entrypoint carries the cf-access-jwt middleware and that the AUD map matches, and a live
 # probe from the host — which reaches container ports whether or not they are published.
+# The live half also asks Cloudflare, over the public path, whether an Access application
+# covers each gated host (SERV-171) — so it needs outbound network as well as the stack.
 # deploy.yml runs the same script as a post-deploy gate.
 # Usage: make edge-auth-check                  (config + live; needs the stack up)
 #        make edge-auth-check config_only=1    (config only, e.g. from a laptop)
 edge-auth-check:
 	./scripts/check-edge-auth.sh $(if $(config_only),--config-only)
+
+# Prove the edge check still goes RED on a host with no Access application, on an audience
+# that differs from the map, and on an unreachable edge (SERV-171). Runs the real script
+# against stub docker/curl: that state cannot be produced on the real edge without breaking
+# prod, and a check for it that has quietly stopped working looks like a clean edge.
+edge-auth-test:
+	@./scripts/check-edge-auth-test.sh
 
 # Report what the stack is actually running: image ref, resolved digest, and the COMMIT
 # each image was built from (SERV-97). Read the revision column, not the digest — the

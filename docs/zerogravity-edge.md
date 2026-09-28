@@ -128,7 +128,7 @@ exemptions at all — and is documented in `docs/dev-environment.md`. The two sh
 | `config/traefik/dynamic/routers.yml` | Routers, services, header-strip + deny-all + `cf-access-jwt` middlewares |
 | `config/traefik-dev/` | The **dev** edge's static + dynamic config (SERV-93) |
 | `services/cf-access-guard/` | Origin-side Access JWT validation (SERV-106); the only stack image built on the box, and built for both projects |
-| `scripts/check-edge-auth.sh` | Asserts the origin rejects a spoofed Host — config *and* a live probe. `--dev` for the dev edge |
+| `scripts/check-edge-auth.sh` | Asserts the origin rejects a spoofed Host, and that Cloudflare's edge redirects each gated host to its Access login with the mapped audience (SERV-171) — config *and* live probes. `--dev` for the dev edge |
 | `docker-compose.yml` | `traefik`, `cf-access-guard`, `cloudflared`, `switchyard-mcp`, `authentik-server`, `authentik-worker`, `authentik-redis` |
 | `db/init-db.sh` | Provisions the `authentik` DB/user on the shared postgres |
 | `.env.example` | New vars (`CF_DNS_API_TOKEN`, `AUTHENTIK_*`) |
@@ -362,4 +362,9 @@ anything here:
   **from the host**, must return 403 (SERV-106). Runs today, no relay required. The
   host angle is the one a container-side probe misses: an unpublished container port
   is still routable from the host on Linux, so "unreachable from `construct_net`" was
-  never the same claim as "rejected".
+  never the same claim as "rejected". The same run then asks the other question
+  (SERV-171): an unauthenticated `GET https://<host>/healthz` with `Accept: text/html`
+  must be a `302` to `<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>` whose
+  `kid=` is that host's `CF_ACCESS_AUD_MAP` entry. A `403` with `x-cf-access-guard:
+  deny` instead means **no Access application covers the host** — the origin refused
+  it, but nobody can ever obtain an assertion for it.
