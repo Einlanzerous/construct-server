@@ -767,9 +767,12 @@ jobs:
         # with chronicle. The `if:` above runs this whenever assert-healthy passed —
         # `steps.healthy.outcome`, not `.conclusion`, though the two agree here since
         # that step carries no `continue-on-error` — whatever check-edge-auth did.
-        # `!cancelled()` is there because `success()` is no longer implied once a
-        # custom `if:` is given: without it a cancelled run would still fire this
-        # gate, which `always()` alone would not have excluded either.
+        # `!cancelled()` does two jobs. Any status-check function in `if:`
+        # (`success()`, `always()`, `cancelled()`, `failure()`) replaces the implicit
+        # `success()` GitHub would otherwise AND in — without one, the outcome check
+        # alone would still be ANDed with `success()` and a red edge-auth would skip
+        # this again, i.e. the SERV-220 bug returns. And unlike `always()`, it keeps
+        # a cancelled run from firing the gate.
         #
         # THE SUBCOMMAND EXISTS FROM 1.11, and the floor is declared ONCE in
         # versions.env (CHRONICLE_TIER1_AUDIT_FLOOR). promote.yml refuses a pin below
