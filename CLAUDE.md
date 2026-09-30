@@ -37,8 +37,13 @@ anything deploys or gets versioned.
   the role would do so after chronicle had booted and audited the old grants — so
   since SERV-183 **`deploy.yml` gates every deploy on `chronicle tier1-audit`**, last
   of its three assertions (after `assert-healthy` and `check-edge-auth`, so a
-  chronicle problem can never take the edge gate offline). That subcommand exists
-  from chronicle 1.11, which makes **1.11 a rollback floor for `CHRONICLE_TAG`**:
+  chronicle problem can never take the edge gate offline) — **and, since SERV-220,
+  independently of `check-edge-auth`'s own result**: that step carries its own `if:`
+  keyed on `assert-healthy` succeeding, not on the default "every earlier step
+  passed," so an edge-auth failure no longer silently skips this audit too. It still
+  won't run on a cancelled deploy or if `assert-healthy` itself failed.
+  That subcommand exists from chronicle 1.11, which makes **1.11 a rollback floor
+  for `CHRONICLE_TAG`**:
   `versions.env` declares it once as `CHRONICLE_TIER1_AUDIT_FLOOR`, `promote.yml`
   refuses a lower pin before committing it, and the gate step re-checks the running
   version so a hand-edited pin fails with a sentence rather than a usage error.
