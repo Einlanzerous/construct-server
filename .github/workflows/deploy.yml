@@ -737,6 +737,7 @@ jobs:
 
       - name: Assert chronicle_tier1 holds only what the tier boundary allows
         id: tier1-audit
+        if: ${{ !cancelled() && steps.healthy.outcome == 'success' }}
         # CHRN-52 step 3 (SERV-183). `Ensure databases exist` runs init-db.sh AFTER
         # `up -d`, so on the deploy that edits that script to widen chronicle_tier1,
         # chronicle has already booted against the old grants, its boot audit was
@@ -755,6 +756,23 @@ jobs:
         # init-db.sh runs) and `exec` into a restarting container is a false red;
         # after check-edge-auth so that a chronicle problem can never take the
         # SERV-106 edge gate offline — each gate reports on its own subject.
+        #
+        # THAT LAST CLAUSE ONLY HELD IN ONE DIRECTION until SERV-220. A step with no
+        # `if:` defaults to `success()` — it runs only when every EARLIER step
+        # succeeded — so a red check-edge-auth silently skipped this gate too, which
+        # is exactly the coupling "each gate reports on its own subject" is supposed
+        # to rule out. It went unnoticed while edge-auth could only fail because of
+        # something on the box; SERV-171 made it also ask Cloudflare over the public
+        # path, so it can now fail on a WAN or Cloudflare blip that has nothing to do
+        # with chronicle. The `if:` above runs this whenever assert-healthy passed —
+        # `steps.healthy.outcome`, not `.conclusion`, though the two agree here since
+        # that step carries no `continue-on-error` — whatever check-edge-auth did.
+        # `!cancelled()` does two jobs. Any status-check function in `if:`
+        # (`success()`, `always()`, `cancelled()`, `failure()`) replaces the implicit
+        # `success()` GitHub would otherwise AND in — without one, the outcome check
+        # alone would still be ANDed with `success()` and a red edge-auth would skip
+        # this again, i.e. the SERV-220 bug returns. And unlike `always()`, it keeps
+        # a cancelled run from firing the gate.
         #
         # THE SUBCOMMAND EXISTS FROM 1.11, and the floor is declared ONCE in
         # versions.env (CHRONICLE_TIER1_AUDIT_FLOOR). promote.yml refuses a pin below
