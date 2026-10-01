@@ -292,6 +292,85 @@ Three things to know before pasting:
   attachment), mp4, webm — 10 MiB per image, 100 MiB per video, 2 GiB per
   consumer token. Anything else is a 415, and the type is sniffed, not trusted.
 
+### Plans are reviewed by a machine first
+
+A `decision` ticket's plan is read by Switchyard's adversarial plan pass before a
+person is asked to read it. The pass checks out the ticket's own repository
+(`project.repo_url`, default branch) and reads `REVIEW.md § Reviewing a plan`
+there. **Every repository with a Switchyard project and a `repo_url` owes that
+section**, and it says three things:
+
+1. **What the pass verifies against this tree** — every check performable from
+   the checkout plus the plan JSON alone: cited paths, symbols and line numbers
+   exist; ruling premises hold against the schema and migrations; the
+   repository's invariants are blocking checks, named; numbers copied from
+   another service carry that service's constraints; criteria have a `method`
+   and are dischargeable by this ticket. A claim about a neighbouring repository
+   is *unverified*, never *false*.
+2. **The reviewer's standing** — advisory threads on a passing check; blocking
+   only for a hole a person would bounce; scrutiny goes to a ruling's
+   recommended option and non-recommended options get an honesty check only
+   (SWY-441); it never picks a ruling, never supersedes, and never approves a
+   plan that carries a human-only ruling.
+3. **The exit condition** — what *ready for a human* means here, as a checklist
+   the loop (SWY-445) reads: no blocking finding on the recommended path, every
+   genuine either/or has a ruling, every criterion is runnable. Reaching it
+   means a person is owed the rulings, not that the plan is approved.
+
+`CLAUDE.md` in the repository outranks this section, as with every rule here.
+**Extending the pass to another project means changing its checkout, never
+widening its condition** (SWY-416, SWY-419): a project joins by landing its
+doctrine section and being added to the pass rule's project list — both
+deliberate acts, both visible. The list SWY-419's approved plan carries (rev 2,
+ruling 2, 2026-09-29) is `in [SWY, CHRN, CANT]`; it is live once magos PATCHes
+the rule to it, and this file does not claim that has happened. No repository is
+exempt without a stated reason.
+
+The first two instances are the pattern to copy, and they differ in placement
+on purpose. Chronicle's doctrine is inline — `REVIEW.md § Reviewing a plan`
+(CHRN-102, `ea49a04`). Catenary's `REVIEW.md` section is a twelve-line pointer
+to `docs/plan-review.md` (CANT-150, `d0971cd`), because catenary's
+`pr-review.yml` feeds `REVIEW.md` to the PR reviewer whole. Either satisfies the
+standard — the pass's `doctrine.sh` (switchyard's `.github/scripts/plan-review/`,
+SWY-419) follows a single-link pointer section. Prefer inline, unless `REVIEW.md`
+is the PR reviewer's prompt verbatim. **construct-server's own `REVIEW.md` has no
+such section today**: SERV is not yet in the pass's list, and writing the section
+is a SERV ticket filed when it joins.
+
+**Where the loop's runs land — measured 2026-09-28, rulings as of 2026-09-29.**
+The pass runs on `self-hosted` in the switchyard repo, so it lands only on the
+switchyard pool — `switchyard-pool-1`, `switchyard-pool-2` and the `e2e`
+singleton `switchyard-runner` — three of the host's 15 `actions.runner.*` units,
+none of which sets its own `HOME` (`systemctl show <unit> -p Environment` shows
+no `HOME=` on any of the fifteen), so every runner's `~` is `/home/magos`. The
+pass's last eight runs took 153–641 s, with queue waits of 1–228 s
+(`gh api repos/Einlanzerous/switchyard/actions/workflows/plan-review.yml/runs`,
+then each run's `/jobs`). The author job (SWY-445) is unmeasured; its 20-minute
+timeout is the working assumption. So beyond the first pass the loop adds at
+most `2 × PLAN_LOOP_MAX_ROUNDS` runs per plan — five runs in all at the approved
+budget of 2 — landing between about 3 and about 83 minutes. **That envelope and
+that budget are SWY-445's approved plan's** (ruling 3, picked 2026-09-29),
+restated here and not derived here: SWY-445 was approved on 2026-09-29 at 05:23Z,
+before this standard's second revision and before anything in it was stable
+enough to cite. Two plans looping at once is two jobs; three is the pool, and a
+merge's CI queues behind them. The SERV-127 sidecar prices real pass and author
+runs once they exist; the numbers are then re-measured, not argued.
+
+- **SERV-190 (per-runner `HOME`) is related, not blocking** — SERV-221's ruling,
+  picked 2026-09-29. SERV-114's fix 1 closed the install race: the action
+  installs nothing, and switchyard's `docs/ci-runners.md` counted 262 reviewer
+  sessions run under the shared `HOME` as of 2026-09-20. The `/tmp` shape
+  (SERV-137/143) is closed per workflow by writing only under `$RUNNER_TEMP`,
+  which `plan-review.yml` does and SWY-445 requires of the author job (its
+  criterion 11). What SERV-190 still fixes — transcript and sidecar roots,
+  `~/.local/bin` and `~/.bun` as shared tool paths — is off the loop's failure
+  path: a run that raced there loses a ledger row, not a revision. SERV-181
+  already removed one of its three obstacles.
+- **The citation runs from here to SWY-445, and back from its subtasks.** The
+  loop's remaining work (SWY-449, SWY-450) cites this subsection by heading;
+  their PRs may open before this section merges, and the citation is added
+  afterwards in that case.
+
 ## 6. Status hygiene
 
 Keep the status accurate while working a ticket. "In Progress is In Progress"
@@ -396,6 +475,12 @@ this file. Concrete checks:
 - A new status that renames a canonical one → finding.
 - A PR that changes a visible surface and describes it in prose with no image →
   finding (§5 *Show, don't describe*). A Nit, not a block: the fix is one upload.
+- A PR carrying a Switchyard ticket key in its title or branch, touching
+  `REVIEW.md` or `CLAUDE.md`, in a repository whose `REVIEW.md` has no
+  `## Reviewing a plan` section → finding (§5 *Plans are reviewed by a machine
+  first*). A Nit, not a block: the consequence is a plan reviewed with generic
+  checks only, which the pass says out loud. Decided from those two local facts —
+  the key, and a grep of `REVIEW.md` — with no Switchyard call.
 
 **A principles violation is a 🟡 Nit unless it has a concrete consequence**, in
 which case severity comes from the consequence, not from the violation. The
