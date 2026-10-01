@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.35.0](https://github.com/Einlanzerous/construct-server/compare/v4.34.0...v4.35.0) (2026-10-01)
+
+
+### Features
+
+* **backup:** host wiring for the nightly backup timer (SERV-214) ([#228](https://github.com/Einlanzerous/construct-server/issues/228)) ([eb01351](https://github.com/Einlanzerous/construct-server/commit/eb013514eeae605c09c353e7fb4553fccc40a7fb))
+* **backup:** wire the desktop destination, close install.sh's credential argv leaks (SERV-215) ([#230](https://github.com/Einlanzerous/construct-server/issues/230)) ([071d955](https://github.com/Einlanzerous/construct-server/commit/071d955e750858cf32b6dc8ac9a2bccb451e1484))
+
+
+### Bug Fixes
+
+* **deploy:** run the chronicle tier-1 audit even when edge-auth fails (SERV-220) ([#232](https://github.com/Einlanzerous/construct-server/issues/232)) ([d8320c7](https://github.com/Einlanzerous/construct-server/commit/d8320c7695c7449385d7490552f60c05506be951))
+* **edge:** assert an Access application covers each gated host, not just the origin guard (SERV-171) ([#231](https://github.com/Einlanzerous/construct-server/issues/231)) ([862d94b](https://github.com/Einlanzerous/construct-server/commit/862d94bf1706df1c1295d921466ce3c61ddd92f9))
+
 ## [4.34.0](https://github.com/Einlanzerous/construct-server/compare/v4.33.0...v4.34.0) (2026-09-27)
 
 
