@@ -1244,6 +1244,14 @@ services:
       # construction is here so that a future .env that loses it degrades to
       # `unconfigured` rather than to a crash-loop.
       - CHRONICLE_AMBER_URL=${AMBER_API_TOKEN:+${AMBER_BASE_URL:-http://amber:4008}}
+      # The Scribe (CHRN-126, SERV-225): with the Switchyard pair above, these
+      # two switch triage on and start the proposal pump, which routes every
+      # transcribed memo and yields the GPU to transcription. LITERALS, not
+      # Signet (CHRN-126 ruling 5): neither is a secret, and the model is half
+      # of the proposer identity, so changing it re-routes every undecided memo
+      # and belongs in a reviewed diff rather than a rendered env file.
+      - CHRONICLE_SCRIBE_OLLAMA_URL=http://ollama:11434
+      - CHRONICLE_SCRIBE_MODEL=gemma4:31b
       - CHRONICLE_AMBER_TOKEN=${AMBER_API_TOKEN}
     volumes:
       # rw: the only durable store for tier-2 audio, which nothing regenerates.
