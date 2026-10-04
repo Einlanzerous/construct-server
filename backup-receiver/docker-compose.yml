@@ -51,6 +51,16 @@ services:
       # and refuses to continue without it, rather than silently degrading to a
       # mode nobody tested.
       - TS_USERSPACE=false
+      # The tunnel MTU, clamped so a full-size tailnet packet still fits a
+      # 1280-byte underlay once WireGuard adds its ~80 bytes (SERV-226).
+      # tailscale0 defaults to 1280, which needs a 1360 path — and on a Windows
+      # host that also runs Tailscale, WSL2 inherits that adapter's 1280 MTU on
+      # eth0. Nothing errors when it does not fit: small replies (an auth
+      # check, an empty directory) still get through and anything bigger is
+      # silently dropped, so restic hangs on its first real listing while every
+      # cheap probe says the receiver is up. 1200 costs a few percent of
+      # throughput everywhere else, which a nightly copy does not notice.
+      - TS_DEBUG_MTU=1200
       # e.g. --advertise-tags=tag:backup-receiver, for scoping ACLs later.
       - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:-}
     volumes:
