@@ -89,11 +89,16 @@ fi
 
 # One call. Prints the status on the LAST line and the body above it, so a
 # caller can tell a refusal from a result without a second request.
+#
+# The credential reaches curl as a config line on STDIN (`-K -`), never as an
+# argument: an argv is readable by anyone who can run `ps` for as long as the
+# request is in flight, and this is the strongest credential the repo handles
+# (SERV-215). `printf` is a shell builtin, so the value is in no process's argv.
 api() {
   local method="$1" path="$2" out code
   out="$(mktemp)"
-  code="$(curl -sS -m 15 -o "$out" -w '%{http_code}' -X "$method" "$SWITCHYARD_URL$path" \
-    -H "authorization: Bearer $admin" || true)"
+  code="$(printf 'header = "authorization: Bearer %s"\n' "$admin" \
+    | curl -sS -m 15 -K - -o "$out" -w '%{http_code}' -X "$method" "$SWITCHYARD_URL$path" || true)"
   cat "$out"; rm -f "$out"
   case "$code" in [0-9][0-9][0-9]) ;; *) code=000 ;; esac
   printf '\n%s\n' "$code"

@@ -19,7 +19,8 @@
 # Idempotent in the part that can be: the agent user is created only if absent.
 # The TOKEN is not — every run mints a new one, because a token secret is
 # returned exactly once and is unrecoverable afterwards. Re-run this only to
-# rotate, and revoke the old one after.
+# rotate, and revoke the old one after — the UI cannot revoke an agent's token:
+#   ./scripts/revoke-switchyard-token.sh delivery-prober --superseded delivery-prober-host
 #
 #   ./scripts/mint-prober-token.sh
 #

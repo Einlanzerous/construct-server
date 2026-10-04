@@ -178,8 +178,10 @@ if [ -n "$SW_TOKEN" ]; then
   # The grant. See the header for why this create cannot write anything: the
   # field refusal comes before any lookup, and the project does not exist.
   probe_out="$(mktemp)"
-  code="$(curl -sS -m 15 -o "$probe_out" -w '%{http_code}' -X POST "$SWITCHYARD_URL/v1/tickets" \
-    -H "authorization: Bearer $SW_TOKEN" -H 'content-type: application/json' \
+  # The token goes to curl on stdin (`-K -`), not as an argument (SERV-215).
+  code="$(printf 'header = "authorization: Bearer %s"\n' "$SW_TOKEN" \
+    | curl -sS -m 15 -K - -o "$probe_out" -w '%{http_code}' -X POST "$SWITCHYARD_URL/v1/tickets" \
+    -H 'content-type: application/json' \
     -d "{\"project_key\":\"$PROBE_PROJECT_KEY\",\"type\":\"task\",\"title\":\"chronicle-upstream-check probe\",\"label_ids\":[]}" \
     2>/dev/null)" || code=000
   case "$code" in [0-9][0-9][0-9]) ;; *) code=000 ;; esac
