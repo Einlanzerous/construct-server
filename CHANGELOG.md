@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.36.0](https://github.com/Einlanzerous/construct-server/compare/v4.35.0...v4.36.0) (2026-10-04)
+
+
+### Features
+
+* **chronicle:** switch the Scribe on with two literal env lines (SERV-225) ([#234](https://github.com/Einlanzerous/construct-server/issues/234)) ([1035b19](https://github.com/Einlanzerous/construct-server/commit/1035b1964238cf8ad8d006fc27198d1ecb26d5bf))
+
+
+### Bug Fixes
+
+* **backup-receiver:** clamp the tunnel MTU so listings fit a 1280 underlay (SERV-226) ([#236](https://github.com/Einlanzerous/construct-server/issues/236)) ([1d0908f](https://github.com/Einlanzerous/construct-server/commit/1d0908f9c6506daf9ae6d8027300e556093772d7))
+
 ## [4.35.0](https://github.com/Einlanzerous/construct-server/compare/v4.34.0...v4.35.0) (2026-10-01)
 
 
