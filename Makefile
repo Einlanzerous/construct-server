@@ -280,9 +280,10 @@ promote-dispatch-check:
 # only a deploy renders that into $(DEPLOY_ROOT)/.env, so in between the default form
 # reports "not provisioned" for a credential that is provisioned correctly.
 #
-# It proves the credentials are ACCEPTED, not that the Switchyard token is read-only:
-# there is no safe probe for that (a write probe either creates a ticket or proves
-# nothing), so the scope list is asserted at mint time by mint-chronicle-token.sh.
+# It proves the credentials are ACCEPTED and that the Switchyard token's grant is
+# create-only (SERV-227): a create naming a withheld field against a project key that
+# does not exist is refused before anything is looked up or written. The exact scope
+# list is asserted at mint time by mint-chronicle-token.sh.
 # Usage: make chronicle-upstream-check
 #        make chronicle-upstream-check vault=1
 chronicle-upstream-check:

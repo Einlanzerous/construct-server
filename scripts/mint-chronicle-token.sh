@@ -1,26 +1,29 @@
 #!/usr/bin/env bash
 #
-# Mint Chronicle's Switchyard token (SERV-185 / CHRN-97).
+# Mint Chronicle's Switchyard token (SERV-185 / CHRN-97, widened by SERV-227).
 #
 # Chronicle LINKS to Switchyard and never copies it: a ticket reference resolves
 # at render time into a live card and is never written into a Chronicle table.
-# Everything that needs is READ:
+# And its triage FILES a ticket when a memo routes to TICKET. So it makes three
+# reads and one write:
 #
-#   GET /v1/projects        the live project key set, so `SWY-389` is recognised
+#   GET  /v1/projects       the live project key set, so `SWY-389` is recognised
 #                           as a reference and `UTF-8` is left as prose
-#   GET /v1/tickets/{key}   the card itself — title, status, project
-#   GET /v1/tickets?...     the triage sweep's lookups by memo
+#   GET  /v1/tickets/{key}  the card itself — title, status, project
+#   GET  /v1/tickets?...    the triage sweep's lookups by memo
+#   POST /v1/tickets        the ticket a TICKET route becomes
 #
-# So the token carries `tickets:read` and NOTHING else:
+# So the token carries exactly two scopes:
 #
-#   tickets:read     "what does Switchyard say about this key"   — this, only this.
+#   tickets:read     "what does Switchyard say about this key"
+#   tickets:create   "file this", and nothing else that mutates a ticket
 #   tickets:write    create, edit AND DELETE, instance-wide      — NOT granted here.
 #
-# ── WHY THERE IS NO NARROW WRITE GRANT, WHICH IS THE PART WORTH READING ──────
+# ── WHY `tickets:create` AND NOT `tickets:write`, WHICH IS THE PART WORTH READING ──
 #
 # It would be reasonable to assume `tickets:write` means "can file a ticket".
-# For an AGENT identity against Switchyard it does not, and the difference is
-# two facts in server/src/lib/authz.ts:
+# For an AGENT identity against Switchyard it means far more, and the difference
+# is two facts in server/src/lib/authz.ts:
 #
 #   1. `hasInstanceWideAccess` is true for `user.type === "agent"`, so an
 #      agent's effectivePermissions are its TOKEN SCOPES ALONE — no project
@@ -31,12 +34,23 @@
 #      layer — the layer (1) says agents bypass.
 #
 # So `tickets:write` on a service agent is instance-wide create, edit and delete
-# on every ticket in every project. That is a materially different thing to hand
-# a service than "Chronicle can file a ticket from triage", and if triage's
-# ticket creation is ever enabled in production it wants its own decision rather
-# than a wider scope list here. Chronicle's Scribe is not configured in
-# production today, so nothing needs it (cmd/chronicle/main.go gates the whole
-# triage construction on ScribeEnabled() && SwitchyardConfigured()).
+# on every ticket in every project, plus plans, links and external refs. Until
+# Switchyard 4.43 there was nothing between that and read-only, which is why
+# this token was `tickets:read` alone and triage's TICKET route was refused in
+# production (SERV-185 recorded the decision; CHRN-137 the refusals).
+#
+# `tickets:create` (SWY-464) is the grant in between. It admits POST /v1/tickets
+# and NO other route, and a token admitted by it alone is held to a subset of
+# the create body: project_key, title, description, priority, due_date,
+# metadata, and a type of task, bug, spike or epic. status_id, review_mode,
+# assignee_id, parent_id and label_ids are a 403. Chronicle sends none of those
+# (internal/switchyard/ticket.go), so its creates pass as they are, and a filed
+# ticket lands in the project's default status, unassigned and unlabelled.
+#
+# WHAT THIS GRANT STILL DOES NOT LIMIT, so nobody reads it as narrower than it
+# is: the PROJECT. An agent token is not bound to projects, so this one can file
+# into any live project the Scribe names. Binding is SWY-465. And a create fires
+# `ticket.created` to Switchyard's rules engine and webhooks like any other.
 #
 # ── WHY THIS IS A SCRIPT AND NOT A README LINE ───────────────────────────────
 #
@@ -63,10 +77,11 @@ SWITCHYARD_URL="${SWITCHYARD_URL:-http://localhost:4002}"
 CHRONICLE_USER_NAME="${CHRONICLE_USER_NAME:-chronicle}"
 TOKEN_NAME="${TOKEN_NAME:-chronicle-resolver}"
 
-# The one scope. Kept in a variable so the JSON below cannot drift from the
-# comment above it.
-SCOPES='["tickets:read"]'
-EXPECT_SCOPES='tickets:read'
+# The two scopes. Kept in variables so the JSON below cannot drift from the
+# comment above it. EXPECT_SCOPES is the granted list as the assertion below
+# renders it: sorted, comma-joined.
+SCOPES='["tickets:read","tickets:create"]'
+EXPECT_SCOPES='tickets:create,tickets:read'
 
 die() { echo "Error: $*" >&2; exit 1; }
 
@@ -206,3 +221,6 @@ echo "  signet sync"
 echo "  make chronicle-upstream-check vault=1     # prove the grant BEFORE shipping it"
 echo
 echo "Then deploy, and re-run 'make chronicle-upstream-check' against the container."
+echo
+echo "If this run ROTATED the token, the previous one is still live. Revoke it once"
+echo "the check passes against the container: Switchyard > Settings > API tokens."
