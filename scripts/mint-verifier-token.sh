@@ -30,7 +30,8 @@
 # Idempotent in the part that can be: the agent user is created only if absent.
 # The TOKEN is not — a token secret is returned exactly once and is unrecoverable
 # afterwards, so every run mints a new one. Re-run only to rotate, and revoke the
-# old one after.
+# old one after — the UI cannot revoke an agent's token:
+#   ./scripts/revoke-switchyard-token.sh post-deploy-verifier --superseded post-deploy-verifier-ci
 #
 #   ./scripts/mint-verifier-token.sh
 #
@@ -167,5 +168,7 @@ Better, put it under Signet so rotation happens in the vault rather than per rep
     signet sync
 
 This value is shown ONCE and cannot be retrieved again. If you lose it, re-run
-this script and revoke the old token.
+this script and revoke the old token:
+
+    ./scripts/revoke-switchyard-token.sh $VERIFIER_USER_NAME --superseded $TOKEN_NAME
 EOF

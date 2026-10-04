@@ -200,8 +200,7 @@ import json,sys
 print(','.join(sorted(json.load(sys.stdin).get('scopes') or [])))")"
 if [ "$granted" != "$EXPECT_SCOPES" ]; then
   die "refusing to hand back a token with scopes [$granted] — expected exactly $EXPECT_SCOPES.
-  Revoke it: Switchyard > Settings > API tokens, or
-  POST /v1/users/$user_id/tokens/<id>/revoke with the bootstrap credential."
+  Revoke it: ./scripts/revoke-switchyard-token.sh $CHRONICLE_USER_NAME   (lists, then takes the id)"
 fi
 
 echo
@@ -223,4 +222,6 @@ echo
 echo "Then deploy, and re-run 'make chronicle-upstream-check' against the container."
 echo
 echo "If this run ROTATED the token, the previous one is still live. Revoke it once"
-echo "the check passes against the container: Switchyard > Settings > API tokens."
+echo "the check passes against the container. The UI cannot revoke an agent's token:"
+echo
+echo "  ./scripts/revoke-switchyard-token.sh $CHRONICLE_USER_NAME --superseded $TOKEN_NAME"
