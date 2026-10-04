@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.37.0](https://github.com/Einlanzerous/construct-server/compare/v4.36.0...v4.37.0) (2026-10-04)
+
+
+### Features
+
+* **chronicle:** mint the Switchyard token as read plus create-only, so triage can file a ticket (SERV-227) ([#237](https://github.com/Einlanzerous/construct-server/issues/237)) ([9554f3d](https://github.com/Einlanzerous/construct-server/commit/9554f3da929614ee3460fdcaecec83343f9891e5))
+
+
+### Bug Fixes
+
+* **chronicle:** give chronicle the public Switchyard address for ticket links (SERV-230) ([#240](https://github.com/Einlanzerous/construct-server/issues/240)) ([322ebde](https://github.com/Einlanzerous/construct-server/commit/322ebded6e1f98f2af0d92724fd7e42b960ff6b4))
+
 ## [4.36.0](https://github.com/Einlanzerous/construct-server/compare/v4.35.0...v4.36.0) (2026-10-04)
 
 
