@@ -1231,10 +1231,11 @@ services:
       # Where a PERSON reaches Switchyard, for the link on a filed ticket and on
       # a ticket reference card (CHRN-140 / SERV-230). The URL above is where
       # chronicle sends requests, and a link built from it opens nowhere outside
-      # this network. Derived from the token like its sibling: chronicle refuses
-      # to boot with a link base and no tracker configured, so a bare literal
-      # would crash-loop it whenever the token is undelivered. A chronicle that
-      # predates CHRN-140 ignores this.
+      # this network. Derived from the token like its sibling, so the three stay
+      # one unit: an undelivered token leaves all of them empty. Chronicle
+      # ignores a link base with no tracker and warns at boot, so a bare literal
+      # would not stop it starting — it would log that warning on every boot
+      # the token is absent. A chronicle that predates CHRN-140 ignores this.
       - CHRONICLE_SWITCHYARD_PUBLIC_URL=${CHRONICLE_SWITCHYARD_TOKEN:+https://switchyard.zerogravity.industries}
       # Amber gates all of /v1 behind ONE token rather than one per consumer, so
       # there is nothing narrower to mint and Chronicle presents Amber's own —
