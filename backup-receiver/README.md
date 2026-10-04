@@ -180,3 +180,4 @@ NAS" a list rather than three designs.
 | verify: repository is open | `DISABLE_AUTHENTICATION` is set, or the htpasswd file is empty. |
 | verify: append-only not in force | `--append-only` is missing from `OPTIONS` — likely left off after a prune. |
 | Everything fine, but backups stopped after a reboot | Docker Desktop is not set to start at sign-in. |
+| Auth and empty listings answer, `snapshots/` hangs | Path MTU black hole: replies bigger than the underlay fits are dropped. Check `ip link show eth0` — on WSL2 with Windows Tailscale it is 1280. `TS_DEBUG_MTU` in `docker-compose.yml` must stay at or below underlay MTU minus 80 (SERV-226). An existing install picks the setting up only when recreated: run `docker compose up -d` here after pulling it (rest-server is recreated too, since it shares tailscale's namespace; both volumes are kept). |
