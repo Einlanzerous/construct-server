@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # check-chronicle-upstream.sh — can Chronicle actually reach Switchyard and
-# Amber with the credentials it was handed? (SERV-185 / CHRN-97)
+# Amber with the credentials it was handed? (SERV-185 / CHRN-97, SERV-227)
 #
 # Chronicle links to both and copies neither: a ticket reference and an archive
 # citation resolve at render time into live cards. Without these four variables
@@ -18,20 +18,34 @@
 #
 # ── WHAT THIS DOES NOT CHECK, AND WHERE THAT IS CHECKED INSTEAD ─────────────
 #
-# It does not prove the Switchyard token is READ-ONLY, and the omission is
-# deliberate rather than an oversight. There is no safe probe: Switchyard
-# validates a request body BEFORE the handler's `checkScope` runs (the route is
-# `app.openapi(...)`, so `c.req.valid("json")` has already parsed), so a
-# malformed body answers 400 whatever the scopes are — and a WELL-FORMED one
+# It proves the Switchyard token is ACCEPTED and that its grant is CREATE-ONLY.
+# It does not read the scope list, because nothing lets a token read its own.
+#
+# Until SERV-227 this said no safe probe for the grant existed, and that was
+# true: Switchyard validates a request body BEFORE the handler's scope check, so
+# a malformed create answers 400 whatever the scopes are, and a WELL-FORMED one
 # would create a real ticket on success. A check that has to write to learn
 # whether it can write is not a check.
 #
-# The scope narrowness is asserted where it is minted instead:
+# `tickets:create` (SWY-464) changed that by putting a refusal AHEAD of the
+# write. A token admitted to POST /v1/tickets by that scope alone may not name
+# `label_ids` (among others), and Switchyard refuses it before it looks anything
+# up. So one well-formed create, naming `label_ids` and a project key that does
+# not exist, tells the three cases apart and writes nothing in any of them:
+#
+#   403 create_only_field   read plus create-only          — the intended grant
+#   404 project not found   tickets:write or admin         — WIDER than intended
+#   403 (anything else)     no create scope at all         — triage cannot file
+#
+# The project key is the belt to that brace: even a token wide enough to get
+# past the field check has no project to write into.
+#
+# The exact scope list is still asserted where it is minted:
 # scripts/mint-chronicle-token.sh reads the granted scopes back out of the mint
-# response and refuses to hand over a token that is not exactly `tickets:read`.
-# That is the same division mint-prober-token.sh uses and for the same reason —
-# "the scope list is the security property, and a reviewable file holds it
-# still."
+# response and refuses to hand over a token that is not exactly `tickets:read`
+# plus `tickets:create`. That is the same division mint-prober-token.sh uses and
+# for the same reason — "the scope list is the security property, and a
+# reviewable file holds it still."
 #
 # ── WHAT IT WILL NOT PRINT ──────────────────────────────────────────────────
 #
@@ -61,6 +75,9 @@ DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/construct-server}"
 SWITCHYARD_URL="${SWITCHYARD_URL:-http://localhost:4002}"
 AMBER_URL="${AMBER_URL:-http://localhost:4008}"
 FROM_VAULT=0
+# A well-formed project key that names nothing. The grant probe never reaches a
+# project lookup with the intended token; this is for the token that is wider.
+PROBE_PROJECT_KEY="${PROBE_PROJECT_KEY:-ZZNOPROJ}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -157,6 +174,41 @@ if [ -n "$SW_TOKEN" ]; then
     000) bad "could not reach $SWITCHYARD_URL — is the container up?" ;;
     *) bad "GET /v1/projects -> $code (unexpected)" ;;
   esac
+
+  # The grant. See the header for why this create cannot write anything: the
+  # field refusal comes before any lookup, and the project does not exist.
+  probe_out="$(mktemp)"
+  code="$(curl -sS -m 15 -o "$probe_out" -w '%{http_code}' -X POST "$SWITCHYARD_URL/v1/tickets" \
+    -H "authorization: Bearer $SW_TOKEN" -H 'content-type: application/json' \
+    -d "{\"project_key\":\"$PROBE_PROJECT_KEY\",\"type\":\"task\",\"title\":\"chronicle-upstream-check probe\",\"label_ids\":[]}" \
+    2>/dev/null)" || code=000
+  case "$code" in [0-9][0-9][0-9]) ;; *) code=000 ;; esac
+  # Only the error's `details.code`, never the body: a 201 body would be a ticket.
+  detail="$(python3 -c "
+import json,sys
+try:
+    print((json.load(open(sys.argv[1])).get('error') or {}).get('details', {}).get('code', ''))
+except Exception:
+    print('')
+" "$probe_out" 2>/dev/null || true)"
+  rm -f "$probe_out"
+  case "$code:$detail" in
+    403:create_only_field)
+      ok "POST /v1/tickets -> 403 create_only_field (the grant is create-only; nothing was written)" ;;
+    404:*)
+      bad "POST /v1/tickets -> 404. The token got PAST the create-only field check, so it holds
+        tickets:write or admin — wider than Chronicle is meant to have. Re-mint it with
+        scripts/mint-chronicle-token.sh and revoke this one. Nothing was written." ;;
+    403:*)
+      bad "POST /v1/tickets -> 403 without create_only_field. The token cannot create a ticket
+        at all (tickets:read only, or a Switchyard older than 4.43), so triage's TICKET
+        route is refused. Re-mint it with scripts/mint-chronicle-token.sh (SERV-227)." ;;
+    201:*)
+      bad "POST /v1/tickets -> 201. A project keyed $PROBE_PROJECT_KEY exists and the token is
+        wide enough to have filed a probe ticket into it. Delete that ticket, re-mint." ;;
+    000:*) bad "could not reach $SWITCHYARD_URL — is the container up?" ;;
+    *) bad "POST /v1/tickets -> $code (unexpected; treating the grant as not proven)" ;;
+  esac
 else
   bad "skipped: no token to present"
 fi
@@ -189,13 +241,16 @@ echo
 if [ "$fail" -ne 0 ]; then
   err "chronicle-upstream: FAIL"
   err
-  err "Until this passes, every reference Chronicle renders answers \`unconfigured\`."
-  err "That is a true answer rather than an outage, which is why nothing else reports it."
+  err "A credential that is absent or not accepted means every reference Chronicle"
+  err "renders answers \`unconfigured\` — a true answer rather than an outage, which is"
+  err "why nothing else reports it. A grant failure alone leaves references working"
+  err "and triage's TICKET route refused (or, if the token is too wide, over-granted)."
   exit 1
 fi
 
 echo "chronicle-upstream: PASS"
 echo
-echo "Note: this proves the credentials are accepted, not that the token is read-only."
-echo "That is asserted at mint time by scripts/mint-chronicle-token.sh, which refuses"
-echo "to hand back a token whose granted scopes are not exactly tickets:read."
+echo "Note: this proves the credentials are accepted and the Switchyard grant is"
+echo "create-only. The exact scope list is asserted at mint time by"
+echo "scripts/mint-chronicle-token.sh, which refuses to hand back a token whose"
+echo "granted scopes are not exactly tickets:read plus tickets:create."

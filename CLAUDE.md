@@ -1012,13 +1012,16 @@ There is no test suite — this repo is configuration, so validation is mostly
   ordering `promote-dispatch-check` documents above and for the same reason.
   Host-side and **not a deploy gate** — it needs both containers up, and a deploy that
   recreated chronicle before switchyard would fail it for a reason that is not a
-  credential problem. It proves the credentials are ACCEPTED, not that the Switchyard
-  token is read-only: there is no safe probe for that, since Switchyard validates a
-  request body before the handler's `checkScope` runs, so a malformed write answers 400
-  whatever the scopes are and a well-formed one would create a real ticket. The scope is
-  asserted where it is minted — `mint-chronicle-token.sh` reads the granted scopes back
-  out of the mint response and refuses to hand over anything that is not exactly
-  `tickets:read`. **Note the compose pair is atomic**: `CHRONICLE_SWITCHYARD_URL` is
+  credential problem. It proves the credentials are ACCEPTED, and (SERV-227) that the
+  Switchyard token's grant is **create-only**: it sends a well-formed create naming a
+  withheld field against a project key that does not exist, which Switchyard refuses
+  before any lookup with `create_only_field` for a read-plus-create token, answers 404
+  for a wider one and the scope 403 for a read-only one — nothing is written in any of
+  the three. That probe exists only because `tickets:create` (SWY-464) put a refusal
+  ahead of the write; before it there was no safe one. The scope list is still asserted
+  where it is minted — `mint-chronicle-token.sh` reads the granted scopes back out of the
+  mint response and refuses to hand over anything that is not exactly `tickets:read`
+  plus `tickets:create`. **Note the compose pair is atomic**: `CHRONICLE_SWITCHYARD_URL` is
   derived from the token's presence (`${CHRONICLE_SWITCHYARD_TOKEN:+...}`), so an
   undelivered token leaves both halves empty and chronicle boots unconfigured rather than
   refusing to start on a half-configured pair.

@@ -1198,15 +1198,16 @@ services:
       # of a pair is set, so a URL beside an empty ${...} token crash-loops the
       # container. Same rule the CF Access pair above follows.
       #
-      # The token is READ-ONLY (`tickets:read`), minted by
-      # scripts/mint-chronicle-token.sh, and that is a decision rather than a
-      # default. Switchyard gives an AGENT its token's scopes with no project
-      # role intersected (authz.ts `hasInstanceWideAccess`), and `tickets:write`
-      # emits write AND delete together — so for a service agent there is no
-      # narrow write grant, and the only thing that would withhold deletion is
-      # the role layer agents bypass. Chronicle resolving references needs none
-      # of it. If triage's ticket creation is ever turned on here it needs that
-      # grant, and it needs its own decision: see SERV-185.
+      # The token is READ PLUS CREATE-ONLY (`tickets:read`, `tickets:create`),
+      # minted by scripts/mint-chronicle-token.sh, and that is a decision rather
+      # than a default. Switchyard gives an AGENT its token's scopes with no
+      # project role intersected (authz.ts `hasInstanceWideAccess`), and
+      # `tickets:write` emits write AND delete together — so `tickets:write`
+      # here would be instance-wide edit and delete on every ticket. It was
+      # read-only (SERV-185) until Switchyard 4.43 added `tickets:create`
+      # (SWY-464), which admits POST /v1/tickets and no other route; triage's
+      # TICKET route needs exactly that and nothing wider (SERV-227). It is not
+      # bound to a project: that is SWY-465.
       # EACH PAIR IS ATOMIC BY CONSTRUCTION: the URL is present if and only if
       # the token is. `${TOKEN:+literal}` yields the literal when the token is
       # set and non-empty, and an empty string otherwise.
