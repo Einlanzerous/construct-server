@@ -106,11 +106,15 @@ case "$1" in
     shift_count=$((i + 1))
     restic_args=("${args[@]:$shift_count}")
 
-    [ "${MOCK_COPY_HANG:-0}" = "1" ] && [ "${restic_args[0]:-}" = "copy" ] && sleep 30
+    # Which repository this call is aimed at — the real script always sets
+    # RESTIC_REPOSITORY before invoking restic.
+    side=dest
+    [[ "${RESTIC_REPOSITORY:-}" == *restic-hub* ]] && side=hub
 
-    # The tag this invocation carries, if any (`--tag VALUE`) — used both to
-    # scope a copy failure to one cluster (MOCK_COPY_FAIL_TAG) and to give the
-    # hub and the destination consistent, per-cluster snapshot ids below.
+    # The tag this invocation carries, if any (`--tag VALUE`) — used to scope
+    # a copy failure to one cluster (MOCK_COPY_FAIL_TAG), to tell a tagged
+    # readback from the untagged pre-copy probe, and to give the hub and the
+    # destination consistent, per-cluster snapshot ids below.
     tag=""
     for ((idx = 0; idx < ${#restic_args[@]}; idx++)); do
       if [ "${restic_args[$idx]}" = "--tag" ]; then
@@ -118,6 +122,32 @@ case "$1" in
         break
       fi
     done
+
+    # Call log (SERV-224): one line per restic invocation, in order, with
+    # what state.json said about the destination's last attempt AT THAT
+    # MOMENT — which is how a test proves the attempt was recorded before
+    # the first network call rather than after the last.
+    if [ -n "${MOCK_LOG:-}" ]; then
+      seen="-"
+      if [ -n "${MOCK_STATE_FILE:-}" ] && [ -f "$MOCK_STATE_FILE" ]; then
+        seen="$(jq -r '.destinations.desk.last_attempt_at // "null"' "$MOCK_STATE_FILE" 2>/dev/null || echo unreadable)"
+      fi
+      echo "run ${restic_args[0]:-} $side tag=${tag:--} attempt_seen=$seen" >>"$MOCK_LOG"
+    fi
+
+    # Hangs `exec` the sleep, so the process `timeout` signals IS the sleep.
+    # A plain `sleep 30` would leave an orphan holding the caller's stdout
+    # open, and a `$(...)` around the call would wait out all 30 seconds —
+    # the mock hanging the test in a way the real docker client never does.
+    if [ "${restic_args[0]:-}" = "copy" ] && [ "${MOCK_COPY_HANG:-0}" = "1" ]; then exec sleep 30; fi
+    if [ "${restic_args[0]:-}" = "backup" ] && [ "${MOCK_HUB_BACKUP_HANG:-0}" = "1" ]; then exec sleep 30; fi
+    if [ "${restic_args[0]:-}" = "snapshots" ] && [ "$side" = dest ]; then
+      # Untagged = the pre-copy probe; tagged = a post-copy readback.
+      if [ -z "$tag" ] && [ "${MOCK_PROBE_HANG:-0}" = "1" ]; then exec sleep 30; fi
+      if [ -z "$tag" ] && [ "${MOCK_PROBE_FAIL:-0}" = "1" ]; then exit 1; fi
+      if [ -n "$tag" ] && [ "${MOCK_READBACK_HANG:-0}" = "1" ]; then exec sleep 30; fi
+      if [ -n "$tag" ] && [ "${MOCK_READBACK_FAIL:-0}" = "1" ]; then exit 1; fi
+    fi
 
     case "${restic_args[0]:-}" in
       init)

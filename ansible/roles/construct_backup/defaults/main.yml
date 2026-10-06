@@ -19,13 +19,17 @@ construct_backup_script: "{{ deploy_root }}/scripts/backup-nightly.sh"
 #                                   2026-09-26 at ~818 MiB combined and no
 #                                   destination configured; 600s leaves
 #                                   >20x headroom for data growth)
-# + destination margin      600s  (placeholder — no destination is wired
-#                                   yet as of this role; revisit once
-#                                   SERV-215 has real fan-out timing)
+# + destinations             600s  (1 destination × BACKUP_DEST_BUDGET_SEC
+#                                   in backup.conf — a deadline the script
+#                                   enforces per destination per night, so
+#                                   this term is exact, not an allowance;
+#                                   SERV-224)
 # + margin                   300s
 # = 2700s (45 minutes)
 #
-# Provisional on the destination-margin term specifically, not on the rest.
+# `make backup-test` (T39) checks this value against backup.conf: a second
+# destination needs 3300, and raising it here changes nothing on the box
+# until the playbook is applied by hand.
 construct_backup_timeout_start_sec: 2700
 
 # Nightly at 02:30 local, clear of the 00:00 timers already on this box
