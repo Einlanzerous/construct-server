@@ -901,5 +901,27 @@ else
 fi
 scenario_teardown
 
+# ─── T40: exit 137 is a timeout only if the bound actually elapsed ─────────
+# 137 is what `timeout -k` reports after a follow-up SIGKILL — and also what
+# `docker run` reports for a container the OOM killer took. A copy that dies
+# with 137 in well under its bound is an ordinary failure: retried, and not
+# logged as a timeout (PR #242 review).
+head_ "T40: a copy that exits 137 immediately is a failure to retry, not a timeout"
+scenario_setup
+mock_log_on
+TEST_DEST_BUDGET=25 write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_COPY_EXIT=137
+write_dest_creds
+rc=0; run_backup || rc=$?
+assert_status "run succeeds (below threshold)" 0 "$rc"
+assert_eq "retried: two copy calls" "$(mock_count 'run copy dest')" "2"
+grep -q "copy attempt 1 failed for cluster 'svc' (restic exit 137)" "$SCRATCH/log" && ok "logged as a failed attempt with its exit status" || bad "logged as a failed attempt with its exit status"
+grep -q "copy timed out" "$SCRATCH/log" && bad "NOT logged as a timeout" || ok "NOT logged as a timeout"
+assert_eq "recorded as exactly one miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+unset MOCK_DB_LIST MOCK_COPY_EXIT
+mock_log_off
+scenario_teardown
+
 head_ "Summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

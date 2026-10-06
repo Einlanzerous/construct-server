@@ -171,6 +171,7 @@ case "$1" in
         exit 0
         ;;
       copy)
+        [ -n "${MOCK_COPY_EXIT:-}" ] && exit "$MOCK_COPY_EXIT"
         [ "${MOCK_COPY_FAIL:-0}" = "1" ] && exit 1
         [ -n "${MOCK_COPY_FAIL_TAG:-}" ] && [ "$tag" = "$MOCK_COPY_FAIL_TAG" ] && exit 1
         exit 0

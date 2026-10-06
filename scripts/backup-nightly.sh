@@ -487,18 +487,28 @@ ANY_THRESHOLD_TRIPPED=0
 
 # The destination whose result for tonight is not yet in state.json, and what
 # its counter read before tonight — what on_signal needs to record the miss if
-# the run is killed mid-flight. Both writers set the counter to
+# the run is killed mid-flight. Both MISS writers set the counter to
 # DEST_MISSES_BEFORE + 1 rather than incrementing it, so a signal landing
-# between the normal write and the flag being cleared cannot count twice.
+# between the normal miss write and the flag being cleared cannot count
+# twice. The success path closes the same window the other way round: it
+# clears the flag before it writes (see fanout_destination).
 DEST_IN_FLIGHT=""
 DEST_MISSES_BEFORE=0
 DEST_DEADLINE=0
 
 dest_remaining() { echo $(( DEST_DEADLINE - $(date +%s) )); }
 
-# timeout(1) reports 124 when the bound expired, 137 when -k had to follow up
-# with SIGKILL. Either way the call used all the time it was given.
-is_timeout_rc() { [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; }
+# is_timeout_rc <rc> <started-epoch> <bound-sec> — did the call use up the time
+# it was given? timeout(1) reports 124 when the bound expired. 137 is
+# ambiguous: it is what timeout reports when -k had to follow up with SIGKILL,
+# and ALSO what `docker run` reports for a container killed for any other
+# reason — the OOM killer, say. So 137 counts as a timeout only if the bound
+# had actually elapsed; otherwise it is an ordinary failure and is retried and
+# reported as one (PR #242 review).
+is_timeout_rc() {
+  [ "$1" -eq 124 ] && return 0
+  [ "$1" -eq 137 ] && [ $(( $(date +%s) - $2 )) -ge "$3" ]
+}
 
 # copy_one_cluster <url> <dest_pw> <dest_user> <dest_pass> <label> <name> —
 # copy a single cluster's tag to a destination, verified against the HUB's OWN
@@ -513,7 +523,7 @@ is_timeout_rc() { [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; }
 # only spends the next cluster's share of the budget.
 copy_one_cluster() {
   local url="$1" dest_pw="$2" dest_user="$3" dest_pass="$4" label="$5" name="$6"
-  local ok=0 attempt rc remaining
+  local ok=0 attempt rc remaining started
   for attempt in 1 2; do
     remaining="$(dest_remaining)"
     if [ "$remaining" -le 0 ]; then
@@ -524,7 +534,7 @@ copy_one_cluster() {
       fi
       return 1
     fi
-    rc=0
+    rc=0; started="$(date +%s)"
     RESTIC_CALL_TIMEOUT_SEC="$remaining" \
       RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
       RESTIC_FROM_REPOSITORY="$HUB_REPO" RESTIC_FROM_PASSWORD="${RESTIC_PASSWORD_HUB:-}" \
@@ -534,7 +544,7 @@ copy_one_cluster() {
       ok=1
       break
     fi
-    if is_timeout_rc "$rc"; then
+    if is_timeout_rc "$rc" "$started" "$remaining"; then
       err "$name: copy timed out after ${remaining}s for cluster '$label' — not retried"
       return 1
     fi
@@ -553,13 +563,13 @@ copy_one_cluster() {
   fi
   local hub_id listing match_count
   hub_id="${HUB_SNAPSHOT_ID[$label]:-}"
-  rc=0
+  rc=0; started="$(date +%s)"
   listing="$(RESTIC_CALL_TIMEOUT_SEC="$remaining" \
     RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
     RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
     run_restic snapshots --tag "$label" --json)" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    if is_timeout_rc "$rc"; then
+    if is_timeout_rc "$rc" "$started" "$remaining"; then
       err "$name: could not read the destination to confirm '$label' (timed out after ${remaining}s)"
     else
       err "$name: could not read the destination to confirm '$label' (restic exit $rc)"
@@ -611,15 +621,16 @@ fanout_destination() {
   # purpose — during the 2026-10 outage an authenticated HEAD of the repo's
   # config answered 200 in 27ms while this exact request hung, so a config
   # fetch would have passed a destination that could not take a copy.
-  local all_ok=1 label rc=0 probe_t
+  local all_ok=1 label rc=0 probe_t started
   probe_t="$BACKUP_DEST_PROBE_TIMEOUT_SEC"
+  started="$(date +%s)"
   RESTIC_CALL_TIMEOUT_SEC="$probe_t" \
     RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
     RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
     run_restic snapshots --json >/dev/null || rc=$?
   if [ "$rc" -ne 0 ]; then
     all_ok=0
-    if is_timeout_rc "$rc"; then
+    if is_timeout_rc "$rc" "$started" "$probe_t"; then
       err "$name: probe failed — listing the destination's snapshots timed out after ${probe_t}s; no copy attempted"
     else
       err "$name: probe failed — listing the destination's snapshots exited $rc; no copy attempted"
@@ -631,8 +642,14 @@ fanout_destination() {
   fi
 
   if [ "$all_ok" -eq 1 ]; then
-    state_update ".destinations[\"$name\"].last_success_at = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | .destinations[\"$name\"].consecutive_misses = 0"
+    # Cleared BEFORE the write, not after (PR #242 review): a signal landing
+    # during it is deferred until jq and mv finish, and with the flag still
+    # set on_signal would then overwrite the 0 just written with a miss — a
+    # night with last_success_at set to tonight AND a miss counted. Cleared
+    # first, a kill in that window records neither, and last_attempt_at
+    # newer than last_success_at is what is left to read.
     DEST_IN_FLIGHT=""
+    state_update ".destinations[\"$name\"].last_success_at = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | .destinations[\"$name\"].consecutive_misses = 0"
     return 0
   fi
 

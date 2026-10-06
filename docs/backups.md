@@ -221,6 +221,12 @@ could not trip for the failure it most needs to catch. Four things changed:
   `last_attempt_at` is written on entry, so even a SIGKILL or a power cut —
   which no trap sees — leaves an attempt newer than the last success.
   `make backup-status` prints both; that pair is the signature.
+- **A timeout is told apart from a kill.** `timeout(1)` reports 124 when the
+  bound expired, but 137 is ambiguous — it is what `timeout -k` reports after
+  a follow-up SIGKILL and also what `docker run` reports for a container the
+  OOM killer took. 137 counts as "used all its time" only if the bound had
+  actually elapsed; otherwise it is an ordinary failure, retried and logged
+  as one (T40).
 - **A fast-fail probe**: one authenticated snapshot *listing*, bounded by
   `BACKUP_DEST_PROBE_TIMEOUT_SEC`, before any copy. A destination that cannot
   answer it gets no copy attempt. It is a listing on purpose — during the
@@ -229,9 +235,14 @@ could not trip for the failure it most needs to catch. Four things changed:
   passed. The same reason an unauthenticated 401 proves nothing here.
 - **A run killed from outside counts** (the plan's ruling 3). A `TERM`/`INT`
   trap records one miss for the destination in flight and exits 143. Both the
-  trap and the normal path *set* the counter to "what it was before tonight,
-  plus one" rather than incrementing it, so a signal landing between the
-  normal write and the flag being cleared cannot count twice. `run_restic`
+  trap and the normal miss path *set* the counter to "what it was before
+  tonight, plus one" rather than incrementing it, so a signal landing between
+  the normal miss write and the flag being cleared cannot count twice. The
+  success path closes the same window the other way: it clears the in-flight
+  flag *before* writing, because a signal arriving during that write is
+  deferred until it finishes and would otherwise count a miss on top of the
+  success just recorded (PR #242 review). A kill in that few-millisecond
+  window records neither, leaving an attempt newer than the last success. `run_restic`
   waits on its child in the background for this: bash defers a trap until a
   *foreground* child exits, which for a hung copy is the deadline, not now.
   systemd signals the whole cgroup, so the foreground shape would have worked
