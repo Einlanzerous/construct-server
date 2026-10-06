@@ -70,6 +70,8 @@ BACKUP_DESTINATIONS=(${1:-})
 BACKUP_CONSECUTIVE_MISS_THRESHOLD=3
 BACKUP_PG_DUMP_TIMEOUT_SEC=30
 BACKUP_RESTIC_TIMEOUT_SEC=2
+BACKUP_DEST_BUDGET_SEC=${TEST_DEST_BUDGET-4}
+BACKUP_DEST_PROBE_TIMEOUT_SEC=${TEST_DEST_PROBE-2}
 BACKUP_PREFLIGHT_MAX_SEC=5
 CONF
 }
@@ -90,6 +92,8 @@ BACKUP_DESTINATIONS=(${1:-})
 BACKUP_CONSECUTIVE_MISS_THRESHOLD=3
 BACKUP_PG_DUMP_TIMEOUT_SEC=30
 BACKUP_RESTIC_TIMEOUT_SEC=2
+BACKUP_DEST_BUDGET_SEC=${TEST_DEST_BUDGET-4}
+BACKUP_DEST_PROBE_TIMEOUT_SEC=${TEST_DEST_PROBE-2}
 BACKUP_PREFLIGHT_MAX_SEC=5
 CONF
 }
@@ -118,6 +122,63 @@ REST_USER_DESK=u
 REST_PASSWORD_DESK=p
 ENV
 }
+
+# mock_log_on / mock_log_off — have the mock docker append one line per restic
+# invocation to $SCRATCH/mock.log, with what state.json said about the
+# destination's last attempt at that moment (SERV-224). Call after
+# scenario_setup. mock_count <fixed-string> counts matching lines.
+mock_log_on() {
+  export MOCK_LOG="$SCRATCH/mock.log"
+  export MOCK_STATE_FILE="$STATE_DIR/state.json"
+  : >"$MOCK_LOG"
+}
+mock_log_off() { unset MOCK_LOG MOCK_STATE_FILE; }
+mock_count() { grep -c -F -- "$1" "$SCRATCH/mock.log" || true; }
+
+# start_backup_detached — the real script in the background, in its OWN
+# session and process group, so a test can signal the whole group the way
+# systemd signals a unit's cgroup. Sets RUN_PID (== the group id: a
+# background job in a script is not a group leader, so setsid execs in place).
+start_backup_detached() {
+  PATH="$MOCK_BIN:$PATH" \
+    MOCK_DOCKER_ROOT="${MOCK_DOCKER_ROOT:-/data}" \
+    MOCK_DB_LIST="${MOCK_DB_LIST-}" \
+    BACKUP_CONF="$CONF" BACKUP_ENV_FILE="$ENVFILE" \
+    BACKUP_STATE_DIR="$STATE_DIR" BACKUP_DATA_DIR="$DATA_DIR" \
+    setsid "$BACKUP_SCRIPT" run >"$SCRATCH/log" 2>&1 &
+  RUN_PID=$!
+}
+
+# wait_for_mock_line <fixed-string> — up to 10s for the mock to have logged it.
+wait_for_mock_line() {
+  for _ in $(seq 1 100); do
+    grep -q -F -- "$1" "$SCRATCH/mock.log" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# budget_check <backup.conf> <role defaults.yml> — the unit's TimeoutStartSec
+# must cover the worst case the config can produce (docs/backups.md,
+# "Wall-clock bounds"):
+#   preflight max + hub duration + (destinations × per-destination budget) + margin
+# The hub and margin terms are that table's own figures, not config keys.
+BUDGET_HUB_SEC=600
+BUDGET_MARGIN_SEC=300
+budget_check() {
+  local conf="$1" defaults="$2" need have
+  need="$(
+    # shellcheck disable=SC1090
+    . "$conf"
+    n=0
+    for d in "${BACKUP_DESTINATIONS[@]}"; do [ -n "$d" ] && n=$((n + 1)); done
+    echo $(( BACKUP_PREFLIGHT_MAX_SEC + BUDGET_HUB_SEC + n * BACKUP_DEST_BUDGET_SEC + BUDGET_MARGIN_SEC ))
+  )"
+  have="$(sed -n 's/^construct_backup_timeout_start_sec:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$defaults")"
+  BUDGET_NEED="$need"; BUDGET_HAVE="${have:-0}"
+  [ "$BUDGET_HAVE" -ge "$BUDGET_NEED" ]
+}
+
 
 # ─── T1: happy path — floor covered, an extra un-listed db, one excluded ────
 head_ "T1: happy path (floor + a new db + an excluded scratch db)"
@@ -345,9 +406,14 @@ assert_ne "last_success_at recorded" "$(state_get '.destinations.desk.last_succe
 unset MOCK_DB_LIST
 scenario_teardown
 
-# ─── T16: a hung copy is bounded by the per-call restic timeout ────────────
-head_ "T16: a hanging copy is killed by the per-call timeout, not left running"
+# ─── T16: a hung copy is bounded by the destination's budget, counted as ────
+# ─── ONE miss, and not retried (SERV-224) ──────────────────────────────────
+# Until SERV-224 this asserted only the exit status and the elapsed time. It
+# passed for the whole of the 2026-10-02/03 outage, because "a timed-out call
+# returns" was true — what was never asserted is what state.json says after.
+head_ "T16: a hanging copy is cut off by the budget, recorded as one miss, and not retried"
 scenario_setup
+mock_log_on
 write_conf '"desk:rest:http://mockhost:8000/construct/"'
 export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
 export MOCK_COPY_HANG=1
@@ -356,9 +422,15 @@ start="$(date +%s)"
 rc=0; run_backup || rc=$?
 elapsed=$(( $(date +%s) - start ))
 assert_status "run succeeds (below threshold, hang is a miss)" 0 "$rc"
-[ "$elapsed" -lt 15 ] && ok "run bounded by the timeout (${elapsed}s, not the mock's 30s sleep)" \
-  || bad "run took ${elapsed}s — the per-call timeout did not bound the hang"
+[ "$elapsed" -lt 15 ] && ok "run bounded by the budget (${elapsed}s, not the mock's 30s sleep)" \
+  || bad "run took ${elapsed}s — the destination budget did not bound the hang"
+assert_eq "recorded as exactly one miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+assert_ne "last_attempt_at recorded" "$(state_get '.destinations.desk.last_attempt_at')" "null"
+assert_eq "no success recorded" "$(state_get '.destinations.desk.last_success_at')" "null"
+assert_eq "a copy that timed out is not retried (1 copy call)" "$(mock_count 'run copy dest')" "1"
+grep -q "copy timed out after" "$SCRATCH/log" && ok "log says the copy timed out" || bad "log says the copy timed out"
 unset MOCK_DB_LIST MOCK_COPY_HANG
+mock_log_off
 scenario_teardown
 
 # ─── T17: a concurrent run is refused, not raced against staging cleanup ──
@@ -528,6 +600,327 @@ grep -q "a nightly run is in progress" "$SCRATCH/log.b" && ok "refusal names the
 wait "$run_a_pid"; rc_a=$?
 assert_status "the real run still succeeds, undisturbed" 0 "$rc_a"
 unset MOCK_DB_LIST MOCK_DUMP_HANG_DB MOCK_DUMP_HANG_SEC
+scenario_teardown
+
+# ═══ SERV-224: a destination that HANGS ═════════════════════════════════════
+# Everything above models a destination that refuses or lies. On 2026-10-02
+# and 2026-10-03 the real one did neither: it accepted connections and never
+# answered a listing, the run outlived the unit's TimeoutStartSec, and systemd
+# killed it before the miss was written. T26 onward are that shape.
+DEST='"desk:rest:http://mockhost:8000/construct/"'
+
+# ─── T26: a destination whose probe hangs costs the probe bound, not the ───
+# ─── budget, and no copy is ever attempted ─────────────────────────────────
+head_ "T26: a hanging probe is one miss, with no copy attempted"
+scenario_setup
+mock_log_on
+write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_PROBE_HANG=1
+write_dest_creds
+start="$(date +%s)"
+rc=0; run_backup || rc=$?
+elapsed=$(( $(date +%s) - start ))
+assert_status "run succeeds (below threshold)" 0 "$rc"
+[ "$elapsed" -lt 12 ] && ok "bounded by the probe timeout (${elapsed}s < 2s + 10s)" \
+  || bad "run took ${elapsed}s — the probe timeout did not bound the hang"
+assert_eq "no copy was attempted" "$(mock_count 'run copy dest')" "0"
+assert_eq "recorded as exactly one miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+assert_ne "last_attempt_at recorded" "$(state_get '.destinations.desk.last_attempt_at')" "null"
+assert_eq "last_success_at untouched" "$(state_get '.destinations.desk.last_success_at')" "null"
+grep -q "probe failed .* timed out after 2s; no copy attempted" "$SCRATCH/log" && ok "log names the probe and the timeout" || bad "log names the probe and the timeout"
+unset MOCK_DB_LIST MOCK_PROBE_HANG
+mock_log_off
+scenario_teardown
+
+# ─── T27: a probe that fails fast is the same miss, said differently ───────
+head_ "T27: a refused probe is one miss, with no copy attempted"
+scenario_setup
+mock_log_on
+write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_PROBE_FAIL=1
+write_dest_creds
+rc=0; run_backup || rc=$?
+assert_status "run succeeds (below threshold)" 0 "$rc"
+assert_eq "no copy was attempted" "$(mock_count 'run copy dest')" "0"
+assert_eq "recorded as exactly one miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+grep -q "probe failed .* exited 1; no copy attempted" "$SCRATCH/log" && ok "log names the probe and the exit status" || bad "log names the probe and the exit status"
+unset MOCK_DB_LIST MOCK_PROBE_FAIL
+mock_log_off
+scenario_teardown
+
+# ─── T28: two clusters, probe passes, every copy hangs — the DESTINATION ───
+# ─── has one deadline, not one per call ────────────────────────────────────
+# The pre-SERV-224 shape gave each of up to six calls its own timeout. Here
+# the first cluster's copy uses the whole budget, and the second is skipped.
+head_ "T28: two hanging clusters share one budget — the second is skipped, one miss total"
+scenario_setup
+mock_log_on
+write_conf_two_clusters "$DEST"
+export MOCK_DB_LIST=$'a1\na2\nb1\nb2'
+export MOCK_COPY_HANG=1
+write_dest_creds
+start="$(date +%s)"
+rc=0; run_backup || rc=$?
+elapsed=$(( $(date +%s) - start ))
+assert_status "run succeeds (below threshold)" 0 "$rc"
+[ "$elapsed" -lt 14 ] && ok "bounded by the destination budget (${elapsed}s < 4s + 10s)" \
+  || bad "run took ${elapsed}s — two clusters were not held to one budget"
+grep -q "budget is spent — skipping cluster 'beta'" "$SCRATCH/log" && ok "log names the skipped cluster" || bad "log names the skipped cluster"
+assert_eq "only the first cluster's copy ran" "$(mock_count 'run copy dest')" "1"
+assert_eq "exactly one miss for the night, not one per cluster" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+unset MOCK_DB_LIST MOCK_COPY_HANG
+mock_log_off
+scenario_teardown
+
+# ─── T29: the attempt is in state.json BEFORE the first network call ───────
+# The mock logs what state.json said at the moment of each restic call. If
+# last_attempt_at were still written after the copies, the probe would see
+# null — and a run killed with SIGKILL would leave no trace of having tried.
+head_ "T29: last_attempt_at is written before the destination is first contacted"
+scenario_setup
+mock_log_on
+write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+write_dest_creds
+rc=0; run_backup || rc=$?
+assert_status "run succeeds" 0 "$rc"
+first_dest_call="$(grep -F ' dest ' "$SCRATCH/mock.log" | head -1)"
+case "$first_dest_call" in
+  "run snapshots dest tag=- attempt_seen="*) ok "the first call against the destination is the untagged probe" ;;
+  *) bad "the first call against the destination is the untagged probe (got: $first_dest_call)" ;;
+esac
+seen="${first_dest_call##*attempt_seen=}"
+case "$seen" in
+  20[0-9][0-9]-*T*Z) ok "the probe already sees last_attempt_at ($seen)" ;;
+  *) bad "the probe already sees last_attempt_at (saw: '$seen')" ;;
+esac
+assert_eq "happy path still records a success" "$(state_get '.destinations.desk.consecutive_misses')" "0"
+assert_ne "last_success_at recorded" "$(state_get '.destinations.desk.last_success_at')" "null"
+unset MOCK_DB_LIST
+mock_log_off
+scenario_teardown
+
+# ─── T30/T31/T32: the readback says what actually happened ─────────────────
+# 2026-10-02: the readback timed out with stderr discarded and the log said
+# "no snapshot at the destination matches" — a data finding for a transport
+# failure. Unreadable and absent are both a miss; they are not the same line.
+head_ "T30: a readback that exits non-zero is 'could not read', not 'no snapshot matches'"
+scenario_setup
+write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_READBACK_FAIL=1
+write_dest_creds
+rc=0; run_backup || rc=$?
+assert_status "run succeeds (below threshold)" 0 "$rc"
+grep -q "could not read the destination to confirm 'svc' (restic exit 1)" "$SCRATCH/log" && ok "log says the destination could not be read, with the exit status" || bad "log says the destination could not be read, with the exit status"
+grep -q "no snapshot at the destination matches" "$SCRATCH/log" && bad "the absent-snapshot message is NOT logged" || ok "the absent-snapshot message is NOT logged"
+assert_eq "recorded as a miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+unset MOCK_DB_LIST MOCK_READBACK_FAIL
+scenario_teardown
+
+head_ "T31: a readback that hangs is 'could not read ... timed out', and still one miss"
+scenario_setup
+write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_READBACK_HANG=1
+write_dest_creds
+start="$(date +%s)"
+rc=0; run_backup || rc=$?
+elapsed=$(( $(date +%s) - start ))
+assert_status "run succeeds (below threshold)" 0 "$rc"
+[ "$elapsed" -lt 14 ] && ok "bounded by the destination budget (${elapsed}s)" || bad "run took ${elapsed}s"
+grep -q "could not read the destination to confirm 'svc' (timed out after" "$SCRATCH/log" && ok "log says the readback timed out" || bad "log says the readback timed out"
+grep -q "no snapshot at the destination matches" "$SCRATCH/log" && bad "the absent-snapshot message is NOT logged" || ok "the absent-snapshot message is NOT logged"
+assert_eq "recorded as a miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+unset MOCK_DB_LIST MOCK_READBACK_HANG
+scenario_teardown
+
+head_ "T32: a readback that succeeds and lacks tonight's snapshot keeps the absent-snapshot message"
+scenario_setup
+write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_SNAPSHOTS_EMPTY=1
+write_dest_creds
+rc=0; run_backup || rc=$?
+assert_status "run succeeds (below threshold)" 0 "$rc"
+grep -q "no snapshot at the destination matches tonight's hub snapshot for 'svc'" "$SCRATCH/log" && ok "absent-snapshot message logged" || bad "absent-snapshot message logged"
+grep -q "could not read the destination" "$SCRATCH/log" && bad "the could-not-read message is NOT logged" || ok "the could-not-read message is NOT logged"
+assert_eq "recorded as a miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+unset MOCK_DB_LIST MOCK_SNAPSHOTS_EMPTY
+scenario_teardown
+
+# ─── T33: a copy that fails FAST is still retried once ─────────────────────
+# The counterpart of T16's "a timed-out copy is not retried".
+head_ "T33: a copy that fails fast is retried once (2 copy calls), then a miss"
+scenario_setup
+mock_log_on
+write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_COPY_FAIL=1
+write_dest_creds
+rc=0; run_backup || rc=$?
+assert_status "run succeeds (below threshold)" 0 "$rc"
+assert_eq "two copy calls: the attempt and its one retry" "$(mock_count 'run copy dest')" "2"
+assert_eq "recorded as exactly one miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+unset MOCK_DB_LIST MOCK_COPY_FAIL
+mock_log_off
+scenario_teardown
+
+# ─── T34/T35: a run killed from outside mid-copy is a miss (ruling 3) ──────
+# T34 signals the whole process group, as systemd signals a unit's cgroup.
+# T35 signals ONLY the script: that is the case a foreground `docker run`
+# would have failed, since bash defers a trap until its foreground child
+# exits — for a hung copy, the whole budget later. The budget here is 25s, so
+# "exited within 5s of the signal" can only be the trap, never the deadline.
+for kill_mode in group pid; do
+  if [ "$kill_mode" = group ]; then
+    head_ "T34: SIGTERM to the process group mid-copy — one miss, exit 143, staging removed"
+  else
+    head_ "T35: SIGTERM to the script alone mid-copy — the trap still runs at once"
+  fi
+  scenario_setup
+  mock_log_on
+  TEST_DEST_BUDGET=25 write_conf "$DEST"
+  export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+  export MOCK_COPY_HANG=1
+  write_dest_creds
+  start_backup_detached
+  if wait_for_mock_line 'run copy dest'; then
+    ok "the run reached the hanging copy"
+  else
+    bad "the run reached the hanging copy"
+  fi
+  assert_eq "nothing counted yet while the copy is in flight" "$(state_get '.destinations.desk.consecutive_misses')" "0"
+  killed_at="$(date +%s)"
+  if [ "$kill_mode" = group ]; then kill -TERM -- "-$RUN_PID"; else kill -TERM "$RUN_PID"; fi
+  rc=0; wait "$RUN_PID" || rc=$?
+  took=$(( $(date +%s) - killed_at ))
+  assert_status "exits 143" 143 "$rc"
+  [ "$took" -lt 5 ] && ok "exited ${took}s after the signal (budget was 25s)" || bad "took ${took}s after the signal — the trap waited for the copy"
+  assert_eq "exactly one miss recorded" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+  assert_eq "no success recorded" "$(state_get '.destinations.desk.last_success_at')" "null"
+  grep -q "desk: run killed mid-flight — recorded as a miss" "$SCRATCH/log" && ok "log says the kill was recorded as a miss" || bad "log says the kill was recorded as a miss"
+  [ ! -e "$DATA_DIR/staging" ] && ok "staging directory removed on the way out" || bad "staging directory removed on the way out"
+  # The next night must count from the recorded miss, not double it.
+  unset MOCK_COPY_HANG
+  export MOCK_COPY_FAIL=1
+  rc=0; run_backup || rc=$?
+  assert_eq "the following night's miss makes 2, not 3" "$(state_get '.destinations.desk.consecutive_misses')" "2"
+  unset MOCK_DB_LIST MOCK_COPY_FAIL
+  mock_log_off
+  pkill -s "$RUN_PID" sleep 2>/dev/null || true
+  scenario_teardown
+done
+
+# ─── T36: a kill OUTSIDE fan-out touches no destination's counter ──────────
+head_ "T36: SIGTERM during the dump phase exits 143 and records no miss"
+scenario_setup
+mock_log_on
+write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_DUMP_HANG_DB=beta
+export MOCK_DUMP_HANG_SEC=3
+write_dest_creds
+MOCK_DUMP_HANG_DB="$MOCK_DUMP_HANG_DB" MOCK_DUMP_HANG_SEC="$MOCK_DUMP_HANG_SEC" start_backup_detached
+sleep 1
+kill -TERM -- "-$RUN_PID"
+rc=0; wait "$RUN_PID" || rc=$?
+[ "$rc" -ne 0 ] && ok "run did not exit 0 (exit $rc)" || bad "run did not exit 0"
+assert_eq "no destination was ever recorded" "$(state_get '.destinations | length')" "0"
+unset MOCK_DB_LIST MOCK_DUMP_HANG_DB MOCK_DUMP_HANG_SEC
+mock_log_off
+scenario_teardown
+
+# ─── T37: the two bounds are config, and a bad one stops the run cold ──────
+head_ "T37: an unset, empty, non-numeric, zero or inverted destination bound is refused before any dump"
+refuse_case() { # <label> <expected-substring>
+  rc=0; run_backup || rc=$?
+  assert_status "$1: refuses" 1 "$rc"
+  grep -q -F -- "$2" "$SCRATCH/log" && ok "$1: names the variable" || bad "$1: names the variable (log: $(head -1 "$SCRATCH/log"))"
+  grep -q "dumped '" "$SCRATCH/log" && bad "$1: nothing was dumped first" || ok "$1: nothing was dumped first"
+}
+scenario_setup
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+write_dest_creds
+TEST_DEST_BUDGET="" write_conf "$DEST";    refuse_case "empty budget" "BACKUP_DEST_BUDGET_SEC is unset, empty or not a positive integer"
+TEST_DEST_BUDGET=abc write_conf "$DEST";   refuse_case "non-numeric budget" "BACKUP_DEST_BUDGET_SEC is unset, empty or not a positive integer"
+TEST_DEST_BUDGET=0 write_conf "$DEST";     refuse_case "zero budget" "BACKUP_DEST_BUDGET_SEC is unset, empty or not a positive integer"
+TEST_DEST_PROBE="" write_conf "$DEST";     refuse_case "empty probe timeout" "BACKUP_DEST_PROBE_TIMEOUT_SEC is unset, empty or not a positive integer"
+write_conf "$DEST"; sed -i '/^BACKUP_DEST_BUDGET_SEC=/d' "$CONF"
+refuse_case "unset budget" "BACKUP_DEST_BUDGET_SEC is unset, empty or not a positive integer"
+write_conf "$DEST"; sed -i '/^BACKUP_DEST_PROBE_TIMEOUT_SEC=/d' "$CONF"
+refuse_case "unset probe timeout" "BACKUP_DEST_PROBE_TIMEOUT_SEC is unset, empty or not a positive integer"
+TEST_DEST_BUDGET=2 TEST_DEST_PROBE=5 write_conf "$DEST"
+refuse_case "probe longer than the budget" "BACKUP_DEST_PROBE_TIMEOUT_SEC (5) exceeds BACKUP_DEST_BUDGET_SEC (2)"
+unset MOCK_DB_LIST
+scenario_teardown
+
+# ─── T38: hub calls keep their OWN bound — the destination budget is not ───
+# ─── a new global timeout ──────────────────────────────────────────────────
+# Budget 25s, per-call bound 2s: a hung hub backup must end at ~2s.
+head_ "T38: a hanging hub backup is bounded by BACKUP_RESTIC_TIMEOUT_SEC, not the destination budget"
+scenario_setup
+TEST_DEST_BUDGET=25 write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_HUB_BACKUP_HANG=1
+write_dest_creds
+start="$(date +%s)"
+rc=0; run_backup || rc=$?
+elapsed=$(( $(date +%s) - start ))
+assert_status "run fails (a hub failure exits immediately)" 1 "$rc"
+[ "$elapsed" -lt 10 ] && ok "bounded by the 2s per-call timeout (${elapsed}s, budget was 25s)" || bad "run took ${elapsed}s — the hub call was not held to its own bound"
+assert_eq "destination never attempted" "$(state_get '.destinations | length')" "0"
+unset MOCK_DB_LIST MOCK_HUB_BACKUP_HANG
+scenario_teardown
+
+# ─── T39: the unit's TimeoutStartSec covers what the REAL config can cost ──
+# The arithmetic the 2026-10 outage broke, checked against the tracked files
+# rather than restated in a doc table: add a destination, or raise the budget,
+# without raising construct_backup_timeout_start_sec, and this goes red.
+head_ "T39: TimeoutStartSec >= preflight + hub + destinations x budget + margin, from the tracked files"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REAL_CONF="$REPO_ROOT/config/backup/backup.conf"
+REAL_DEFAULTS="$REPO_ROOT/ansible/roles/construct_backup/defaults/main.yml"
+if budget_check "$REAL_CONF" "$REAL_DEFAULTS"; then
+  ok "tracked config fits the unit: needs ${BUDGET_NEED}s, TimeoutStartSec is ${BUDGET_HAVE}s"
+else
+  bad "tracked config does NOT fit the unit: needs ${BUDGET_NEED}s, TimeoutStartSec is ${BUDGET_HAVE}s"
+fi
+# ...and prove the check can fail: the same config with a second destination.
+scenario_setup
+cp "$REAL_CONF" "$SCRATCH/two-dest.conf"
+cat >>"$SCRATCH/two-dest.conf" <<'CONF'
+BACKUP_DESTINATIONS+=("second:rest:http://example.invalid:8000/construct/")
+CONF
+if budget_check "$SCRATCH/two-dest.conf" "$REAL_DEFAULTS"; then
+  bad "a second destination at the current unit value is refused (needs ${BUDGET_NEED}s, has ${BUDGET_HAVE}s)"
+else
+  ok "a second destination at the current unit value is refused (needs ${BUDGET_NEED}s, has ${BUDGET_HAVE}s)"
+fi
+scenario_teardown
+
+# ─── T40: exit 137 is a timeout only if the bound actually elapsed ─────────
+# 137 is what `timeout -k` reports after a follow-up SIGKILL — and also what
+# `docker run` reports for a container the OOM killer took. A copy that dies
+# with 137 in well under its bound is an ordinary failure: retried, and not
+# logged as a timeout (PR #242 review).
+head_ "T40: a copy that exits 137 immediately is a failure to retry, not a timeout"
+scenario_setup
+mock_log_on
+TEST_DEST_BUDGET=25 write_conf "$DEST"
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_COPY_EXIT=137
+write_dest_creds
+rc=0; run_backup || rc=$?
+assert_status "run succeeds (below threshold)" 0 "$rc"
+assert_eq "retried: two copy calls" "$(mock_count 'run copy dest')" "2"
+grep -q "copy attempt 1 failed for cluster 'svc' (restic exit 137)" "$SCRATCH/log" && ok "logged as a failed attempt with its exit status" || bad "logged as a failed attempt with its exit status"
+grep -q "copy timed out" "$SCRATCH/log" && bad "NOT logged as a timeout" || ok "NOT logged as a timeout"
+assert_eq "recorded as exactly one miss" "$(state_get '.destinations.desk.consecutive_misses')" "1"
+unset MOCK_DB_LIST MOCK_COPY_EXIT
+mock_log_off
 scenario_teardown
 
 head_ "Summary: $PASS passed, $FAIL failed"

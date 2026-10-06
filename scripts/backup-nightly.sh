@@ -128,6 +128,19 @@ state_update() {
 # Type=oneshot unit, and any restart mechanism that DOES work re-executes the
 # whole script, which would double-count consecutive_misses.
 
+# The two destination bounds (SERV-224) are static config, so a bad one fails
+# here, before a single database is dumped — and an empty value is not a value:
+# an unset budget must never read as "no deadline".
+preflight_dest_bounds() {
+  local var
+  for var in BACKUP_DEST_BUDGET_SEC BACKUP_DEST_PROBE_TIMEOUT_SEC; do
+    [[ "${!var:-}" =~ ^[1-9][0-9]*$ ]] \
+      || die "$var is unset, empty or not a positive integer ('${!var:-}') — refusing to run without a destination deadline"
+  done
+  [ "$BACKUP_DEST_PROBE_TIMEOUT_SEC" -le "$BACKUP_DEST_BUDGET_SEC" ] \
+    || die "BACKUP_DEST_PROBE_TIMEOUT_SEC ($BACKUP_DEST_PROBE_TIMEOUT_SEC) exceeds BACKUP_DEST_BUDGET_SEC ($BACKUP_DEST_BUDGET_SEC) — the probe is counted inside the budget"
+}
+
 preflight_static() {
   mkdir -p "$BACKUP_DATA_DIR"
   local hub_dev root_dev
@@ -206,6 +219,7 @@ staging_setup() {
 # lock it may be holding) behind for the next run to trip over.
 
 RESTIC_CONTAINER_NAME="backup-nightly-restic"
+RESTIC_CHILD_PID=""
 
 # run_restic <restic args...> — env vars the caller already exported
 # (RESTIC_REPOSITORY, RESTIC_PASSWORD, etc.) are inherited by `docker run`
@@ -237,14 +251,28 @@ run_restic() {
   # ("unable to open cache") on every single invocation — harmless but noisy,
   # and slower than it needs to be since restic re-fetches what a cache would
   # have kept. Pointed at $BACKUP_DATA_DIR, already ours and already mounted.
-  timeout "$BACKUP_RESTIC_TIMEOUT_SEC" \
+  #
+  # The bound (SERV-224): RESTIC_CALL_TIMEOUT_SEC when the caller set one —
+  # fan-out passes whatever is left of a destination's nightly budget — and
+  # BACKUP_RESTIC_TIMEOUT_SEC otherwise, which is every hub call and
+  # verify-destination. `-k 10` because a docker client that ignores SIGTERM
+  # would otherwise make the bound advisory.
+  #
+  # Backgrounded and waited on, not run in the foreground: bash defers a trap
+  # until a foreground child exits, and `wait` is what a trapped signal
+  # interrupts — see on_signal. Background jobs in a non-interactive shell
+  # read stdin from /dev/null, which costs nothing here: restic takes every
+  # credential from its environment.
+  timeout -k 10 "${RESTIC_CALL_TIMEOUT_SEC:-$BACKUP_RESTIC_TIMEOUT_SEC}" \
     docker run --name "$RESTIC_CONTAINER_NAME" --rm --network host \
       --user "$(id -u):$(id -g)" \
       -e HOME="$BACKUP_DATA_DIR" \
       -v "$BACKUP_DATA_DIR:$BACKUP_DATA_DIR" \
       "${env_flags[@]}" \
-      "$RESTIC_IMAGE" "$@" \
-    || rc=$?
+      "$RESTIC_IMAGE" "$@" &
+  RESTIC_CHILD_PID=$!
+  wait "$RESTIC_CHILD_PID" || rc=$?
+  RESTIC_CHILD_PID=""
   docker rm -f "$RESTIC_CONTAINER_NAME" >/dev/null 2>&1 || true
   return $rc
 }
@@ -446,37 +474,113 @@ hub_integrity() {
 # own memory of having run `copy` is a claim. The destination's own snapshot
 # list, read back from the destination, is the observation — the only thing
 # actually recorded as "last success".
+#
+# One wall-clock deadline per destination per night (SERV-224). Every restic
+# call against a destination — the probe, each copy, each readback — runs with
+# whatever is left of BACKUP_DEST_BUDGET_SEC, never the global per-call bound.
+# The shape this replaces gave each of up to six calls its own 1800s, so a
+# destination that HUNG (2026-10-02/03: connections accepted, listings never
+# answered) outlived the unit's TimeoutStartSec, systemd killed the run, and
+# the miss below was never written — two missed nights, consecutive_misses=0.
 
 ANY_THRESHOLD_TRIPPED=0
 
-# copy_one_cluster <url> <dest_pw> <dest_user> <dest_pass> <label> — one
-# retry-then-give-up attempt at copying a single cluster's tag to a
-# destination, verified against the HUB's OWN snapshot id for that cluster
-# tonight (captured in HUB_SNAPSHOT_ID by hub_backup_cluster) — not against
-# "any snapshot the destination happens to have with the right tag", which a
-# stale copy from a previous night would also satisfy (PR review finding #3).
-# Echoes nothing; returns 0 only once tonight's snapshot is confirmed present.
+# The destination whose result for tonight is not yet in state.json, and what
+# its counter read before tonight — what on_signal needs to record the miss if
+# the run is killed mid-flight. Both MISS writers set the counter to
+# DEST_MISSES_BEFORE + 1 rather than incrementing it, so a signal landing
+# between the normal miss write and the flag being cleared cannot count
+# twice. The success path closes the same window the other way round: it
+# clears the flag before it writes (see fanout_destination).
+DEST_IN_FLIGHT=""
+DEST_MISSES_BEFORE=0
+DEST_DEADLINE=0
+
+dest_remaining() { echo $(( DEST_DEADLINE - $(date +%s) )); }
+
+# is_timeout_rc <rc> <started-epoch> <bound-sec> — did the call use up the time
+# it was given? timeout(1) reports 124 when the bound expired. 137 is
+# ambiguous: it is what timeout reports when -k had to follow up with SIGKILL,
+# and ALSO what `docker run` reports for a container killed for any other
+# reason — the OOM killer, say. So 137 counts as a timeout only if the bound
+# had actually elapsed; otherwise it is an ordinary failure and is retried and
+# reported as one (PR #242 review).
+is_timeout_rc() {
+  [ "$1" -eq 124 ] && return 0
+  [ "$1" -eq 137 ] && [ $(( $(date +%s) - $2 )) -ge "$3" ]
+}
+
+# copy_one_cluster <url> <dest_pw> <dest_user> <dest_pass> <label> <name> —
+# copy a single cluster's tag to a destination, verified against the HUB's OWN
+# snapshot id for that cluster tonight (captured in HUB_SNAPSHOT_ID by
+# hub_backup_cluster) — not against "any snapshot the destination happens to
+# have with the right tag", which a stale copy from a previous night would
+# also satisfy (PR review finding #3). Echoes nothing; returns 0 only once
+# tonight's snapshot is confirmed present.
+#
+# A copy that fails fast is retried once; one that used up its time is not —
+# the destination just demonstrated it is not answering, and a second attempt
+# only spends the next cluster's share of the budget.
 copy_one_cluster() {
   local url="$1" dest_pw="$2" dest_user="$3" dest_pass="$4" label="$5" name="$6"
-  local ok=0 attempt
+  local ok=0 attempt rc remaining started
   for attempt in 1 2; do
-    if RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
-       RESTIC_FROM_REPOSITORY="$HUB_REPO" RESTIC_FROM_PASSWORD="${RESTIC_PASSWORD_HUB:-}" \
-       RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
-       run_restic copy --tag "$label"; then
+    remaining="$(dest_remaining)"
+    if [ "$remaining" -le 0 ]; then
+      if [ "$attempt" -eq 1 ]; then
+        err "$name: tonight's ${BACKUP_DEST_BUDGET_SEC}s budget is spent — skipping cluster '$label'"
+      else
+        err "$name: tonight's ${BACKUP_DEST_BUDGET_SEC}s budget is spent — no retry for cluster '$label'"
+      fi
+      return 1
+    fi
+    rc=0; started="$(date +%s)"
+    RESTIC_CALL_TIMEOUT_SEC="$remaining" \
+      RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
+      RESTIC_FROM_REPOSITORY="$HUB_REPO" RESTIC_FROM_PASSWORD="${RESTIC_PASSWORD_HUB:-}" \
+      RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+      run_restic copy --tag "$label" || rc=$?
+    if [ "$rc" -eq 0 ]; then
       ok=1
       break
     fi
-    err "$name: copy attempt $attempt failed for cluster '$label'"
+    if is_timeout_rc "$rc" "$started" "$remaining"; then
+      err "$name: copy timed out after ${remaining}s for cluster '$label' — not retried"
+      return 1
+    fi
+    err "$name: copy attempt $attempt failed for cluster '$label' (restic exit $rc)"
   done
   [ "$ok" -eq 1 ] || return 1
 
-  local hub_id match_count
+  # The readback. "Could not read the destination" and "read it, and tonight's
+  # snapshot is not there" are different findings and are logged as such: on
+  # 2026-10-02 this call timed out with its stderr discarded, and the log said
+  # no snapshot matched — a data problem's message for a transport failure.
+  remaining="$(dest_remaining)"
+  if [ "$remaining" -le 0 ]; then
+    err "$name: could not read the destination to confirm '$label' (tonight's ${BACKUP_DEST_BUDGET_SEC}s budget is spent)"
+    return 1
+  fi
+  local hub_id listing match_count
   hub_id="${HUB_SNAPSHOT_ID[$label]:-}"
-  match_count="$(RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
+  rc=0; started="$(date +%s)"
+  listing="$(RESTIC_CALL_TIMEOUT_SEC="$remaining" \
+    RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
     RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
-    run_restic snapshots --tag "$label" --json 2>/dev/null \
-    | jq -r --arg hid "$hub_id" '[.[] | select(.original == $hid or .id == $hid)] | length')"
+    run_restic snapshots --tag "$label" --json)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if is_timeout_rc "$rc" "$started" "$remaining"; then
+      err "$name: could not read the destination to confirm '$label' (timed out after ${remaining}s)"
+    else
+      err "$name: could not read the destination to confirm '$label' (restic exit $rc)"
+    fi
+    return 1
+  fi
+  if ! match_count="$(printf '%s' "$listing" \
+      | jq -r --arg hid "$hub_id" '[.[] | select(.original == $hid or .id == $hid)] | length' 2>/dev/null)"; then
+    err "$name: could not read the destination to confirm '$label' (its snapshot listing is not valid JSON)"
+    return 1
+  fi
   if [ -n "$hub_id" ] && [ "${match_count:-0}" -gt 0 ] 2>/dev/null; then
     return 0
   fi
@@ -504,28 +608,78 @@ fanout_destination() {
   dest_user="$(eval "printf '%s' \"\${REST_USER_${upper}:-}\"")"
   dest_pass="$(eval "printf '%s' \"\${REST_PASSWORD_${upper}:-}\"")"
 
-  local all_ok=1 label
-  for label in "$@"; do
-    copy_one_cluster "$url" "$dest_pw" "$dest_user" "$dest_pass" "$label" "$name" || all_ok=0
-  done
-
-  local now
-  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # The attempt is recorded BEFORE the first network call (SERV-224). Whatever
+  # happens next — including a SIGKILL or power loss that no trap sees —
+  # state.json shows an attempt newer than the last success.
   state_update ".destinations[\"$name\"] //= {\"last_attempt_at\": null, \"last_success_at\": null, \"consecutive_misses\": 0}"
-  state_update ".destinations[\"$name\"].last_attempt_at = \"$now\""
+  DEST_MISSES_BEFORE="$(state_get ".destinations[\"$name\"].consecutive_misses")"
+  state_update ".destinations[\"$name\"].last_attempt_at = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+  DEST_DEADLINE=$(( $(date +%s) + BACKUP_DEST_BUDGET_SEC ))
+  DEST_IN_FLIGHT="$name"
+
+  # Fast-fail probe: one authenticated LISTING, before any copy. A listing on
+  # purpose — during the 2026-10 outage an authenticated HEAD of the repo's
+  # config answered 200 in 27ms while this exact request hung, so a config
+  # fetch would have passed a destination that could not take a copy.
+  local all_ok=1 label rc=0 probe_t started
+  probe_t="$BACKUP_DEST_PROBE_TIMEOUT_SEC"
+  started="$(date +%s)"
+  RESTIC_CALL_TIMEOUT_SEC="$probe_t" \
+    RESTIC_REPOSITORY="$url" RESTIC_PASSWORD="$dest_pw" \
+    RESTIC_REST_USERNAME="$dest_user" RESTIC_REST_PASSWORD="$dest_pass" \
+    run_restic snapshots --json >/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    all_ok=0
+    if is_timeout_rc "$rc" "$started" "$probe_t"; then
+      err "$name: probe failed — listing the destination's snapshots timed out after ${probe_t}s; no copy attempted"
+    else
+      err "$name: probe failed — listing the destination's snapshots exited $rc; no copy attempted"
+    fi
+  else
+    for label in "$@"; do
+      copy_one_cluster "$url" "$dest_pw" "$dest_user" "$dest_pass" "$label" "$name" || all_ok=0
+    done
+  fi
 
   if [ "$all_ok" -eq 1 ]; then
-    state_update ".destinations[\"$name\"].last_success_at = \"$now\" | .destinations[\"$name\"].consecutive_misses = 0"
+    # Cleared BEFORE the write, not after (PR #242 review): a signal landing
+    # during it is deferred until jq and mv finish, and with the flag still
+    # set on_signal would then overwrite the 0 just written with a miss — a
+    # night with last_success_at set to tonight AND a miss counted. Cleared
+    # first, a kill in that window records neither, and last_attempt_at
+    # newer than last_success_at is what is left to read.
+    DEST_IN_FLIGHT=""
+    state_update ".destinations[\"$name\"].last_success_at = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | .destinations[\"$name\"].consecutive_misses = 0"
     return 0
   fi
 
-  local misses
-  state_update ".destinations[\"$name\"].consecutive_misses += 1"
-  misses="$(state_get ".destinations[\"$name\"].consecutive_misses")"
+  local misses=$(( DEST_MISSES_BEFORE + 1 ))
+  state_update ".destinations[\"$name\"].consecutive_misses = $misses"
+  DEST_IN_FLIGHT=""
   err "$name: attempted-and-failed overall tonight (consecutive_misses=$misses)"
   if [ "$misses" -ge "$BACKUP_CONSECUTIVE_MISS_THRESHOLD" ]; then
     ANY_THRESHOLD_TRIPPED=1
   fi
+}
+
+# on_signal — a run killed from outside (systemd's TimeoutStartSec, a
+# shutdown, a hand `kill`) while a destination is in flight counts as a miss
+# for that destination (SERV-224, ruling 3). run_restic waits on its child in
+# the background precisely so this runs at once: bash defers a trap until a
+# FOREGROUND child exits, which for a hung copy is the deadline, not now.
+on_signal() {
+  trap - TERM INT
+  [ -n "$RESTIC_CHILD_PID" ] && kill "$RESTIC_CHILD_PID" 2>/dev/null || true
+  timeout 10 docker rm -f "$RESTIC_CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [ -n "$DEST_IN_FLIGHT" ]; then
+    local misses=$(( DEST_MISSES_BEFORE + 1 ))
+    if ( state_update ".destinations[\"$DEST_IN_FLIGHT\"].consecutive_misses = $misses" ); then
+      err "$DEST_IN_FLIGHT: run killed mid-flight — recorded as a miss (consecutive_misses=$misses)"
+    else
+      err "$DEST_IN_FLIGHT: run killed mid-flight, and the miss could NOT be recorded"
+    fi
+  fi
+  exit 143
 }
 
 # ─── destination append-only proof (SERV-215) ───────────────────────────────
@@ -681,6 +835,7 @@ cmd_run() {
   # invariant), so this fails loudly, up front, naming the variable.
   [ -n "${RESTIC_PASSWORD_HUB:-}" ] || die "RESTIC_PASSWORD_HUB is empty/unset — refusing to run"
 
+  preflight_dest_bounds
   preflight_static
 
   # The lock is taken BEFORE anything that touches state.json or staging —
@@ -696,6 +851,10 @@ cmd_run() {
   mkdir -p "$BACKUP_STATE_DIR"
   exec 200>"$LOCK_FILE"
   flock -n 200 || die "another run is already in progress ($LOCK_FILE)"
+
+  # Installed once the lock is ours, so a refused second invocation never
+  # runs it. Outside fan-out DEST_IN_FLIGHT is empty and it only exits.
+  trap on_signal TERM INT
 
   # Also before preflight_retry_loop, which was still missed in the first
   # review round: its own exhaustion path calls `state_update` (records

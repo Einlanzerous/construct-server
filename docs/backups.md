@@ -188,15 +188,85 @@ still sitting there with the same tag. `make backup-test`'s T20 sets up
 exactly that (a destination snapshot whose `.original` doesn't match) and
 confirms it is recorded as a miss.
 
-One bounded retry per (destination, cluster) pair per run; still failing for
-that cluster, the run moves to the next cluster and then, having tried them
-all, records the whole night as a miss for that destination if *any* cluster
-failed — nothing about the destination's own credential or the other
+One bounded retry per (destination, cluster) pair per run — for a copy that
+failed *fast*; one that used up its time is not retried (below). Still failing
+for that cluster, the run moves to the next cluster and then, having tried
+them all, records the whole night as a miss for that destination if *any*
+cluster failed — nothing about the destination's own credential or the other
 destinations is touched. After 3 consecutive missed nights to one destination
 the unit exits non-zero (in addition to that destination's own failure).
 Delay is allowed and structural; a destination skipped because it was asleep
 must never read the same as one that succeeded, which is why success is read
 from the destination and not from the local attempt.
+
+### A destination that hangs (SERV-224)
+
+Everything above was built against a destination that refuses or lies. On
+2026-10-02 and 2026-10-03 the desktop did neither: it accepted connections and
+never answered a listing (a path-MTU black hole on its side, SERV-226 — replies
+under about a kilobyte arrived, anything larger was dropped). Each restic call
+gave up after roughly 15 minutes, one destination makes up to six of them, the
+run outlived `TimeoutStartSec`, and systemd killed it **before the miss was
+written**. Two missed nights; `consecutive_misses` said 0. The threshold above
+could not trip for the failure it most needs to catch. Four things changed:
+
+- **One deadline per destination per night**, `BACKUP_DEST_BUDGET_SEC`. Every
+  restic call against a destination — the probe, each copy, each readback —
+  runs with whatever is left of it, never `BACKUP_RESTIC_TIMEOUT_SEC`. When it
+  is spent, the remaining clusters are skipped by name in the log and the
+  night is one miss. A per-call timeout alone cannot do this: at any value the
+  worst case is six times it, so the number that fits the budget is too tight
+  for a real copy and the number that suits a copy does not fit.
+- **The attempt is recorded before the first network call.**
+  `last_attempt_at` is written on entry, so even a SIGKILL or a power cut —
+  which no trap sees — leaves an attempt newer than the last success.
+  `make backup-status` prints both; that pair is the signature.
+- **A timeout is told apart from a kill.** `timeout(1)` reports 124 when the
+  bound expired, but 137 is ambiguous — it is what `timeout -k` reports after
+  a follow-up SIGKILL and also what `docker run` reports for a container the
+  OOM killer took. 137 counts as "used all its time" only if the bound had
+  actually elapsed; otherwise it is an ordinary failure, retried and logged
+  as one (T40).
+- **A fast-fail probe**: one authenticated snapshot *listing*, bounded by
+  `BACKUP_DEST_PROBE_TIMEOUT_SEC`, before any copy. A destination that cannot
+  answer it gets no copy attempt. It is a listing on purpose — during the
+  outage an authenticated `HEAD` of the repository's `config` answered 200 in
+  27 ms while the `snapshots/` listing hung, so a config fetch would have
+  passed. The same reason an unauthenticated 401 proves nothing here.
+- **A run killed from outside counts** (the plan's ruling 3). A `TERM`/`INT`
+  trap records one miss for the destination in flight and exits 143. Both the
+  trap and the normal miss path *set* the counter to "what it was before
+  tonight, plus one" rather than incrementing it, so a signal landing between
+  the normal miss write and the flag being cleared cannot count twice. The
+  success path closes the same window the other way: it clears the in-flight
+  flag *before* writing, because a signal arriving during that write is
+  deferred until it finishes and would otherwise count a miss on top of the
+  success just recorded (PR #242 review). A kill in that few-millisecond
+  window records neither, leaving an attempt newer than the last success. `run_restic`
+  waits on its child in the background for this: bash defers a trap until a
+  *foreground* child exits, which for a hung copy is the deadline, not now.
+  systemd signals the whole cgroup, so the foreground shape would have worked
+  under the unit; it would not have worked for a hand `kill` of a hand run.
+  A kill outside fan-out — during the dumps, the hub snapshot — touches no
+  destination's counter, the same as an exhausted preflight.
+
+**The readback now says which of two things happened.** It used to discard
+restic's stderr and pipe straight into `jq`, so on 10-02 a readback that timed
+out logged `copy exited 0 but no snapshot at the destination matches` — a data
+finding for a transport failure. `could not read the destination to confirm
+'<label>'` (with the exit status, or the timeout) is now a separate line from
+the absent-snapshot one. Both are a miss.
+
+**A hung night is quieter in systemd than it was** (ruling 2). Before, it
+ended `failed (Result: timeout)`; now it ends `Finished` with
+`consecutive_misses=1`, and the unit fails on the third in a row like any
+other miss. Until the heartbeat exists (SERV-218), nights one and two are
+visible only in `make backup-status`.
+
+Not tested: whether a copy cut off by the deadline resumes cheaply the next
+night or re-uploads what it had sent. `restic copy` skips what the destination
+already holds, but how much of an interrupted upload counts as held was not
+measured.
 
 ## Concurrency
 
@@ -276,16 +346,20 @@ real box (2026-09-26), and each cost a full re-run to fix:
 
 ## Wall-clock bounds
 
-Every external call — one `pg_dump`, one `restic` invocation — is individually
-bounded by its own `timeout`. `BACKUP_PG_DUMP_TIMEOUT_SEC` and
-`BACKUP_RESTIC_TIMEOUT_SEC` in `config/backup/backup.conf` are the per-call
-figures; the unit's own `TimeoutStartSec` (SERV-214) is the run-wide bound and
-is sized against this budget:
+Every external call is individually bounded by its own `timeout`, and there
+are two kinds of bound. `BACKUP_PG_DUMP_TIMEOUT_SEC` and
+`BACKUP_RESTIC_TIMEOUT_SEC` in `config/backup/backup.conf` are **per-call**
+figures, for a `pg_dump` and for a `restic` invocation against the hub (and
+`verify-destination`'s own calls). Fan-out is bounded **per destination**
+instead: `BACKUP_DEST_BUDGET_SEC` is one deadline covering every call made
+against it in a night (SERV-224 — "A destination that hangs", above). The
+unit's own `TimeoutStartSec` (SERV-214) is the run-wide bound and is sized
+against this budget:
 
 ```
 TimeoutStartSec ≥ preflight max (BACKUP_PREFLIGHT_MAX_SEC)
                  + hub duration (backup + forget/prune + weekly check + monthly read-data)
-                 + Σ over destinations of (retry count × BACKUP_RESTIC_TIMEOUT_SEC)
+                 + number of destinations × BACKUP_DEST_BUDGET_SEC
                  + margin
 ```
 
@@ -296,11 +370,26 @@ TimeoutStartSec ≥ preflight max (BACKUP_PREFLIGHT_MAX_SEC)
 |---|---|---|
 | preflight max | 1200 | `BACKUP_PREFLIGHT_MAX_SEC` |
 | hub duration | 600 | measured ~16s for both clusters on 2026-09-26 at ~818 MiB combined, no destination configured — >20x headroom for data growth |
-| destination margin | 600 | the desktop's real first seed (SERV-215, below) took 10s for both clusters combined, well inside this — but that's happy-path, no-retry timing over an already-fast tailnet link, not the worst case this margin has to cover, so the figure stays as-is rather than being tightened on one data point |
-| margin | 300 | |
+| destinations | 600 | 1 destination × `BACKUP_DEST_BUDGET_SEC=600`. Enforced by the script, so this term is exact rather than an allowance: nightly copies take seconds, and the two-night backfill of 2026-10-04 took 5s |
+| margin | 300 | also absorbs the few seconds of container start and `docker rm` around each call, which the deadline does not count |
 | **total** | **2700** | |
 
-Provisional on the destination-margin term specifically, not on the rest —
+**The destination term used to be a guess, and the guess was wrong by a
+factor of nine.** It read "destination margin, 600", against a formula of
+"retry count × `BACKUP_RESTIC_TIMEOUT_SEC`" — which for one destination and
+two clusters is six calls of up to 1800s each. Nothing enforced the 600. The
+first destination that hung proved it (SERV-224).
+
+**`make backup-test` checks this arithmetic** (T39): it reads
+`BACKUP_PREFLIGHT_MAX_SEC`, `BACKUP_DEST_BUDGET_SEC` and the destination count
+from the tracked `backup.conf`, and `construct_backup_timeout_start_sec` from
+`ansible/roles/construct_backup/defaults/main.yml`, and fails if the unit's
+value is too small. **A second destination needs 3300**, so adding one without
+raising the unit's timeout goes red there — and raising it is an ansible
+change, which nothing applies on merge. It reads the tracked default, not the
+installed unit: after an apply, `systemctl show construct-backup.service -p
+TimeoutStartUSec` is the check that the box agrees.
+
 `ansible/roles/construct_backup/defaults/main.yml` carries this same table and
 is where the number actually lives; update both together if it changes.
 
