@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.37.1](https://github.com/Einlanzerous/construct-server/compare/v4.37.0...v4.37.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **backup:** give each destination one nightly deadline so a hang is counted as a miss (SERV-224) ([#242](https://github.com/Einlanzerous/construct-server/issues/242)) ([d6446a5](https://github.com/Einlanzerous/construct-server/commit/d6446a5bd05ca408964942c58266a9abe1351894))
+
 ## [4.37.0](https://github.com/Einlanzerous/construct-server/compare/v4.36.0...v4.37.0) (2026-10-04)
 
 
