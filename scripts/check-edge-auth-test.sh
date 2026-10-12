@@ -171,5 +171,61 @@ run "a host that 401s non-browsers must be asked as a browser -> green" 0 \
   "ok    edge: $HOST is gated by Access"
 
 echo
+echo "=== check-edge-auth.sh -direct guard (CANT-284) ==="
+
+# The guard reads the router file from REPO_ROOT, which is derived from the script's own
+# location, so each case runs a COPY of the script beside a mutated copy of the config.
+planted() {
+  rm -rf "$TMP/planted"; mkdir -p "$TMP/planted/scripts" "$TMP/planted/config/traefik/dynamic"
+  cp "$REPO/scripts/check-edge-auth.sh" "$TMP/planted/scripts/"
+  cp "$REPO/config/traefik/traefik.yml" "$TMP/planted/config/traefik/"
+  cp "$REPO/config/traefik/dynamic/routers.yml" "$TMP/planted/config/traefik/dynamic/"
+  cp "$REPO/docker-compose.yml" "$TMP/planted/"
+}
+# Remove one middleware line from one named router.
+strip_mw() {
+  python3 - "$TMP/planted/config/traefik/dynamic/routers.yml" "$1" "$2" <<'PYEND'
+import re, sys
+path, router, mw = sys.argv[1:4]
+lines = open(path).read().split("\n")
+out, inside = [], False
+for ln in lines:
+    if re.match(r"^    [A-Za-z0-9_-]+:\s*$", ln):
+        inside = ln.strip() == router + ":"
+    if inside and ln.strip() == "- " + mw:
+        continue
+    out.append(ln)
+assert len(out) == len(lines) - 1, f"{mw} not found in {router}"
+open(path, "w").write("\n".join(out))
+PYEND
+}
+run_planted() {
+  local name="$1" want="$2"; shift 2
+  OUT="$(PATH="$BIN:$PATH" FIX="$TMP/case" "$TMP/planted/scripts/check-edge-auth.sh" --config-only 2>&1)"; local rc=$?
+  local missing=""
+  for needle in "$@"; do printf '%s' "$OUT" | grep -qF -- "$needle" || missing="$missing [$needle]"; done
+  if [ "$rc" -ne "$want" ]; then bad "$name: exit $rc, expected $want"
+  elif [ -n "$missing" ]; then bad "$name: output lacks$missing"
+  else ok "$name"; fi
+}
+
+world
+planted
+run_planted "the real config: every -direct router carries both middlewares -> green" 0 \
+  "-direct router(s) carry crowdsec-bouncer and strip-cf-access"
+
+planted; strip_mw catenary-public strip-cf-access
+run_planted "strip-cf-access removed from catenary-public -> red, naming the router and middleware" 1 \
+  "FAIL  -direct router catenary-public lacks strip-cf-access"
+
+planted; strip_mw catenary-public-auth crowdsec-bouncer
+run_planted "crowdsec-bouncer removed from catenary-public-auth -> red" 1 \
+  "FAIL  -direct router catenary-public-auth lacks crowdsec-bouncer"
+
+planted; strip_mw chronicle-public strip-cf-access
+run_planted "the guard covers the older direct hosts too -> red for chronicle-public" 1 \
+  "FAIL  -direct router chronicle-public lacks strip-cf-access"
+
+echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
