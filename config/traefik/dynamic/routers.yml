@@ -353,8 +353,7 @@ http:
     # here, which is the cost of the smaller surface. The priority is pinned at 100:
     # unset, Traefik uses the rule's length, which would start outranking
     # catenary-public-auth (1000) once this list grew past about 1000 characters.
-    # Anything unlisted falls to
-    # public-catchall and is refused (403).
+    # Anything unlisted falls to public-catchall and is refused (403).
     #
     # Unauthenticated, /healthz returns the build's version and commit and /readyz its
     # database health. Both become public here, as they are on the other direct hosts.
