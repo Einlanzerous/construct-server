@@ -1706,12 +1706,13 @@ services:
   # One static Go binary. Text, images and voice notes over an append-only log with a
   # sync protocol; the clients are web, Linux desktop and Android.
   #
-  # TUNNELED ONLY, and that is the whole shape of this block today. There is
-  # deliberately NO public router: the bar for the `public` entrypoint on this estate
-  # is that the endpoint authenticates with something Access cannot express, and
-  # Catenary does not authenticate AT ALL yet — the socket is CANT-22 and the token
-  # model CANT-28. A public router today would put a service that will hold everyone's
-  # messages, unauthenticated, on the open 443.
+  # TWO HOSTS OFF ONE BACKEND, the split Lyceum and Chronicle use: catenary.… is
+  # tunneled and Access-gated for the browser, and catenary-direct.… is on the WAN
+  # entrypoint for the Android app, which holds a bearer session and cannot do browser
+  # SSO (CANT-284). The direct host is an ALLOWLIST of the API route families, not the
+  # whole backend, so the web client stays behind Access; /admin is blackholed there.
+  # Safe on the open 443 because Catenary authenticates every route outside /healthz
+  # and /readyz itself (CANT-22, CANT-28). See config/traefik/dynamic/routers.yml.
   #
   # It also carries no CATENARY_CF_ACCESS_AUD of its own, unlike chronicle and lyceum.
   # Those verify the Access JWT in-process; Catenary has no code that reads an audience
@@ -1727,21 +1728,15 @@ services:
   # CF_ACCESS_AUD_MAP[catenary.zerogravity.industries] (SERV-162) — a stricter test than
   # "appears somewhere in the map", and not a continuation of this.
   #
-  # What is deployed today answers /healthz and /readyz and nothing else. That is on
-  # purpose: it proves the image pulls, the DSN parses, the healthcheck matches the
-  # image and the Access gate is right, while nothing depends on any of it. The
-  # alternative is discovering all four at once on the deploy that first carries
-  # traffic.
-  #
   # Decisions are catenary/deploy/README.md's, which is decisions rather than a copy of
   # this block — CHRN-89 removed Chronicle's copy after it drifted from here.
   catenary:
     image: ghcr.io/einlanzerous/catenary:${CATENARY_TAG:-latest}
     container_name: catenary
     restart: unless-stopped
-    # No `ports:`. Reached through Traefik on the internal entrypoint, never from the
-    # host. Publishing one would put a listener on the host that bypasses the edge —
-    # and until CANT-22/CANT-28 there is no in-process authentication behind it.
+    # No `ports:`. Reached through Traefik (the internal entrypoint for the browser, the
+    # public entrypoint for catenary-direct), never from the host. Publishing one would
+    # put a listener on the host that bypasses the edge.
     #
     # The provisioning surface (CANT-131 / SERV-202) is a SECOND, internal-only
     # listener on construct_net — CANT-33's approved plan, ruling 1: its own listener,

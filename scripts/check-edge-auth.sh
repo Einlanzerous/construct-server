@@ -249,6 +249,37 @@ for name, why in sorted(EXEMPT.items()):
     else:
         bad(f"EXEMPT names {name}, which is not an internal router — stale entry, remove it")
 
+# The `public` entrypoint's own rule (CANT-284). Every router matching a `-direct`
+# host is on the open 443 with no Access in front of it, so what keeps a spoofed
+# Cf-Access-* header from authenticating anyone is `strip-cf-access`, and what keeps
+# a known-bad address out is `crowdsec-bouncer`. Nothing above looks at `public`
+# routers (it iterates `internal`), so a direct host that lost either would pass
+# everything else. A router that only answers with deny-all (the /admin blackhole)
+# is exempt: it forwards nothing, so there is nothing to strip.
+direct = {n: r for n, r in routers.items()
+          if "public" in (r.get("entryPoints") or [])
+          and re.search(r"Host\(`[^`]*-direct\.", r.get("rule", ""))}
+if not direct:
+    print("  ok    no -direct host is routed on the `public` entrypoint of this edge")
+else:
+    need = ("crowdsec-bouncer", "strip-cf-access")
+    lacking = {}
+    for n, r in sorted(direct.items()):
+        mws = r.get("middlewares") or []
+        if mws == ["deny-all"]:
+            continue
+        gap = [m for m in need if m not in mws]
+        if gap:
+            lacking[n] = gap
+    if lacking:
+        for n, gap in lacking.items():
+            bad(f"-direct router {n} lacks {', '.join(gap)}")
+        print("        A -direct host is on the open 443 with no Cloudflare Access in front of it.")
+        print("        Without strip-cf-access a spoofed Cf-Access-* header reaches the service;")
+        print("        without crowdsec-bouncer a banned address is not refused at the edge.")
+    else:
+        print(f"  ok    all {len(direct)} -direct router(s) carry crowdsec-bouncer and strip-cf-access (or only deny)")
+
 # Host(`x`) is the only rule form used on this entrypoint; anything else is a
 # router this script cannot reason about and is reported rather than ignored.
 hosts = {}
