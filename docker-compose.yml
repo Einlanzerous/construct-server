@@ -1947,8 +1947,13 @@ services:
       - ollama
       - eidolon-whisper
     healthcheck:
-      # /readyz, not a bare TCP connect: it probes ollama and whisper, so this
-      # can FAIL when a backend is gone (CLAUDE.md's rule for healthchecks).
+      # /healthz — LIVENESS, and deliberately not /readyz. It answers 200 whenever
+      # the process can answer, so it FAILS for a dead or wedged server (an HTTP
+      # GET, not a bare TCP connect), which is the bar for a healthcheck here.
+      # /readyz probes ollama and eidolon-whisper too; keying the deploy gate to
+      # it would mark eidolon unhealthy for a backend's fault, and a restart is
+      # not the answer to that — same reasoning as asr's /healthz probe. A wedged
+      # backend is what `curl 127.0.0.1:8095/readyz` is for.
       # bash's /dev/tcp — the image is debian-slim with no curl/wget.
       test:
         - CMD
@@ -1964,22 +1969,42 @@ services:
       retries: 3
       start_period: 15s
 
-  # The second whisper queue EIDO-33 removes. Upstream's own image, digest-pinned
-  # like every third-party image here; CPU `small.en`, the model mounted from the
-  # same host store `asr` reads. whisper-server has no authentication, so it is
-  # not published and is reachable only on construct_net.
+  # The second whisper queue EIDO-33 removes. It reuses the ESTATE ASR image — the
+  # same ${ASR_TAG} pin as `asr`, so it is built on this box with flags that match
+  # this CPU — and runs its bundled whisper-server directly, CPU only (`-ng`, and
+  # no device passed). Upstream's own whisper.cpp image does not work here: it
+  # dies with SIGILL (exit 132) on the i7-10700K, which has AVX2 but no AVX512.
+  # CPU-only and device-less keeps it entirely off asr's GPU lease. Unpublished:
+  # whisper-server has no authentication, so it is reachable on construct_net only.
   eidolon-whisper:
-    image: ghcr.io/ggml-org/whisper.cpp:main@sha256:6a6f6b5ada57bee891abd22b32ce8f1fad867ea12c2c1ddcf2fdda47b629efe6
+    image: ghcr.io/einlanzerous/estate-asr:${ASR_TAG:-latest}
     container_name: eidolon-whisper
     restart: unless-stopped
-    entrypoint: ["/app/build/bin/whisper-server"]
-    command: ["--host", "0.0.0.0", "--port", "8093", "-m", "/models/ggml-small.en.bin"]
+    entrypoint: ["/usr/local/bin/whisper-server"]
+    command: ["--host", "0.0.0.0", "--port", "8093", "-ng", "-m", "/models/ggml-small.en.bin"]
     expose:
       - "8093"
     volumes:
       - ${ASR_MODELS_DIR:-/home/magos/tools/whisper.cpp/models}:/models:ro
     networks:
       - construct_net
+    healthcheck:
+      # An HTTP GET of / (whisper-server answers 200 with its status page), not a
+      # TCP connect, so a hung process fails it. bash's /dev/tcp: the image has
+      # bash and no curl/wget (checked).
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8093
+          && printf 'GET / HTTP/1.0\r\n\r\n' >&3
+          && read -r line <&3
+          && case "$$line" in *" 200 "*) exit 0 ;; *) exit 1 ;; esac
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s   # loads small.en (~488 MB) at boot
 
   # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
   # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
