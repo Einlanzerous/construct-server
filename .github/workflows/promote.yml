@@ -106,6 +106,7 @@ on:
           - chronicle
           - cook_book
           - drydock
+          - eidolon
           - interlock
           - lyceum
           - placard

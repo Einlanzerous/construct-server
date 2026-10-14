@@ -1907,6 +1907,80 @@ services:
     # which would kill the process mid-drain.
     stop_grace_period: 30s
 
+  # --- EIDOLON (thin-client Agent OS portal for the wall tablet) — EIDO-28 ---
+  # The Go middleware that serves the SPA and the /ws front door. Reached ONLY
+  # over the Tailnet: `tailscale serve --https=8443 http://127.0.0.1:8095` on the
+  # host proxies to the loopback publish below. No Traefik router, no Access
+  # policy, no public path — the socket is unauthenticated until EIDO-29, which is
+  # exactly why it must stay off every edge.
+  #
+  # Inference is the estate's: the LLM is the `ollama` service above (OpenAI-
+  # compatible /v1, same GPU as everything else — no second resident model).
+  # Speech-to-text is the `eidolon-whisper` sidecar below until EIDO-33 retires it
+  # for `asr`. Nothing here talks to anything off-box.
+  eidolon:
+    image: ghcr.io/einlanzerous/project-eidolon:${EIDOLON_TAG:-latest}
+    container_name: eidolon
+    restart: unless-stopped
+    # Loopback ONLY: tailscale serve is the sole way in. The image's ENTRYPOINT
+    # binds :8095 inside the container; this publish is what keeps it off the LAN.
+    ports:
+      - "127.0.0.1:8095:8095"
+    environment:
+      - EIDO_LLM_BASE=http://ollama:11434/v1
+      - EIDO_LLM_MODEL=${EIDO_LLM_MODEL:-gemma4:31b}
+      - EIDO_STT_URL=http://eidolon-whisper:8093
+      - EIDO_STT_PROMPT=${EIDO_STT_PROMPT:-Hey Eido.}
+      - EIDO_TTS_BIN=/opt/piper/piper
+      - EIDO_TTS_VOICE=/opt/piper/${EIDO_TTS_VOICE_NAME:-en_US-libritts_r-medium.onnx}
+      - EIDO_TTS_RATE=${EIDO_TTS_RATE:-0.9}
+      - EIDO_TTS_SPEAKER=${EIDO_TTS_SPEAKER:-0}
+    volumes:
+      # The piper bundle (binary + voices, ~hundreds of MB) is a host artifact,
+      # never baked into the image. ABSOLUTE default for the same reason asr's
+      # model dir is: prod compose runs from /opt/construct-server under the
+      # runner's systemd unit, and `~` would expand to whoever invoked it.
+      - ${EIDO_PIPER_DIR:-/home/magos/eidolon/phase0/tts/piper}:/opt/piper:ro
+    networks:
+      - construct_net
+    depends_on:
+      - ollama
+      - eidolon-whisper
+    healthcheck:
+      # /readyz, not a bare TCP connect: it probes ollama and whisper, so this
+      # can FAIL when a backend is gone (CLAUDE.md's rule for healthchecks).
+      # bash's /dev/tcp — the image is debian-slim with no curl/wget.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8095
+          && printf 'GET /healthz HTTP/1.0\r\n\r\n' >&3
+          && read -r line <&3
+          && case "$$line" in *" 200 "*) exit 0 ;; *) exit 1 ;; esac
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # The second whisper queue EIDO-33 removes. Upstream's own image, digest-pinned
+  # like every third-party image here; CPU `small.en`, the model mounted from the
+  # same host store `asr` reads. whisper-server has no authentication, so it is
+  # not published and is reachable only on construct_net.
+  eidolon-whisper:
+    image: ghcr.io/ggml-org/whisper.cpp:main@sha256:6a6f6b5ada57bee891abd22b32ce8f1fad867ea12c2c1ddcf2fdda47b629efe6
+    container_name: eidolon-whisper
+    restart: unless-stopped
+    entrypoint: ["/app/build/bin/whisper-server"]
+    command: ["--host", "0.0.0.0", "--port", "8093", "-m", "/models/ggml-small.en.bin"]
+    expose:
+      - "8093"
+    volumes:
+      - ${ASR_MODELS_DIR:-/home/magos/tools/whisper.cpp/models}:/models:ro
+    networks:
+      - construct_net
+
   # --- EDGE PROXY (Traefik) — Zero Gravity Industries hybrid edge (SERV-20) ---
   # Split entrypoints are the security keystone: `public` (WAN-forwarded 443) serves
   # ONLY Argosy + a deny-all catch-all; `internal` (:9080 HTTP, deliberately NOT
