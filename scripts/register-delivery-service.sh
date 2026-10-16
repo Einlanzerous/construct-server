@@ -97,10 +97,16 @@ command -v docker >/dev/null 2>&1 || { err "ERROR: required dependency 'docker' 
 
 url="${SWITCHYARD_URL%/}"
 
+# The token reaches curl as a config line on STDIN (`-K -`), never as an
+# argument: an argv is readable by anyone who can run `ps` for as long as the
+# request is in flight, and this one carries write scope (SERV-215, SERV-223).
+# `printf` is a shell builtin, so the value is in no process's argv.
+auth_config() { printf 'header = "Authorization: Bearer %s"\n' "$SWITCHYARD_TOKEN"; }
+
 # ── is it already there? ────────────────────────────────────────────────────
 # Checked first so a re-run is a no-op rather than a 409, which makes this safe
 # to put in a runbook someone follows twice.
-existing="$(curl -sS --max-time 15 -H "Authorization: Bearer ${SWITCHYARD_TOKEN}" \
+existing="$(auth_config | curl -sS --max-time 15 -K - \
   "${url}/v1/services?limit=200" 2>/dev/null)" || {
     err "ERROR: could not reach Switchyard at ${url}"
     exit 2
@@ -186,8 +192,8 @@ payload="$(jq -nc --arg name "$NAME" --argjson port "$PORT" --arg hp "$HEALTH_PA
   + (if $hp == "/healthz" then {} else { health_path: $hp } end)
 ')"
 
-code="$(curl -sS -o /tmp/register-out.$$ -w '%{http_code}' --max-time 15 \
-  -X POST -H "Authorization: Bearer ${SWITCHYARD_TOKEN}" \
+code="$(auth_config | curl -sS -K - -o /tmp/register-out.$$ -w '%{http_code}' --max-time 15 \
+  -X POST \
   -H 'Content-Type: application/json' \
   -d "$payload" "${url}/v1/services" 2>/dev/null)" || code="000"
 

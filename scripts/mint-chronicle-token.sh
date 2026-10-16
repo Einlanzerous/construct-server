@@ -100,6 +100,12 @@ fi
 # reads as "the bootstrap token is wrong" rather than "it was never set".
 [ -n "$bootstrap" ] || die "SWITCHYARD_BOOTSTRAP_TOKEN is empty or absent"
 
+# The credential reaches curl as a config line on STDIN (`-K -`), never as an
+# argument: an argv is readable by anyone who can run `ps` for as long as the
+# request is in flight (SERV-215, SERV-223). `printf` is a shell builtin, so the
+# value is in no process's argv. Same shape as revoke-switchyard-token.sh.
+auth_config() { printf 'header = "authorization: Bearer %s"\n' "$bootstrap"; }
+
 # Check it up front rather than letting the first real call fail. The bootstrap
 # token in the deployed .env has been REVOKED server-side before while still
 # sitting in the file looking usable (see mint-prober-token.sh, which found it):
@@ -123,8 +129,8 @@ fi
 # `|| true` keeps the exit code from ending the script, curl's stderr is LEFT
 # ALONE because a connect error names the address and cannot print a credential,
 # and `000` gets its own arm before the numeric one.
-probe_status="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' \
-  "$SWITCHYARD_URL/v1/users?limit=1" -H "authorization: Bearer $bootstrap" || true)"
+probe_status="$(auth_config | curl -sS -m 15 -K - -o /dev/null -w '%{http_code}' \
+  "$SWITCHYARD_URL/v1/users?limit=1" || true)"
 case "$probe_status" in
   200) ;;
   401|403)
@@ -141,13 +147,11 @@ esac
 api() {
   local method="$1" path="$2" body="${3:-}"
   if [ -n "$body" ]; then
-    curl -sS -m 15 -X "$method" "$SWITCHYARD_URL$path" \
-      -H "authorization: Bearer $bootstrap" \
+    auth_config | curl -sS -m 15 -K - -X "$method" "$SWITCHYARD_URL$path" \
       -H "content-type: application/json" \
       -d "$body"
   else
-    curl -sS -m 15 -X "$method" "$SWITCHYARD_URL$path" \
-      -H "authorization: Bearer $bootstrap"
+    auth_config | curl -sS -m 15 -K - -X "$method" "$SWITCHYARD_URL$path"
   fi
 }
 
