@@ -102,7 +102,10 @@ ok()  { echo "  ok    $*"; }
 # this script against a closed port, which is the only way it shows up.
 http_code() {
   local out
-  out="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$1" -H "authorization: Bearer $2" 2>/dev/null)"
+  # The token goes to curl on stdin (`-K -`), not as an argument (SERV-215):
+  # both callers, the Switchyard probe and the Amber probe, come through here.
+  out="$(printf 'header = "authorization: Bearer %s"\n' "$2" \
+    | curl -sS -m 15 -K - -o /dev/null -w '%{http_code}' "$1" 2>/dev/null)"
   case "$out" in
     [0-9][0-9][0-9]) printf '%s' "$out" ;;
     *) printf '000' ;;
