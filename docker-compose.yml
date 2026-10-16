@@ -124,7 +124,7 @@ services:
 
   # --- FILE SHARING ---
   copyparty:
-    image: copyparty/ac@sha256:a885633e42f7395331ab709c1310bd21e79617b13dfd41c6e3f56910b6a8d2f0   # 1.20.20
+    image: copyparty/ac@sha256:b2054d65e05daa8982ca17c26b12b74315c0ce586a03ff9018a59c80731b9e19   # 1.20.26
     container_name: copyparty
     restart: unless-stopped
     ports:
@@ -236,7 +236,7 @@ services:
 
   # --- AUTOMATION (Semaphore UI) ---
   semaphore:
-    image: semaphoreui/semaphore:latest@sha256:7da3364f331a80d5d47998866f5833c8de978bd57ad49beb69ad2d1d0f3c5f20   # v2.19.8
+    image: semaphoreui/semaphore:v2.19.16@sha256:3707a971a57fdc5ac99a184bf83f2efb7d00cbeec8fb08a16a8028f77229e141   # v2.19.16 — pinned to the release tag, not `latest`: upstream re-pointed `latest` at a 2.18 backport three hours after cutting 2.19.16
     container_name: semaphore
     restart: unless-stopped
     ports:
@@ -1693,7 +1693,7 @@ services:
   # inside the container does not survive and could not be written in the first
   # place.
   wiki:
-    image: nginx:1.30-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    image: nginx:1.30-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
     container_name: wiki
     restart: unless-stopped
     volumes:
@@ -2189,7 +2189,7 @@ services:
   # before starting this — two connectors on one token would let Cloudflare route
   # requests to the host connector, which can't reach traefik:9080. See docs.
   cloudflared:
-    image: cloudflare/cloudflared:latest@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+    image: cloudflare/cloudflared:latest@sha256:a15a3b50b8dabd57ac2090e9484c0247dba9dfa1f0df4d298d4317f9d69eb2d5   # 2026.10.1
     container_name: cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run
@@ -2306,7 +2306,7 @@ services:
 
   # Dedicated Redis for Authentik (nothing else in the stack uses one).
   authentik-redis:
-    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2   # 7.4.10-alpine
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499   # 7.4.11-alpine
     container_name: authentik-redis
     restart: unless-stopped
     profiles: ["identity"]
