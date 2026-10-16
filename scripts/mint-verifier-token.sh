@@ -69,12 +69,18 @@ fi
 # token is wrong" rather than "it was never set".
 [ -n "$bootstrap" ] || die "SWITCHYARD_BOOTSTRAP_TOKEN is empty or absent"
 
+# The credential reaches curl as a config line on STDIN (`-K -`), never as an
+# argument: an argv is readable by anyone who can run `ps` for as long as the
+# request is in flight (SERV-215, SERV-223). `printf` is a shell builtin, so the
+# value is in no process's argv. Same shape as revoke-switchyard-token.sh.
+auth_config() { printf 'header = "authorization: Bearer %s"\n' "$bootstrap"; }
+
 # The value shipped in the deployed .env has been REVOKED server-side since
 # 2026-08-18 while still sitting in the file looking usable (SERV-113), and
 # re-seeding does not un-revoke it. Say so plainly — a bare 401 sends you looking
 # for a typo in a token that is character-for-character correct.
-probe_status="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' \
-  "$SWITCHYARD_URL/v1/users?limit=1" -H "authorization: Bearer $bootstrap" || echo 000)"
+probe_status="$(auth_config | curl -sS -m 15 -K - -o /dev/null -w '%{http_code}' \
+  "$SWITCHYARD_URL/v1/users?limit=1" || echo 000)"
 case "$probe_status" in
   200) ;;
   401|403)
@@ -90,13 +96,11 @@ esac
 api() {
   local method="$1" path="$2" body="${3:-}"
   if [ -n "$body" ]; then
-    curl -sS -m 15 -X "$method" "$SWITCHYARD_URL$path" \
-      -H "authorization: Bearer $bootstrap" \
+    auth_config | curl -sS -m 15 -K - -X "$method" "$SWITCHYARD_URL$path" \
       -H "content-type: application/json" \
       -d "$body"
   else
-    curl -sS -m 15 -X "$method" "$SWITCHYARD_URL$path" \
-      -H "authorization: Bearer $bootstrap"
+    auth_config | curl -sS -m 15 -K - -X "$method" "$SWITCHYARD_URL$path"
   fi
 }
 
