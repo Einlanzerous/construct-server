@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.38.0](https://github.com/Einlanzerous/construct-server/compare/v4.37.1...v4.38.0) (2026-10-16)
+
+
+### Features
+
+* **edge:** catenary-direct host on the public entrypoint (CANT-284) ([#244](https://github.com/Einlanzerous/construct-server/issues/244)) ([027add0](https://github.com/Einlanzerous/construct-server/commit/027add0988d326f2ea0fe262f8a545b20448c0c4))
+* **eidolon:** onboard eidolon and its whisper sidecar (EIDO-28) ([#245](https://github.com/Einlanzerous/construct-server/issues/245)) ([e03767f](https://github.com/Einlanzerous/construct-server/commit/e03767f1621e6f8d7f279ccd8de8002387629e66))
+
+
+### Bug Fixes
+
+* **scripts:** feed Switchyard tokens to curl on stdin, not argv (SERV-223) ([#248](https://github.com/Einlanzerous/construct-server/issues/248)) ([720085a](https://github.com/Einlanzerous/construct-server/commit/720085a3dba919e68fcdc082d81d80f6e7c80305))
+
 ## [4.37.1](https://github.com/Einlanzerous/construct-server/compare/v4.37.0...v4.37.1) (2026-10-07)
 
 
