@@ -99,8 +99,9 @@ Locally: `make base-images-check` (the estate), `make base-images-check dir=~/pr
 ## What the guard does not cover, deliberately
 
 - **Third-party images in `docker-compose.yml`.** `traefik:v3.3` is EOL (2025-05-05,
-  Traefik supports only its newest minor), `redis:7-alpine` names a major where Redis
-  cycles are `major.minor`, and the four watchtower leaves float by design (SERV-75).
+  Traefik supports only its newest minor), `redis` named a bare major (`7-alpine`) where
+  Redis cycles are `major.minor` until SERV-179's first PR moved it to `7.4-alpine`, and
+  the four watchtower leaves float by design (SERV-75).
   That is a different sweep with a different exemption list — it is SERV-105's domain and
   has its own ticket. The wiki's nginx was bumped alongside because the sweep that found
   the service repos' nginx found it too — but it is a compose `image:`, not a `FROM`, so

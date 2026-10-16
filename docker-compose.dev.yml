@@ -438,7 +438,7 @@ services:
   # in the Zero Trust dashboard rather than in this repo. Every rule on it points at
   # http://traefik-dev:9080. No open ports: cloudflared dials out.
   cloudflared-dev:
-    image: cloudflare/cloudflared:latest@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+    image: cloudflare/cloudflared:latest@sha256:a15a3b50b8dabd57ac2090e9484c0247dba9dfa1f0df4d298d4317f9d69eb2d5   # 2026.10.1
     container_name: cloudflared-dev
     restart: unless-stopped
     profiles: [edge]

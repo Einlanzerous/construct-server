@@ -236,7 +236,7 @@ services:
 
   # --- AUTOMATION (Semaphore UI) ---
   semaphore:
-    image: semaphoreui/semaphore:latest@sha256:6d45ab59ec50e8963b00461067ef884ffdeedaaf8162bc07d42c5901c2a85e2b   # v2.19.16
+    image: semaphoreui/semaphore:v2.19.16@sha256:3707a971a57fdc5ac99a184bf83f2efb7d00cbeec8fb08a16a8028f77229e141   # v2.19.16 — pinned to the release tag, not `latest`: upstream re-pointed `latest` at a 2.18 backport three hours after cutting 2.19.16
     container_name: semaphore
     restart: unless-stopped
     ports:
@@ -2306,7 +2306,7 @@ services:
 
   # Dedicated Redis for Authentik (nothing else in the stack uses one).
   authentik-redis:
-    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499   # 7.4.11-alpine
     container_name: authentik-redis
     restart: unless-stopped
     profiles: ["identity"]
