@@ -554,10 +554,10 @@ services:
       # one `claude -p` session per ticket under
       # `~/dispatch/work/switchyard-<KEY>`, and each session's first turn is the
       # dispatcher's own multi-thousand-character prompt, an ordinary `user` turn
-      # with the same effect as the PR-review agent's. Comma-separated: Amber
-      # takes the list as one value. This must be live before the dispatcher's
-      # first `--live` night. AMBR-37 moves the person/machine call into Amber
-      # and retires this list.
+      # with the same effect as the PR-review agent's. Comma-separated:
+      # Switchyard splits it and sends each prefix to Amber separately. This
+      # must be live before the dispatcher's first `--live` night. AMBR-37 moves
+      # the person/machine call into Amber and retires this list.
       #
       # Amber deliberately applies no default of its own — it does not know which
       # trees are people, and choosing for the caller is the judgement that
