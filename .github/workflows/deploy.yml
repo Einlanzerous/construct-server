@@ -286,6 +286,48 @@ jobs:
         # and for asking compose rather than grepping .env.
         run: ./scripts/assert-token-shapes.sh
 
+      - name: Ensure the sextant env file is present and carries exactly its three keys (SERV-242)
+        # sextant is the one service in this stack with an `env_file:` (SXT-1 Ruling 5):
+        # /home/magos/.config/sextant/sextant.env carries the three figures about one
+        # person that the host CLI and the container must read IDENTICALLY, Signet-
+        # managed under project `sextant`, never in this repo or in PROD_ENV_FILE.
+        # Compose refuses to load a project whose env_file is missing — every compose
+        # command exits 1 with a stat error, measured — so without the file EVERY
+        # step below fails, the pin assertion first, with a message that names a path
+        # and not the reason. This step says the reason, before anything pulls or
+        # recreates, and it is the reason the compose block does NOT use
+        # `required: false`: the figures have no default, so a tolerated absence would
+        # be a sextant crash-looping on a variable the deploy never mentioned.
+        #
+        # Names only, never a value and never a length: the file is mode 600 for a
+        # reason, and the key names are the whole of what this step needs. The set
+        # check exists because `environment:` in the block wins over env_file, so a
+        # fourth key there (a stray SEXTANT_SNAPSHOT_AT, say) would be silently
+        # ignored rather than applied — a defect, and a quiet one.
+        run: |
+          set -uo pipefail
+          f=/home/magos/.config/sextant/sextant.env
+          if [ ! -r "$f" ]; then
+            echo "Error: $f is missing or not readable by $(id -un)."
+            echo "It is Signet-managed: signet render --project sextant   (SXT-1 Ruling 5, SERV-242)"
+            exit 1
+          fi
+          want="SEXTANT_FLOOR_BASE SEXTANT_ONSITE_PREMIUM SEXTANT_MANAGER_COMP_MIN"
+          have="$(grep -vE '^[[:space:]]*(#|$)' "$f" | cut -d= -f1 | sort -u)"
+          rc=0
+          for k in $want; do
+            if ! grep -qE "^${k}=[^[:space:]]+" "$f"; then
+              echo "Error: $f does not set $k (names only are printed here)."; rc=1
+            fi
+          done
+          extra="$(printf '%s\n' "$have" | grep -vxE 'SEXTANT_(FLOOR_BASE|ONSITE_PREMIUM|MANAGER_COMP_MIN)' || true)"
+          if [ -n "$extra" ]; then
+            echo "Error: $f carries keys beyond the three figures; compose's environment: would silently win over them:"
+            printf '%s\n' "$extra" | sed 's/^/  - /'; rc=1
+          fi
+          [ "$rc" -eq 0 ] && echo "sextant env file present, exactly the three figure keys set."
+          exit "$rc"
+
       - name: Verify first-party image tags are pinned
         # The `:-latest` default in docker-compose.yml is a bootstrap convenience, and
         # once real pins exist it becomes a hazard: a tag var dropped from versions.env
