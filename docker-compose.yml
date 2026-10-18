@@ -550,10 +550,19 @@ services:
       # noisy, it is confidently wrong by 4.5x, and it would be stored as a
       # reading that outlives the run that made it.
       #
+      # The nightly dispatcher (SWY-472, SERV-243) is the second such tree. It runs
+      # one `claude -p` session per ticket under
+      # `~/dispatch/work/switchyard-<KEY>`, and each session's first turn is the
+      # dispatcher's own multi-thousand-character prompt, an ordinary `user` turn
+      # with the same effect as the PR-review agent's. Comma-separated:
+      # Switchyard splits it and sends each prefix to Amber separately. This
+      # must be live before the dispatcher's first `--live` night. AMBR-37 moves
+      # the person/machine call into Amber and retires this list.
+      #
       # Amber deliberately applies no default of its own — it does not know which
       # trees are people, and choosing for the caller is the judgement that
       # service does not make. Which is why this line has to exist HERE.
-      - AMBER_EXCLUDE_PROJECT_PREFIXES=${AMBER_EXCLUDE_PROJECT_PREFIXES:--home-magos-runners-}
+      - AMBER_EXCLUDE_PROJECT_PREFIXES=${AMBER_EXCLUDE_PROJECT_PREFIXES:--home-magos-runners-,-home-magos-dispatch-work-}
       # Promote dispatch credential (SERV-104 — SERV-78 piece 3). What lets
       # Switchyard's promote gate (SWY-188) trigger promote.yml over the API
       # instead of linking a human out to the Actions tab:
