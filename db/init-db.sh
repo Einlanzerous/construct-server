@@ -110,6 +110,29 @@ revoke_public chronicle_test
 revoke_public asr
 revoke_public asr_test
 
+# --- Sextant (SERV-242 / SXT-1) ---
+#
+# Chronicle's shape, for chronicle's reason: this database holds one person's
+# scored job search — not derived data — so it gets the tighter grade, owner only
+# with PUBLIC revoked on both databases, rather than ensure_db's `=Tc/owner`.
+#
+# THE ROLE NAME IS BARE ON PURPOSE — `sextant`, not `sextant_user` — like
+# chronicle and asr above. It is load-bearing in SEXTANT_DATABASE_URL in
+# docker-compose.yml; renaming it locks the service out of its own data. The
+# password reaches this script from the postgres container's environment (the
+# SEXTANT_DB_PASSWORD line on that service), and the empty-password guard in
+# ensure_db skips loudly without it.
+#
+# sextant_test exists so the repo's store tests can be pointed at this cluster —
+# its harness refuses a database whose name does not end `_test` — and the
+# `*_test` exclusion pattern in config/backup/backup.conf keeps it out of the
+# nightly dump. Nothing deployed reads it.
+ensure_db sextant "$SEXTANT_DB_PASSWORD" sextant
+ensure_db sextant "$SEXTANT_DB_PASSWORD" sextant_test
+
+revoke_public sextant
+revoke_public sextant_test
+
 # --- chronicle_tier1 (CHRN-52 / SERV-182) ---
 #
 # Chronicle's SECOND role: the one derived work (the Scribe today, tier-1 reads
