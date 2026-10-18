@@ -1915,6 +1915,146 @@ services:
     # which would kill the process mid-drain.
     stop_grace_period: 30s
 
+  # --- SEXTANT (ATS-first role discovery: one person's scored job search) — SERV-242 / SXT-1 ---
+  # One static Go binary on a distroless runtime (gcr.io/distroless/static-debian12:
+  # nonroot): no shell, no wget, so the healthcheck below is the binary's own
+  # `healthcheck` subcommand rather than a wget line. `serve` is a scheduler — one
+  # snapshot a day at SEXTANT_SNAPSHOT_AT in SEXTANT_SNAPSHOT_TZ, catch-up on boot,
+  # a Postgres advisory lock so a hand `sextant run` cannot overlap it — plus a
+  # JSON-only HTTP surface: /healthz, /readyz, /status, /api/v1/digest. It talks
+  # to the shared postgres, the estate ollama (one resident model, gemma4:31b, the
+  # same GPU as everything else) and the public ATS job-board APIs outbound.
+  # Nothing on this box talks to it except the delivery reconciler's /healthz
+  # probe.
+  #
+  # NOT reachable from outside construct_net, by decision (SXT-1 api section): no
+  # `ports:`, no Traefik router, no routers.yml entry, no CF_ACCESS_AUD_MAP line.
+  # The digest is the owner's scored view of roles and E1 puts no per-user
+  # authorisation in front of it; the edge, Access and authorisation are E4's.
+  # `expose:` below is documentation, as it is on catenary — reachability between
+  # containers on construct_net does not depend on it — and publishing has to be a
+  # deliberate act rather than the absence of a deny rule.
+  #
+  # Design of record: sextant's own deploy/README.md — decisions, deliberately NOT
+  # a copy of this block (Catenary's pattern, for Catenary's reason: the second
+  # copy is the one that goes stale).
+  #
+  # AFTER THE FIRST DEPLOY that answers /healthz with a released version, register
+  # it in the delivery ledger from the deploy root — not before, and never with
+  # --allow-no-version (the script's header says why):
+  #   ./scripts/register-delivery-service.sh sextant 4015
+  sextant:
+    image: ghcr.io/einlanzerous/sextant:${SEXTANT_TAG:-latest}
+    container_name: sextant
+    restart: unless-stopped
+    environment:
+      # 4015: the next free slot in the estate's 40xx block after trestle's 4014
+      # (cf-access-guard holds 4020). `sextant healthcheck` reads the same variable,
+      # so the probe follows the listener.
+      - SEXTANT_PORT=4015
+      # KEYWORD/VALUE, not a URL, and the password SINGLE-QUOTED — catenary's
+      # CATENARY_DATABASE_URL above carries the measurements against
+      # pgxpool.ParseConfig, and nothing here is different: the string is handed
+      # to pgx untouched. The role name is BARE (`sextant`, not `sextant_user`),
+      # like chronicle's and asr's; db/init-db.sh says why not to "fix" it.
+      - SEXTANT_DATABASE_URL=host=postgres port=5432 user=sextant password='${SEXTANT_DB_PASSWORD}' dbname=sextant sslmode=disable
+      - SEXTANT_OLLAMA_URL=http://ollama:11434
+      # PINNED as a literal, not `${…:-}`: gemma4:31b is the model that produced
+      # the 51-day observed line the service inherits through the import (SXT-10),
+      # and the model name is stamped on every extraction row. Changing it re-keys
+      # what the scores mean, so it is a reviewable diff here rather than an env
+      # edit. (The spike's own compose file said 12b; that was never what ran.)
+      - SEXTANT_OLLAMA_MODEL=gemma4:31b
+      - SEXTANT_NUM_CTX=8192
+      # The contact URL in the honest User-Agent sent to every ATS API.
+      - SEXTANT_CONTACT=https://github.com/Einlanzerous/sextant
+      # Operational switches, NOT figures, so they live in PROD_ENV_FILE
+      # (`signet set --project construct-server --name SEXTANT_SNAPSHOT_AT`, then
+      # `signet sync`) and never in the env_file below. Both have defaults here and
+      # neither belongs in required-env-keys.txt: an absent override is the normal
+      # state. `false` runs serve with no scheduler — the first deploy (SXT-1
+      # rollout step 2) and the import verification; 06:30 is the parallel-run slot
+      # beside the 05:00 cron (Ruling 4); cutover deletes the override so 05:00
+      # applies.
+      - SEXTANT_SNAPSHOT_ENABLED=${SEXTANT_SNAPSHOT_ENABLED:-true}
+      - SEXTANT_SNAPSHOT_AT=${SEXTANT_SNAPSHOT_AT:-05:00}
+      # The box's zone. The binary embeds time/tzdata, so the distroless image's
+      # lack of zoneinfo does not matter.
+      - SEXTANT_SNAPSHOT_TZ=America/Chicago
+      - SEXTANT_LOG_LEVEL=info
+      - SEXTANT_LOG_FORMAT=json
+    # THE ONE env_file IN THIS STACK, and a new pattern here (SXT-1 Ruling 5), so
+    # the reasoning is written out. The three figures about one person — the comp
+    # floor, the onsite premium, the manager comp gate — are what sextant scores
+    # against. They are in no repo, no image and NOT in PROD_ENV_FILE: the host
+    # CLI reads this file (`set -a; . ~/.config/sextant/sextant.env; set +a`) and
+    # so does this block, which is what makes the profile hash the two compute
+    # equal by construction rather than by two vault entries kept in step by hand.
+    # Signet manages the file (project `sextant`, a file target on this path),
+    # mode 600, owned by the user the deploy runs as. It carries EXACTLY those
+    # three keys: `environment:` above takes precedence over env_file, so a stray
+    # SEXTANT_SNAPSHOT_AT in it would be silently ignored, and a fourth key is a
+    # defect (deploy.yml checks the key set, names only).
+    #
+    # The figures have NO default anywhere — not here, not in the image, not in
+    # the code: sextant refuses to boot naming the variable (never a value) and
+    # crash-loops visibly. A `${KEY:-}` default would boot healthy with the rubric
+    # off, which is the failure required-env-keys.txt exists to stop; these keys
+    # are not in that file only because they do not pass through PROD_ENV_FILE.
+    #
+    # A MISSING FILE FAILS THE WHOLE DEPLOY, not just sextant: compose refuses to
+    # load a project whose env_file is absent (`config --images` included, exit 1,
+    # measured), so every compose command in deploy.yml fails, loud, on any
+    # deploy — a rollback of some other service too. That is the intended
+    # direction (silence is the failure to avoid), and deploy.yml's "Ensure the
+    # sextant env file" step turns it into a sentence naming the render command
+    # before compose gets there. Deliberately NOT the `required: false` form: a
+    # missing file must never become a healthy-looking container with no figures.
+    # The path is absolute because compose resolves a relative one against the
+    # project directory, which is /opt/construct-server on the box and somewhere
+    # else in every checkout.
+    env_file:
+      - /home/magos/.config/sextant/sextant.env
+    expose:
+      - "4015"
+    volumes:
+      # The httpx response cache. Losable — a wrong choice costs re-fetches, not
+      # data — and NOT backed up; everything sextant knows is in postgres, which
+      # the nightly dump covers (backup.conf lists `sextant` in the floor). The
+      # image seeds /data/.cache owned by uid 65532 so the volume's first-mount
+      # copy carries that owner: a fresh named volume is root-owned otherwise and
+      # nonroot could not write it (SXT-1 "/data ownership", proven in SXT-12).
+      - sextant_cache:/data/.cache
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    # /healthz, never /readyz: identity only, no dependencies, so a postgres blip
+    # does not restart the scheduler mid-snapshot (catenary's reasoning). The
+    # subcommand GETs 127.0.0.1:$SEXTANT_PORT/healthz and exits 0 only on a 200
+    # with a JSON body; it opens no store, so it keeps passing while postgres is
+    # down. Exec form because distroless has no shell for a CMD-SHELL line.
+    healthcheck:
+      test: ["CMD", "sextant", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Must EXCEED the drain: on SIGTERM serve cancels a running snapshot at once
+    # and gives it 20s (fixed in the binary, not an env knob) to write its
+    # `interrupted` row — the row the next boot's catch-up reads. Docker's own
+    # default is 10s, which would kill it mid-write.
+    stop_grace_period: 30s
+    # Explicit, not assumed: the daemon's json-file driver has no size cap on this
+    # box (/etc/docker/daemon.json sets none), so a crash loop naming a missing
+    # figure every few seconds would grow a log without bound. First service in
+    # this file to set it; the others ride the daemon default.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # --- EIDOLON (thin-client Agent OS portal for the wall tablet) — EIDO-28 ---
   # The Go middleware that serves the SPA and the /ws front door. Reached ONLY
   # over the Tailnet: `tailscale serve --https=8443 http://127.0.0.1:8095` on the
@@ -2348,6 +2488,8 @@ volumes:
   argosy_transcode:
   lyceum_data:
   trestle_data:
+  # sextant's httpx response cache (SERV-242): losable, not backed up.
+  sextant_cache:
   # Zero Gravity Industries hybrid edge (SERV-19/20)
   traefik_letsencrypt:
   traefik_access_logs:
