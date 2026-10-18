@@ -37,6 +37,7 @@ INTERLOCK_DB_PASSWORD
 LYCEUM_DB_PASSWORD
 PLACARD_DB_PASSWORD
 PURSER_DB_PASSWORD
+SEXTANT_DB_PASSWORD
 SWITCHYARD_DB_PASSWORD
 
 # --- the deploy itself (deploy.yml logs in to GHCR with these; promote.yml too) ---

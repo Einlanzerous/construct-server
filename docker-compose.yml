@@ -359,6 +359,19 @@ services:
       # passwords from the postgres container's own environment, and its empty
       # password guard skips loudly rather than blanking the role.
       - ASR_DB_PASSWORD=${ASR_DB_PASSWORD}
+      # Sextant (SERV-242) — role `sextant` and databases `sextant`/`sextant_test`
+      # provisioned by db/init-db.sh, PUBLIC revoked on both (chronicle's shape:
+      # one person's scored job search, not derived data). Same empty-password
+      # guard: without this line the script's sextant lines skip loudly, and the
+      # sextant service's DSN below connects with an empty password and refuses.
+      #
+      # BUDGET FOR A RECREATE WHEN THIS LINE LANDS — the same mechanism the
+      # SERV-169 / SERV-182 lines above describe: an `environment:` edit moves
+      # compose's config hash, the next `up -d` recreates postgres, and compose
+      # does not recreate dependants, so run `make force-recreate svc=switchyard`
+      # and `svc=interlock-worker` straight after and expect that run's health
+      # gate to fail, correctly. Be at a terminal when it lands.
+      - SEXTANT_DB_PASSWORD=${SEXTANT_DB_PASSWORD}
     networks:
       - construct_net
 
