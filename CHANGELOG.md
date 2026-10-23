@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.39.0](https://github.com/Einlanzerous/construct-server/compare/v4.38.0...v4.39.0) (2026-10-21)
+
+
+### Features
+
+* **db:** sextant role and databases, backup floor, env key (SERV-242) ([#252](https://github.com/Einlanzerous/construct-server/issues/252)) ([580653a](https://github.com/Einlanzerous/construct-server/commit/580653ab331576d5ee3fef487cb6ab5b617a9a4d))
+* **deploy:** sextant is a promotable service (SERV-242) ([#253](https://github.com/Einlanzerous/construct-server/issues/253)) ([f7bf352](https://github.com/Einlanzerous/construct-server/commit/f7bf35249b841078dee787b49a98fb026b9c83fa))
+* **stack:** sextant on construct_net — compose block, role, pin, env key, backup floor (SERV-242) ([#250](https://github.com/Einlanzerous/construct-server/issues/250)) ([589f3e1](https://github.com/Einlanzerous/construct-server/commit/589f3e12b669a60596af1453f3fb9aaf24b333d1))
+
+
+### Bug Fixes
+
+* **switchyard:** exclude the dispatcher's work root from the prompt instruments (SERV-243) ([#249](https://github.com/Einlanzerous/construct-server/issues/249)) ([647c36f](https://github.com/Einlanzerous/construct-server/commit/647c36fa0cc544fa8e8f922eb3d3af11161d79f6))
+
 ## [4.38.0](https://github.com/Einlanzerous/construct-server/compare/v4.37.1...v4.38.0) (2026-10-16)
 
 
