@@ -34,11 +34,14 @@ case "$1" in
 
   exec)
     shift
+    container="$1"
     [ "$1" = "${MOCK_MISSING_CONTAINER:-}" ] && exit 1
-    shift # container name — only MOCK_MISSING_CONTAINER is told apart
+    shift # container name — only MOCK_MISSING_CONTAINER and MOCK_NOTREADY_CONTAINER are told apart
     case "$1" in
       pg_isready)
         [ "${MOCK_PGISREADY_DOWN:-0}" = "1" ] && exit 1
+        [ "$container" = "${MOCK_NOTREADY_CONTAINER:-}" ] && exit 1
+        [ "$container" = "${MOCK_NOTREADY_CONTAINER:-}" ] && exit 1
         exit 0
         ;;
       pg_dump)

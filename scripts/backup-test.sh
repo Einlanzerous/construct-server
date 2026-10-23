@@ -552,7 +552,24 @@ assert_eq "state records the unavailable cluster" "$(state_get '.unavailable_clu
 unset MOCK_DB_LIST MOCK_MISSING_CONTAINER
 scenario_teardown
 
-head_ "T21c: with no cluster available at all the run still fails hard"
+# ─── T21c: a cluster that EXISTS but never becomes ready is skipped after the ─
+# ─── retry window while the healthy one is still backed up (SERV-245 review) ──
+head_ "T21c: an unready cluster is skipped after the retry window, the other is backed up"
+scenario_setup
+write_conf_two_clusters
+export MOCK_DB_LIST=$'a1\na2\nb1\nb2'
+export MOCK_NOTREADY_CONTAINER=mockpg2
+rc=0; run_backup || rc=$?
+assert_status "run exits non-zero (a cluster was skipped)" 1 "$rc"
+grep -q "continuing without it" "$SCRATCH/log" && ok "the retry window was exhausted, then the run continued" || bad "the retry window was exhausted, then the run continued"
+grep -q "cluster 'beta' UNAVAILABLE.*not accepting connections" "$SCRATCH/log" && ok "the unready cluster is named in the log" || bad "the unready cluster is named in the log"
+grep -q "alpha: dumped 'a1'" "$SCRATCH/log" && ok "alpha was dumped" || bad "alpha was dumped"
+assert_eq "preflight_failed_count untouched" "$(state_get '.preflight_failed_count')" "0"
+assert_eq "state records the unavailable cluster" "$(state_get '.unavailable_clusters | length')" "1"
+unset MOCK_DB_LIST MOCK_NOTREADY_CONTAINER
+scenario_teardown
+
+head_ "T21d: with no cluster available at all the run still fails hard"
 scenario_setup
 write_conf
 export MOCK_DB_LIST=$'alpha\nbeta\ngamma'

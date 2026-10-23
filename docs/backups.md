@@ -409,7 +409,7 @@ Two different kinds of check, deliberately not merged:
 - **Static** (wrong device, a `RESTIC_IMAGE` with no digest): fails
   immediately. Retrying a config file for 20 minutes helps nobody.
 - **Transient readiness** (docker, tailscale, and `pg_isready` on every
-  configured cluster): one bounded retry loop, stated maximum 20 minutes,
+  configured cluster that exists): one bounded retry loop, stated maximum 20 minutes,
   counted *inside* `TimeoutStartSec` — relevant mainly right after boot, since
   the timer carries `Persistent=true` (`ansible/roles/construct_backup`).
 
@@ -422,8 +422,11 @@ and the remaining clusters are dumped, snapshotted and fanned out as normal. The
 run then exits non-zero so the miss is loud. If *no* cluster is available, or
 docker/tailscale are unreachable, the run fails hard as before.
 
-Exhausting the retry loop exits non-zero and records `preflight_failed` in
-`state.json` — explicitly **not** a destination miss, and it touches no
+Exhausting the retry loop with the host unready (docker or tailscale), or with no
+cluster available, exits non-zero and records `preflight_failed` in
+`state.json`; exhausting it on one unready cluster while others are healthy
+does not — that cluster is skipped as above and `preflight_failed_count` is
+untouched. Either way it is explicitly **not** a destination miss, and it touches no
 destination's `consecutive_misses`.
 
 **The unit carries no systemd-level restart machinery at all** —
