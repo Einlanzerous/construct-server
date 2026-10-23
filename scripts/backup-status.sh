@@ -29,6 +29,7 @@ fi
 never() { [ "$1" = "null" ] && echo "never" || echo "$1"; }
 
 printf 'preflight_failed_count: %s\n' "$(jq -r '.preflight_failed_count' "$STATE_FILE")"
+printf 'unavailable_clusters:   %s\n' "$(jq -r '(.unavailable_clusters // []) | if length == 0 then "none" else join("; ") end' "$STATE_FILE")"
 printf 'hub.last_check_at:      %s\n' "$(never "$(jq -r '.hub.last_check_at' "$STATE_FILE")")"
 printf 'hub.last_readdata_at:   %s (cursor %s/12)\n' \
   "$(never "$(jq -r '.hub.last_readdata_at' "$STATE_FILE")")" \

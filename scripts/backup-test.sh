@@ -534,6 +534,35 @@ assert_status "second run, preflight now healthy, proceeds normally" 0 "$rc"
 unset MOCK_DB_LIST
 scenario_teardown
 
+# ─── T21b: one configured cluster that no longer exists (SERV-245) must be ──
+# ─── logged and skipped, not abort the run: the other cluster still gets ────
+# ─── dumped and snapshotted, and the run still exits non-zero ───────────────
+head_ "T21b: a missing cluster is skipped loudly while the others are backed up"
+scenario_setup
+write_conf_two_clusters
+export MOCK_DB_LIST=$'a1\na2\nb1\nb2'
+export MOCK_MISSING_CONTAINER=mockpg2
+rc=0; run_backup || rc=$?
+assert_status "run exits non-zero (a cluster was skipped)" 1 "$rc"
+grep -q "cluster 'beta' UNAVAILABLE" "$SCRATCH/log" && ok "the skipped cluster is named in the log" || bad "the skipped cluster is named in the log"
+grep -q "alpha: dumped 'a1'" "$SCRATCH/log" && ok "alpha was dumped" || bad "alpha was dumped"
+if grep -q "beta: dumped" "$SCRATCH/log"; then bad "beta must not be dumped"; else ok "beta was not attempted"; fi
+assert_eq "preflight did not burn its budget on a missing container" "$(state_get '.preflight_failed_count')" "0"
+assert_eq "state records the unavailable cluster" "$(state_get '.unavailable_clusters | length')" "1"
+unset MOCK_DB_LIST MOCK_MISSING_CONTAINER
+scenario_teardown
+
+head_ "T21c: with no cluster available at all the run still fails hard"
+scenario_setup
+write_conf
+export MOCK_DB_LIST=$'alpha\nbeta\ngamma'
+export MOCK_MISSING_CONTAINER=mockpg
+rc=0; run_backup || rc=$?
+assert_status "run fails" 1 "$rc"
+assert_eq "counted as a preflight failure" "$(state_get '.preflight_failed_count')" "1"
+unset MOCK_DB_LIST MOCK_MISSING_CONTAINER
+scenario_teardown
+
 # ─── T22: a credential file that isn't 0600 is refused, not trusted ───────
 # ─── (signet render does not enforce this itself — measured, not assumed) ──
 head_ "T22: backup.env at the wrong mode is refused before it's ever sourced"

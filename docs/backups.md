@@ -36,13 +36,18 @@ backup.
 
 ## What gets backed up
 
-Two Postgres clusters, each backed up from its own container so client/server
-version skew is structurally impossible:
+One Postgres cluster today, backed up from its own container so client/server
+version skew is structurally impossible (a cluster is a config entry, so more can be added):
 
 | Cluster | Container | Admin role | Notes |
 |---|---|---|---|
 | `shared` | `postgres` | `postgres` (default) | This stack's own cluster — 15 real service databases plus scratch/test copies. |
-| `argosy` | `argosy-db-1` | `argosy` | A second, separately-busy PG17 cluster in the `argosy` compose project (`~/projects/argosy/deploy`). In scope per SERV-43's plan ruling ("a cluster is a config entry"). |
+
+> **`argosy` is no longer a separate cluster** (SERV-245). The standalone
+> `argosy-db-1` project was retired and the stack's `argosy` service uses the
+> shared cluster, so its entry and floor were dropped. The stale entry had
+> failed every run from 2026-10-17 for a week, because an unreachable cluster
+> aborted preflight before any dump.
 
 **The admin role is per-cluster config, not a constant** — found by the smoke
 test (2026-09-26), not assumed: the official postgres image's initdb creates
@@ -407,6 +412,15 @@ Two different kinds of check, deliberately not merged:
   configured cluster): one bounded retry loop, stated maximum 20 minutes,
   counted *inside* `TimeoutStartSec` — relevant mainly right after boot, since
   the timer carries `Persistent=true` (`ansible/roles/construct_backup`).
+
+**An unavailable cluster is a recorded miss, not a preflight abort** (SERV-245).
+A configured cluster whose container does not exist is skipped without waiting
+(no wait can create it); one that exists but is not ready gets the retry window
+and is then skipped. Each skip is logged (`cluster '<label>' UNAVAILABLE`),
+written to `state.json` as `unavailable_clusters` (shown by `backup-status.sh`),
+and the remaining clusters are dumped, snapshotted and fanned out as normal. The
+run then exits non-zero so the miss is loud. If *no* cluster is available, or
+docker/tailscale are unreachable, the run fails hard as before.
 
 Exhausting the retry loop exits non-zero and records `preflight_failed` in
 `state.json` — explicitly **not** a destination miss, and it touches no

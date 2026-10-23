@@ -19,6 +19,12 @@ case "$1" in
     fi
     ;;
 
+  container)
+    # docker container inspect <name>
+    [ "${3:-}" = "${MOCK_MISSING_CONTAINER:-}" ] && exit 1
+    exit 0
+    ;;
+
   rm)
     # docker rm -f <name> — always a no-op success; run_restic calls this
     # unconditionally before and after every restic invocation.
@@ -28,7 +34,8 @@ case "$1" in
 
   exec)
     shift
-    shift # container name — the mock doesn't distinguish between clusters
+    [ "$1" = "${MOCK_MISSING_CONTAINER:-}" ] && exit 1
+    shift # container name — only MOCK_MISSING_CONTAINER is told apart
     case "$1" in
       pg_isready)
         [ "${MOCK_PGISREADY_DOWN:-0}" = "1" ] && exit 1
