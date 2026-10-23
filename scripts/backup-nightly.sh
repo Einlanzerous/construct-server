@@ -164,20 +164,41 @@ admin_user_for_label() {
   printf '%s' "${!var:-postgres}"
 }
 
-# One readiness probe. Echoes a reason on failure, prints nothing on success.
-preflight_probe() {
+# Host-wide readiness: without docker or tailscale nothing can be dumped or
+# shipped, so this stays fatal. Echoes a reason on failure.
+preflight_host_probe() {
   docker info >/dev/null 2>&1 || { echo "docker not reachable"; return 1; }
   tailscale status >/dev/null 2>&1 || { echo "tailscale not reachable"; return 1; }
-  local entry container label admin_user
+  return 0
+}
+
+# cluster_exists <container> — a container that does not exist is not "not up
+# yet": no amount of waiting creates it (SERV-245: argosy-db-1 was removed and
+# every night then burned the whole preflight budget on it). A stopped
+# container does exist, so a post-boot cluster still gets the retry window.
+cluster_exists() { docker container inspect "$1" >/dev/null 2>&1; }
+
+cluster_ready() { # <container> <label>
+  docker exec "$1" pg_isready -U "$(admin_user_for_label "$2")" >/dev/null 2>&1
+}
+
+# One readiness probe. Echoes a reason on failure, prints nothing on success.
+# Clusters that do not exist are skipped here — select_clusters accounts for them.
+preflight_probe() {
+  preflight_host_probe || return 1
+  local entry container label
   for entry in "${BACKUP_CLUSTERS[@]}"; do
     container="${entry%%:*}"; label="${entry#*:}"
-    admin_user="$(admin_user_for_label "$label")"
-    docker exec "$container" pg_isready -U "$admin_user" >/dev/null 2>&1 \
+    cluster_exists "$container" || continue
+    cluster_ready "$container" "$label" \
       || { echo "$container: pg_isready failing"; return 1; }
   done
   return 0
 }
 
+# Waits for the host and every EXISTING cluster. Exhaustion is fatal only when
+# the host itself is unready; an unready cluster is left to select_clusters to
+# record and skip, so one bad cluster cannot take the others' backups with it.
 preflight_retry_loop() {
   local deadline reason
   deadline=$(( $(date +%s) + BACKUP_PREFLIGHT_MAX_SEC ))
@@ -186,12 +207,47 @@ preflight_retry_loop() {
       return 0
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
+      if preflight_host_probe >/dev/null; then
+        err "preflight: exhausted ${BACKUP_PREFLIGHT_MAX_SEC}s waiting on: $reason — continuing without it"
+        return 0
+      fi
       err "preflight: exhausted ${BACKUP_PREFLIGHT_MAX_SEC}s waiting on: $reason"
       state_update '.preflight_failed_count += 1'
       return 1
     fi
     sleep 10
   done
+}
+
+ACTIVE_CLUSTERS=()       # "container:label" entries that will be backed up tonight
+UNAVAILABLE_CLUSTERS=()  # "label (reason)" for each configured cluster that cannot be
+
+# select_clusters — partitions BACKUP_CLUSTERS into the ones we can back up
+# tonight and the ones we cannot, LOGGING each one it drops. A missing cluster
+# used to abort the whole run before any dump (SERV-245: seven nights with no
+# backup of anything); now it is a recorded miss — loud in the log, in
+# state.json and in the final exit status — while the rest are still dumped.
+# If nothing at all is backable, that is still a hard failure.
+select_clusters() {
+  local entry container label reason
+  for entry in "${BACKUP_CLUSTERS[@]}"; do
+    container="${entry%%:*}"; label="${entry#*:}"
+    if ! cluster_exists "$container"; then
+      reason="container '$container' does not exist"
+    elif ! cluster_ready "$container" "$label"; then
+      reason="container '$container' not accepting connections"
+    else
+      ACTIVE_CLUSTERS+=("$entry")
+      continue
+    fi
+    err "cluster '$label' UNAVAILABLE, skipping its backup: $reason"
+    UNAVAILABLE_CLUSTERS+=("$label ($reason)")
+  done
+  state_update ".unavailable_clusters = $(print_lines "${UNAVAILABLE_CLUSTERS[@]}" | jq -R . | jq -sc .)"
+  if [ "${#ACTIVE_CLUSTERS[@]}" -eq 0 ]; then
+    state_update '.preflight_failed_count += 1'
+    die "no configured cluster is available to back up: ${UNAVAILABLE_CLUSTERS[*]}"
+  fi
 }
 
 # ─── staging ─────────────────────────────────────────────────────────────────
@@ -873,11 +929,12 @@ cmd_run() {
   # this: `jq` exits 2, and the move still lands a 0-byte file.
   state_init_if_missing
   preflight_retry_loop || exit 1
+  select_clusters
 
   staging_setup
 
   local entry container label
-  for entry in "${BACKUP_CLUSTERS[@]}"; do
+  for entry in "${ACTIVE_CLUSTERS[@]}"; do
     container="${entry%%:*}"; label="${entry#*:}"
     dump_cluster "$container" "$label"
     hub_backup_cluster "$label"
@@ -886,11 +943,11 @@ cmd_run() {
   hub_retain
   hub_integrity
 
-  # Every configured cluster's label, passed to each destination as a whole
+  # Every backed-up cluster's label, passed to each destination as a whole
   # so one destination gets one attempt and one miss/success per NIGHT —
   # never one per (cluster × destination) pair. See fanout_destination.
   local -a all_labels=()
-  for entry in "${BACKUP_CLUSTERS[@]}"; do
+  for entry in "${ACTIVE_CLUSTERS[@]}"; do
     all_labels+=("${entry#*:}")
   done
   local dest
@@ -901,6 +958,9 @@ cmd_run() {
 
   if [ "$ANY_DUMP_FAILED" -eq 1 ]; then
     die "one or more databases failed to dump: ${FAILED_DATABASES[*]}"
+  fi
+  if [ "${#UNAVAILABLE_CLUSTERS[@]}" -gt 0 ]; then
+    die "backed up the available clusters, but these were skipped: ${UNAVAILABLE_CLUSTERS[*]}"
   fi
   if [ "$ANY_THRESHOLD_TRIPPED" -eq 1 ]; then
     die "a destination crossed its consecutive-miss threshold"
