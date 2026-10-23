@@ -1,6 +1,6 @@
 # Changelog
 
-## [4.39.0](https://github.com/Einlanzerous/construct-server/compare/v4.38.0...v4.39.0) (2026-10-21)
+## [4.39.0](https://github.com/Einlanzerous/construct-server/compare/v4.38.0...v4.39.0) (2026-10-23)
 
 
 ### Features
@@ -12,6 +12,7 @@
 
 ### Bug Fixes
 
+* **backup:** skip an unavailable cluster instead of aborting the run (SERV-245) ([#254](https://github.com/Einlanzerous/construct-server/issues/254)) ([6d8da53](https://github.com/Einlanzerous/construct-server/commit/6d8da5376a347259d83375393764e9ba0e95373c))
 * **switchyard:** exclude the dispatcher's work root from the prompt instruments (SERV-243) ([#249](https://github.com/Einlanzerous/construct-server/issues/249)) ([647c36f](https://github.com/Einlanzerous/construct-server/commit/647c36fa0cc544fa8e8f922eb3d3af11161d79f6))
 
 ## [4.38.0](https://github.com/Einlanzerous/construct-server/compare/v4.37.1...v4.38.0) (2026-10-16)
