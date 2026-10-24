@@ -1,0 +1,462 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Construct server — system map",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "viewBox": [
+      1240,
+      680
+    ],
+    "repository": {
+      "url": "https://github.com/Einlanzerous/construct-server",
+      "revision": "463f162fd7d8704ea7b91de5e2313464ca2963e3"
+    },
+    "views": [
+      {
+        "id": "tunneled-path",
+        "label": "A tunneled request",
+        "focus": [
+          "people",
+          "cloudflare",
+          "traefik",
+          "guard",
+          "services"
+        ],
+        "note": "Access at the Cloudflare edge, the tunnel into the unpublished internal entrypoint, then the origin re-verifies the JWT."
+      },
+      {
+        "id": "public-path",
+        "label": "The open WAN path",
+        "focus": [
+          "people",
+          "traefik",
+          "crowdsec",
+          "services"
+        ],
+        "note": "Only the public entrypoint is published. It serves a short allowlist of direct routers behind CrowdSec and denies everything else."
+      },
+      {
+        "id": "delivery",
+        "label": "How the stack is delivered",
+        "focus": [
+          "signet",
+          "deploy",
+          "services",
+          "wiki"
+        ],
+        "note": "Signet renders the env secret, deploy.yml merges it with the image pins and brings the stack up, and the wiki publishes beside it."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "people",
+      "type": "external",
+      "label": "People",
+      "sublabel": "browsers · apps",
+      "pos": [
+        20,
+        165
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "cloudflare",
+      "type": "security",
+      "label": "Cloudflare Access + tunnel",
+      "sublabel": "SSO at the edge · connector dials out",
+      "tag": "tunneled hosts only",
+      "pos": [
+        470,
+        60
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 2353,
+          "end_line": 2391,
+          "label": "cloudflared"
+        }
+      ]
+    },
+    {
+      "id": "guard",
+      "type": "security",
+      "label": "cf-access-guard",
+      "sublabel": "forwardAuth · Access JWT per host",
+      "tag": "fails closed",
+      "pos": [
+        760,
+        60
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "services/cf-access-guard/main.go",
+          "line": 149,
+          "label": "/verify"
+        },
+        {
+          "path": "pkg/cfaccess/cfaccess.go",
+          "label": "shared verifier"
+        },
+        {
+          "path": "docker-compose.yml",
+          "line": 2260,
+          "end_line": 2320,
+          "label": "compose service"
+        }
+      ]
+    },
+    {
+      "id": "traefik",
+      "type": "backend",
+      "label": "Traefik edge",
+      "sublabel": "internal + public entrypoints",
+      "tag": "on both networks",
+      "pos": [
+        470,
+        270
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "sources": [
+        {
+          "path": "config/traefik/traefik.yml",
+          "line": 50,
+          "label": "entrypoints"
+        },
+        {
+          "path": "config/traefik/dynamic/routers.yml",
+          "line": 149,
+          "label": "forwardAuth"
+        },
+        {
+          "path": "docker-compose.yml",
+          "line": 2178,
+          "end_line": 2229,
+          "label": "compose service"
+        }
+      ]
+    },
+    {
+      "id": "crowdsec",
+      "type": "security",
+      "label": "CrowdSec",
+      "sublabel": "bouncer on public routers only",
+      "pos": [
+        230,
+        420
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "config/crowdsec/acquis.yaml"
+        },
+        {
+          "path": "config/traefik/dynamic/routers.yml",
+          "line": 171,
+          "label": "bouncer middleware"
+        }
+      ]
+    },
+    {
+      "id": "services",
+      "type": "backend",
+      "label": "First-party services",
+      "sublabel": "Switchyard · Argosy · Lyceum · Purser…",
+      "tag": "one image pin each",
+      "pos": [
+        770,
+        380
+      ],
+      "size": [
+        230,
+        72
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 451,
+          "end_line": 487,
+          "label": "switchyard"
+        },
+        {
+          "path": "versions.env",
+          "label": "image pins"
+        }
+      ]
+    },
+    {
+      "id": "trestle",
+      "type": "backend",
+      "label": "Trestle",
+      "sublabel": "public media host for screenshots",
+      "pos": [
+        770,
+        270
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 1879,
+          "end_line": 1925,
+          "label": "compose service"
+        }
+      ]
+    },
+    {
+      "id": "wiki",
+      "type": "frontend",
+      "label": "Estate wiki",
+      "sublabel": "generated site · nginx",
+      "pos": [
+        480,
+        430
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 1717,
+          "end_line": 1726,
+          "label": "nginx service"
+        },
+        {
+          "path": "wiki/generate/index.ts",
+          "label": "generator"
+        }
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "Shared Postgres",
+      "sublabel": "role + db per service",
+      "pos": [
+        1050,
+        384
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 296,
+          "end_line": 377,
+          "label": "compose service"
+        },
+        {
+          "path": "db/init-db.sh",
+          "label": "idempotent bootstrap"
+        }
+      ]
+    },
+    {
+      "id": "ollama",
+      "type": "backend",
+      "label": "Shared Ollama",
+      "sublabel": "local models on the GPU",
+      "pos": [
+        1050,
+        270
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 59,
+          "end_line": 86,
+          "label": "compose service"
+        }
+      ]
+    },
+    {
+      "id": "signet",
+      "type": "security",
+      "label": "Signet",
+      "sublabel": "host daemon · renders env",
+      "tag": "outside construct_net",
+      "pos": [
+        1040,
+        580
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": ".github/workflows/deploy-signet.yml"
+        },
+        {
+          "path": "scripts/render-env.sh"
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "type": "external",
+      "label": "GitHub Actions",
+      "sublabel": "self-hosted runner · deploy.yml",
+      "pos": [
+        795,
+        580
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": ".github/workflows/deploy.yml",
+          "line": 195,
+          "label": "render .env, then up"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "people-to-cloudflare",
+      "from": "people",
+      "to": "cloudflare",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cloudflare-to-traefik",
+      "from": "cloudflare",
+      "to": "traefik",
+      "label": "tunnel → internal",
+      "variant": "security",
+      "labelAt": [
+        565,
+        190
+      ]
+    },
+    {
+      "id": "traefik-to-guard",
+      "from": "traefik",
+      "to": "guard",
+      "label": "forwardAuth /verify",
+      "variant": "security"
+    },
+    {
+      "id": "people-to-traefik",
+      "from": "people",
+      "to": "traefik",
+      "label": "WAN 443 → public",
+      "variant": "dashed"
+    },
+    {
+      "id": "crowdsec-to-traefik",
+      "from": "crowdsec",
+      "to": "traefik",
+      "label": "ban decisions",
+      "variant": "security"
+    },
+    {
+      "id": "traefik-to-services",
+      "from": "traefik",
+      "to": "services",
+      "label": "routes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "traefik-to-trestle",
+      "from": "traefik",
+      "to": "trestle",
+      "label": "media",
+      "labelDx": 24
+    },
+    {
+      "id": "traefik-to-wiki",
+      "from": "traefik",
+      "to": "wiki",
+      "label": "static site",
+      "labelAt": [
+        565,
+        372
+      ]
+    },
+    {
+      "id": "services-to-postgres",
+      "from": "services",
+      "to": "postgres",
+      "label": "SQL",
+      "labelDy": 16
+    },
+    {
+      "id": "services-to-ollama",
+      "from": "services",
+      "to": "ollama",
+      "label": "HTTP inference"
+    },
+    {
+      "id": "signet-to-deploy",
+      "from": "signet",
+      "to": "deploy",
+      "label": "env secret"
+    },
+    {
+      "id": "deploy-to-services",
+      "from": "deploy",
+      "to": "services",
+      "label": "pull + recreate",
+      "variant": "emphasis"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "construct_edge_net — the tunnel leg",
+      "wraps": [
+        "cloudflare",
+        "guard"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "construct_net — the shared service network",
+      "wraps": [
+        "traefik",
+        "crowdsec",
+        "services",
+        "trestle",
+        "wiki",
+        "postgres",
+        "ollama"
+      ]
+    }
+  ]
+}
