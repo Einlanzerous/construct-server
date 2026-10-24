@@ -86,7 +86,7 @@ services:
 
   # --- WEB UI (Open WebUI) ---
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main@sha256:6a773e5c3a246b65cbe74ce942b294292c0e5f81c138f703d111bc162f7d7c3d
+    image: ghcr.io/open-webui/open-webui:0.12.3@sha256:a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def
     container_name: open-webui
     restart: unless-stopped
     ports:
