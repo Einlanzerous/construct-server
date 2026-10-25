@@ -83,7 +83,7 @@
         {
           "path": "docker-compose.yml",
           "line": 2353,
-          "end_line": 2391,
+          "end_line": 2388,
           "label": "cloudflared"
         }
       ]
@@ -182,7 +182,7 @@
       "type": "backend",
       "label": "First-party services",
       "sublabel": "Switchyard · Argosy · Lyceum · Purser…",
-      "tag": "one image pin each",
+      "tag": "one pin per repo",
       "pos": [
         770,
         380
@@ -317,9 +317,6 @@
       "sources": [
         {
           "path": ".github/workflows/deploy-signet.yml"
-        },
-        {
-          "path": "scripts/render-env.sh"
         }
       ]
     },
@@ -341,6 +338,10 @@
           "path": ".github/workflows/deploy.yml",
           "line": 195,
           "label": "render .env, then up"
+        },
+        {
+          "path": "scripts/render-env.sh",
+          "label": "merge the secret with versions.env"
         }
       ]
     }

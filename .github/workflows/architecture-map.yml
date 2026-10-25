@@ -15,9 +15,9 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
+      # Depth 1 on purpose: the script fetches the pinned commit by SHA itself,
+      # so the full history is never needed here.
       # Parses docs/architecture.archify.json and verifies every source path and line
       # range against the pinned commit. A stale pin only warns; a path or line that
       # no longer exists at the pin fails the job.

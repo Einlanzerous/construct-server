@@ -40,13 +40,20 @@
 set -u
 
 IR="docs/architecture.archify.json"
-SLUG="einlanzerous/construct-server"   # e.g. einlanzerous/argosy — lower-case owner/name
+SLUG="einlanzerous/construct-server"   # lower-case owner/name
 # archify's architecture schema caps `sources` at three per component
 # (`maxItems: 3`, vendored archify 2.16.0). The schema runs before anything
 # else, so a fourth source is not a warning: the wiki refuses to render the
-# whole map (SWY-470). Restated here rather than read from the schema, which
-# lives in construct-server; if archify moves the cap, move this with it.
+# whole map (SWY-470). The schema is vendored in construct-server, so a
+# checkout that carries it reads the cap from the file and cannot drift from a
+# vendor bump; every other repo restates it here. If archify moves the cap,
+# move the constant with it.
 MAX_SOURCES_PER_COMPONENT=3
+schema="wiki/vendor/archify/schemas/architecture.schema.json"
+if [ -f "$schema" ] && command -v jq >/dev/null 2>&1; then
+  cap=$(jq -r '.properties.components.items.properties.sources.maxItems // empty' "$schema" 2>/dev/null)
+  case "$cap" in '' | *[!0-9]*) ;; *) MAX_SOURCES_PER_COMPONENT=$cap ;; esac
+fi
 
 errors=()
 drift=()
@@ -152,10 +159,12 @@ while IFS=$'\t' read -r component path line end_line; do
   if [ "$(git cat-file -t "$pin:$path" 2>/dev/null)" != "blob" ]; then
     errors+=("$where, which is not a file at the pinned commit $short. The map will not render.")
   elif [ -n "$line" ]; then
-    if ! blob=$(git show "$pin:$path" 2>/dev/null); then
+    # Piped straight into awk, never captured first: `$(…)` strips every
+    # trailing newline, so a file ending in blank lines would be undercounted
+    # and a citation into those lines reported as out of range.
+    if ! lines=$(set -o pipefail; git show "$pin:$path" 2>/dev/null | count_lines); then
       errors+=("$where, which could not be read at $short.")
     else
-      lines=$(printf '%s' "$blob" | count_lines)
       wanted=${end_line:-$line}
       if [ "$wanted" -gt "$lines" ]; then
         errors+=("$where:$line${end_line:+-$end_line}, but that file has $lines lines at $short.")
