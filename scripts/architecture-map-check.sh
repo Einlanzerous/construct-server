@@ -158,6 +158,15 @@ fi
 # is exactly that count.
 count_lines() { awk 'END { print NR }'; }
 
+# Captured first and checked, never read through a process substitution: bash
+# does not see the exit status of `< <(jq …)`, so a jq error partway through
+# the stream (a non-string path, say) would leave every later reference
+# unchecked and the summary saying "in sync".
+if ! refs=$(jq -r '.components[]? | .id as $c | (.sources // [])[] | [$c, (.path // ""), (.line // "" | tostring), (.end_line // "" | tostring)] | join("\u001f")' "$IR"); then
+  annotate error "$IR has a source jq cannot read (a path or line that is not a string or number?); the map will not render."
+  exit 1
+fi
+
 count=0
 # Fields are separated by US (0x1f), not a tab: `read` treats a tab as
 # whitespace and merges consecutive ones, so an absent field would shift the
@@ -181,6 +190,12 @@ while IFS=$'\x1f' read -r component path line end_line; do
     # a path that never did, so the drift check below is skipped for it.
     continue
   elif [ -n "$line" ]; then
+    # `-gt` on a non-integer is a bash error that adds nothing to errors[], so
+    # the shape is checked first: positive integers, end_line optional.
+    if ! [[ $line =~ ^[1-9][0-9]*$ ]] || { [ -n "$end_line" ] && ! [[ $end_line =~ ^[1-9][0-9]*$ ]]; }; then
+      errors+=("$where:$line${end_line:+-$end_line}, which is not a positive-integer line range. The map will not render.")
+      continue
+    fi
     # Piped straight into awk, never captured first: `$(…)` strips every
     # trailing newline, so a file ending in blank lines would be undercounted
     # and a citation into those lines reported as out of range.
@@ -209,7 +224,7 @@ while IFS=$'\x1f' read -r component path line end_line; do
       case ", ${drift_by[$path]}, " in *", $component, "*) ;; *) drift_by[$path]+=", $component" ;; esac
     fi
   fi
-done < <(jq -r '.components[]? | .id as $c | (.sources // [])[] | [$c, (.path // ""), (.line // "" | tostring), (.end_line // "" | tostring)] | join("\u001f")' "$IR")
+done <<<"$refs"
 
 if [ "$count" -eq 0 ]; then
   annotate error "no component carries sources[] — archify refuses a map that pins a revision and cites nothing."
