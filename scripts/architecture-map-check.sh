@@ -56,7 +56,13 @@ if [ -f "$schema" ] && command -v jq >/dev/null 2>&1; then
 fi
 
 errors=()
-drift=()
+# Drift is reported per FILE, not per reference: a map cites one file from
+# several components (four of signet's 18 references point into main.go), and
+# counting references would call one edited file four changed files.
+drift_paths=()          # drifted paths, first-cited order
+declare -A drift_how=() # path -> what happened to it
+declare -A drift_by=()  # path -> the components that cite it, comma-joined
+declare -A cited=()     # every cited path, so the summary counts files
 
 # GitHub Actions annotations when running there, plain lines otherwise.
 annotate() {
@@ -153,6 +159,7 @@ count=0
 while IFS=$'\t' read -r component path line end_line; do
   [ -n "$component" ] || continue
   count=$((count + 1))
+  cited[$path]=1
   where="component \"$component\" cites $path"
 
   # Would archify render this at all? Everything here is an ERROR.
@@ -176,11 +183,19 @@ while IFS=$'\t' read -r component path line end_line; do
   fi
 
   # Has the cited code moved on since the pin? Everything here is DRIFT.
+  how=""
   if [ ! -e "$path" ]; then
-    drift+=("$path no longer exists (cited by \"$component\") — the map still links to it at the pin.")
+    how="no longer exists — the map still links to it at the pin"
   elif ! git diff --quiet "$pin" HEAD -- "$path" 2>/dev/null; then
     stat=$(git diff --shortstat "$pin" HEAD -- "$path" 2>/dev/null)
-    drift+=("$path has changed since the pin ($component)${stat:+ —$stat}.")
+    how="has changed since the pin${stat:+ —$stat}"
+  fi
+  if [ -n "$how" ]; then
+    if [ -z "${drift_how[$path]:-}" ]; then
+      drift_paths+=("$path"); drift_how[$path]=$how; drift_by[$path]=$component
+    else
+      case ", ${drift_by[$path]}, " in *", $component, "*) ;; *) drift_by[$path]+=", $component" ;; esac
+    fi
   fi
 done < <(jq -r '.components[]? | .id as $c | (.sources // [])[] | [$c, .path, (.line // "" | tostring), (.end_line // "" | tostring)] | @tsv' "$IR")
 
@@ -192,14 +207,14 @@ fi
 echo "architecture-map: $count source reference(s) checked against $short"
 for e in "${errors[@]}"; do annotate error "$e"; done
 
-if [ "${#drift[@]}" -gt 0 ]; then
-  msg="the system map is stale: ${#drift[@]} of $count cited file(s) have changed since $short."
-  for d in "${drift[@]}"; do msg+=$'\n'"  - $d"; done
+if [ "${#drift_paths[@]}" -gt 0 ]; then
+  msg="the system map is stale: ${#drift_paths[@]} of ${#cited[@]} cited file(s) have changed since $short ($count references)."
+  for p in "${drift_paths[@]}"; do msg+=$'\n'"  - $p ${drift_how[$p]} (cited by ${drift_by[$p]})."; done
   msg+=$'\n'"Re-read the map, update it where the shape actually changed, and re-pin meta.repository.revision to the merge commit."
   annotate warning "$msg"
 fi
 
-if [ "${#errors[@]}" -eq 0 ] && [ "${#drift[@]}" -eq 0 ]; then
+if [ "${#errors[@]}" -eq 0 ] && [ "${#drift_paths[@]}" -eq 0 ]; then
   echo "architecture-map: in sync with the pinned commit"
 fi
 
