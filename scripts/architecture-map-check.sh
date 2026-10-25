@@ -158,6 +158,9 @@ while IFS=$'\t' read -r component path line end_line; do
   # Would archify render this at all? Everything here is an ERROR.
   if [ "$(git cat-file -t "$pin:$path" 2>/dev/null)" != "blob" ]; then
     errors+=("$where, which is not a file at the pinned commit $short. The map will not render.")
+    # Already an error; saying it also "no longer exists" would be false for
+    # a path that never did, so the drift check below is skipped for it.
+    continue
   elif [ -n "$line" ]; then
     # Piped straight into awk, never captured first: `$(…)` strips every
     # trailing newline, so a file ending in blank lines would be undercounted
