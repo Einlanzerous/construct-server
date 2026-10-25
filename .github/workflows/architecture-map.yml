@@ -1,0 +1,25 @@
+name: Architecture map
+
+# No path filter on purpose: drift detection is the point, and a filter on the
+# map file would silence exactly the pushes that make its pin stale.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Check the architecture map
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Depth 1 on purpose: the script fetches the pinned commit by SHA itself,
+      # so the full history is never needed here.
+      # Parses docs/architecture.archify.json and verifies every source path and line
+      # range against the pinned commit. A stale pin only warns; a path or line that
+      # no longer exists at the pin fails the job.
+      - name: Architecture map is renderable, and say if it has gone stale (SERV-159)
+        run: scripts/architecture-map-check.sh
