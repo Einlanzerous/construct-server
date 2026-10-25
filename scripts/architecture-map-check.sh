@@ -14,9 +14,12 @@
 # The pin is the whole point AND the whole problem. It is what keeps the links
 # honest; it is also what lets the map go quietly stale, because nothing about
 # editing a cited file reminds anyone that a diagram somewhere describes it.
-# This is that reminder. It is a shell port of switchyard's
-# scripts/architecture-map-check.ts, kept behaviour-for-behaviour so the two
-# stay one check; change them together.
+# This is that reminder. It began as a shell port of switchyard's
+# scripts/architecture-map-check.ts and is the estate's shared copy: identical
+# in every repo apart from SLUG, so a fix lands in all of them at once. It has
+# moved ahead of the TS on two points — a path missing at the pin is an error
+# only and never also drift, and drift is reported per cited file rather than
+# per reference. Port both back to the TS when it is next touched.
 #
 # TWO CLASSES OF FINDING, and the split is deliberate:
 #
@@ -156,9 +159,18 @@ fi
 count_lines() { awk 'END { print NR }'; }
 
 count=0
-while IFS=$'\t' read -r component path line end_line; do
+# Fields are separated by US (0x1f), not a tab: `read` treats a tab as
+# whitespace and merges consecutive ones, so an absent field would shift the
+# columns and a missing path would be read as whatever came next.
+while IFS=$'\x1f' read -r component path line end_line; do
   [ -n "$component" ] || continue
   count=$((count + 1))
+  if [ -z "$path" ]; then
+    # Checked before any use of $path: an empty associative-array subscript is
+    # a bash error that ends the whole loop and would leave the rest unchecked.
+    errors+=("component \"$component\" has a source with no path. The map will not render.")
+    continue
+  fi
   cited[$path]=1
   where="component \"$component\" cites $path"
 
@@ -197,7 +209,7 @@ while IFS=$'\t' read -r component path line end_line; do
       case ", ${drift_by[$path]}, " in *", $component, "*) ;; *) drift_by[$path]+=", $component" ;; esac
     fi
   fi
-done < <(jq -r '.components[]? | .id as $c | (.sources // [])[] | [$c, .path, (.line // "" | tostring), (.end_line // "" | tostring)] | @tsv' "$IR")
+done < <(jq -r '.components[]? | .id as $c | (.sources // [])[] | [$c, (.path // ""), (.line // "" | tostring), (.end_line // "" | tostring)] | join("\u001f")' "$IR")
 
 if [ "$count" -eq 0 ]; then
   annotate error "no component carries sources[] — archify refuses a map that pins a revision and cites nothing."
