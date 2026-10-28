@@ -2092,7 +2092,7 @@ services:
       - EIDO_TTS_VOICE=/opt/piper/${EIDO_TTS_VOICE_NAME:-en_US-libritts_r-medium.onnx}
       - EIDO_TTS_RATE=${EIDO_TTS_RATE:-0.9}
       - EIDO_TTS_SPEAKER=${EIDO_TTS_SPEAKER:-0}
-      # Fast path for plain weather/agenda asks, no LLM call (EIDO-60). Needs eidolon >= 0.4.0. Agenda stays on the full loop until calendar feeds are configured (project-eidolon#37).
+      # Fast path for plain weather/agenda asks, no LLM call (EIDO-60). Needs eidolon >= 0.4.1: from there agenda stays on the full loop until calendar feeds are configured (project-eidolon#37); 0.4.0 would speak the stub calendar.
       - EIDO_ROUTER_ENABLED=1
     volumes:
       # The piper bundle (binary + voices, ~hundreds of MB) is a host artifact,
