@@ -2094,6 +2094,9 @@ services:
       - EIDO_TTS_SPEAKER=${EIDO_TTS_SPEAKER:-0}
       # Fast path for plain weather/agenda asks, no LLM call (EIDO-60). Needs eidolon >= 0.4.1: from there agenda stays on the full loop until calendar feeds are configured (project-eidolon#37); 0.4.0 would speak the stub calendar.
       - EIDO_ROUTER_ENABLED=1
+      # The private ICS feeds (calendars.json, base64), Signet-rendered; the URLs are
+      # capability links. Needs eidolon >= 0.5.0; an older image ignores it (EIDO-66).
+      - EIDO_CALENDAR_FEEDS_B64=${EIDO_CALENDAR_FEEDS_B64}
     volumes:
       # The piper bundle (binary + voices, ~hundreds of MB) is a host artifact,
       # never baked into the image. ABSOLUTE default for the same reason asr's
