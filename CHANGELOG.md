@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.40.0](https://github.com/Einlanzerous/construct-server/compare/v4.39.0...v4.40.0) (2026-10-28)
+
+
+### Features
+
+* **eidolon:** enable the router fast path (EIDO-60) ([#258](https://github.com/Einlanzerous/construct-server/issues/258)) ([6065694](https://github.com/Einlanzerous/construct-server/commit/60656944d7579a1e8aec969c9398837753184e4f))
+
+
+### Bug Fixes
+
+* **eidolon:** deliver the private ICS feeds from Signet (EIDO-66) ([#259](https://github.com/Einlanzerous/construct-server/issues/259)) ([8e23b3f](https://github.com/Einlanzerous/construct-server/commit/8e23b3f11dd300d759414112f20ec3890d550970))
+
 ## [4.39.0](https://github.com/Einlanzerous/construct-server/compare/v4.38.0...v4.39.0) (2026-10-21)
 
 
