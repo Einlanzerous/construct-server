@@ -444,9 +444,10 @@ anything deploys or gets versioned.
   pulls and recreates only the services behind the pins that actually moved, `--no-deps`.
   **Every other deploy still pulls the whole stack**, deliberately: that is where the patch
   float is supposed to land. Three things this does *not* bound, and do not write that it
-  does: four of the thirteen pins cover more than one service and recreate together —
+  does: five of the thirteen pins cover more than one service and recreate together —
   `SWITCHYARD_TAG` covers **three** (backend, frontend and `switchyard-mcp`, SERV-99),
-  while `APERTURE_TAG`, `CENTRIFUGE_TAG` and `INTERLOCK_TAG` (web + worker) cover two
+  while `APERTURE_TAG`, `CENTRIFUGE_TAG` and `INTERLOCK_TAG` (web + worker) and
+  `CATENARY_TAG` (`catenary` + the one-shot `catenary-media-init`, SERV-244) cover two
   each; the pin is still major.minor, so rolling back to `0.13` gets
   the newest `0.13` patch and **not necessarily the image prod ran the last time it was on
   `0.13`**; and a version bump merged inside a larger PR is not a pure pin change, so it

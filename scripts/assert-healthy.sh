@@ -214,6 +214,12 @@ while read -r id name state health streak probes; do
   # Not running beats any health verdict: an exited container has a stale health status
   # from before it died, and reporting that would be worse than saying nothing.
   if [ "$state" != "running" ]; then
+    # A declared one-shot (label `construct.oneshot=true`) that exited 0 did its job and
+    # is SUPPOSED to be exited (SERV-244's catenary-media-init). Anything else exited —
+    # including a one-shot that exited non-zero — is still down.
+    if [ "$state" = "exited" ] && [ "$(docker inspect -f '{{.State.ExitCode}} {{index .Config.Labels "construct.oneshot"}}' "$id" 2>/dev/null)" = "0 true" ]; then
+      continue
+    fi
     down="$down $name"; down_state["$name"]="$state"; unhealthy_id["$name"]="$id"
     continue
   fi

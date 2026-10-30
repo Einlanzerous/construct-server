@@ -80,6 +80,7 @@ PURSER_CF_ACCESS_GROUP_ID
 
 # --- catenary (provisioning listener consumed by purser, CANT-131 / SERV-202) ---
 CATENARY_PROVISION_TOKEN
+CATENARY_MEDIA_URL_KEYS
 
 # --- argosy ---
 ARGOSY_ADMIN_PASSWORD

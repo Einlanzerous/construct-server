@@ -779,6 +779,10 @@ suite covers only `verify-destination`'s argument validation and lock
 exclusion (T23–T25) — never the real network calls that prove append-only
 itself, deliberately (see that file's header).
 
+## Not covered: Docker volumes (SERV-244)
+
+This pipeline backs up Postgres and nothing else. There is no list of sources to add a path to: the run is `dump_cluster` then `hub_backup_cluster` per entry in `BACKUP_CLUSTERS`, each snapshot tagged with its cluster label, then `restic copy --tag <label>` to each destination. A restic container only ever sees `$BACKUP_DATA_DIR`. So the `catenary_media` volume (uploaded chat media, which is not in Postgres) is **not backed up**, and adding it is a new stage in `backup-nightly.sh` rather than a config line. Its ordering requirement is that the media snapshot is taken *after* the database dump, so a restored message row never points at a blob the media snapshot lacks (blobs are only ever added between the two). In this script that holds by construction if the stage runs after the cluster loop and its label is appended last to `all_labels`. It is tracked on SERV-244.
+
 ## Not yet in this file
 
 - **The restore drill's numbers** — full-cluster restore time, the worst-case
