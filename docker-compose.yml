@@ -1841,17 +1841,24 @@ services:
       # `catenary_media` volume below. Catenary refuses to BOOT with a media directory
       # and no signing keys (or short ones), and keys cannot be minted here — a person
       # generates them in Signet, never in a file, a compose block or a ticket, the same
-      # rule as CATENARY_DB_PASSWORD:
-      #   signet set --project construct-server --name CATENARY_MEDIA_URL_KEYS --generate
-      # (format `1=<hex>,2=<hex>`, each at least 64 hex characters; the LAST entry signs,
-      # all verify, so a rotation appends one — see catenary/deploy/README.md. Whether
-      # `--generate` emits that shape is not verified: check before relying on it.)
+      # rule as CATENARY_DB_PASSWORD. Signet's own `--generate` makes a bare 32-character
+      # token with no `1=` prefix, which Catenary rejects, so mint the shape on stdin
+      # (which also keeps the value out of argv, SERV-215):
+      #   printf '1=%s' "$(openssl rand -hex 32)" | signet set --project construct-server --name CATENARY_MEDIA_URL_KEYS
+      #   signet target add-key --project construct-server --gh-secret PROD_ENV_FILE --name CATENARY_MEDIA_URL_KEYS
+      #   signet sync
+      # Format `1=<hex>,2=<hex>`, each at least 64 hex characters; the LAST entry signs,
+      # all verify, so a rotation appends one — see catenary/deploy/README.md.
+      #
+      # An EMPTY value only turns uploads off. A MALFORMED non-empty one (no `1=`, too
+      # short) crash-loops catenary at config load and takes chat down with it.
       #
       # DIR is derived from KEYS' presence rather than a literal, the same atomic-pair
       # shape as CATENARY_PROVISION_ADDR above: a literal DIR with a vault miss (or a
       # hand `force-recreate` that skips deploy.yml's gate) would crash-loop the whole
-      # chat service, where this takes the uploads off and keeps chat up. Both set is
-      # `/data/media`; both empty is "no uploads", which Catenary supports.
+      # chat service, where this takes the uploads off instead. It guards the empty
+      # case only, not the malformed one. Both set is `/data/media`; both empty is
+      # "no uploads", which Catenary supports.
       - CATENARY_MEDIA_DIR=${CATENARY_MEDIA_URL_KEYS:+/data/media}
       - CATENARY_MEDIA_URL_KEYS=${CATENARY_MEDIA_URL_KEYS}
     volumes:
