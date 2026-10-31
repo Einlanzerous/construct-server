@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.41.0](https://github.com/Einlanzerous/construct-server/compare/v4.40.0...v4.41.0) (2026-10-31)
+
+
+### Features
+
+* **catenary:** media volume, signing-key env and a one-shot owner (SERV-244) ([#260](https://github.com/Einlanzerous/construct-server/issues/260)) ([7e33e89](https://github.com/Einlanzerous/construct-server/commit/7e33e8947b714a343f1a2a0c653fa43e48c97e8e))
+
+
+### Bug Fixes
+
+* **lyceum:** point invite QRs at the direct host (SERV-255) ([#262](https://github.com/Einlanzerous/construct-server/issues/262)) ([fb28b2c](https://github.com/Einlanzerous/construct-server/commit/fb28b2caf64b5c50452edc18a1e8804245373659))
+
 ## [4.40.0](https://github.com/Einlanzerous/construct-server/compare/v4.39.0...v4.40.0) (2026-10-28)
 
 
