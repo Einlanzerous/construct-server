@@ -906,6 +906,10 @@ services:
       # both, Lyceum falls back to the no-op acquirer (records "wanted" only).
       - LYCEUM_BINDERY_BASE_URL=${LYCEUM_BINDERY_BASE_URL:-http://10.0.0.45:8787}
       - LYCEUM_BINDERY_API_KEY=${LYCEUM_BINDERY_API_KEY:-}
+      # The origin baked into an invite's sign-in QR (LYCM-102). MUST be the direct
+      # host: unset, the QR falls back to the browser's own origin, the Access-gated
+      # hostname, and the phone's redeem hits an SSO wall that answers in HTML (SERV-255).
+      - LYCEUM_MOBILE_BASE_URL=https://lyceum-direct.zerogravity.industries
     volumes:
       - lyceum_data:/data/blobs
       # Books library to fold-ingest, read-only (defaults alongside argosy media).
