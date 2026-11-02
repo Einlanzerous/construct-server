@@ -569,6 +569,23 @@ assert_eq "state records the unavailable cluster" "$(state_get '.unavailable_clu
 unset MOCK_DB_LIST MOCK_NOTREADY_CONTAINER
 scenario_teardown
 
+# ─── T21e: pg_isready passes but the admin role cannot query (PLIM-8). It must ─
+# ─── be skipped like any other unavailable cluster, and the healthy one must ──
+# ─── still reach the destination rather than the run dying before fan-out. ────
+head_ "T21e: a ready cluster that refuses queries is skipped, and the other still fans out"
+scenario_setup
+write_conf_two_clusters '"desk:rest:http://mockhost:8000/construct/"'
+export MOCK_DB_LIST=$'a1\na2\nb1\nb2'
+export MOCK_UNQUERYABLE_CONTAINER=mockpg2
+rc=0; run_backup || rc=$?
+assert_status "run exits non-zero (a cluster was skipped)" 1 "$rc"
+grep -q "cluster 'beta' UNAVAILABLE.*refuses queries" "$SCRATCH/log" && ok "the skipped cluster is named in the log" || bad "the skipped cluster is named in the log"
+grep -q "alpha: dumped 'a1'" "$SCRATCH/log" && ok "alpha was dumped" || bad "alpha was dumped"
+assert_eq "state records the unavailable cluster" "$(state_get '.unavailable_clusters | length')" "1"
+[ "$(state_get '.destinations.desk.last_success_at')" != "null" ] && ok "alpha reached the destination" || bad "alpha reached the destination"
+unset MOCK_DB_LIST MOCK_UNQUERYABLE_CONTAINER
+scenario_teardown
+
 head_ "T21d: with no cluster available at all the run still fails hard"
 scenario_setup
 write_conf

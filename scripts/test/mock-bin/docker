@@ -49,8 +49,19 @@ case "$1" in
         echo "pg_dump (PostgreSQL) ${MOCK_CLIENT_VERSION:-16.15}"
         ;;
       psql)
+        # Refuse a call with no -d, as a real cluster does when its admin role has
+        # no database of the same name (postgres-private, PLIM-8). The shared
+        # cluster's `postgres` role hid this for as long as it was the only one.
+        case " $* " in
+          *" -d "*) ;;
+          *) echo 'psql: error: FATAL:  database named after the role does not exist' >&2; exit 2 ;;
+        esac
+        [ "$container" = "${MOCK_UNQUERYABLE_CONTAINER:-}" ] && exit 2
         local_sql="${*: -1}"
         case "$local_sql" in
+          "select 1")
+            echo 1
+            ;;
           *"pg_database where not datistemplate"*)
             printf '%s\n' "${MOCK_DB_LIST:?MOCK_DB_LIST must be set}"
             ;;

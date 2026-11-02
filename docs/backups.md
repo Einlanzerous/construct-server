@@ -50,6 +50,15 @@ version skew is structurally impossible (a cluster is a config entry, so more ca
 > failed every run from 2026-10-17 for a week, because an unreachable cluster
 > aborted preflight before any dump.
 
+**Every `psql` call names the maintenance database (`-d postgres`).** Without
+`-d`, psql connects to a database named after the role. `postgres` and the old
+`argosy` cluster both happened to have one, but `private_admin` does not, so the
+first run against `postgres-private` (PLIM-8) exited during that cluster's dump,
+after the shared cluster's hub snapshot and before any fan-out. The mock now
+refuses a `psql` call with no `-d`. `pg_isready` can't see this kind of failure,
+so a cluster must also answer a query as its admin role (`cluster_queryable`) or
+it is skipped and recorded like any other unavailable cluster.
+
 **The admin role is per-cluster config, not a constant** — found by the smoke
 test (2026-09-26), not assumed: the official postgres image's initdb creates
 whatever role `POSTGRES_USER` names, and `argosy-db-1` runs

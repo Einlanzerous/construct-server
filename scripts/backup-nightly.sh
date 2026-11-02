@@ -182,6 +182,13 @@ cluster_ready() { # <container> <label>
   docker exec "$1" pg_isready -U "$(admin_user_for_label "$2")" >/dev/null 2>&1
 }
 
+# Can the configured admin role actually run a query? pg_isready says nothing
+# about that: it answers yes for a wrong role or a missing database, and a failed
+# query in dump_cluster ends the whole run before fan-out (PLIM-8).
+cluster_queryable() { # <container> <label>
+  docker exec "$1" psql -U "$(admin_user_for_label "$2")" -d postgres -At -c "select 1" >/dev/null 2>&1
+}
+
 # One readiness probe. Echoes a reason on failure, prints nothing on success.
 # Clusters that do not exist are skipped here — select_clusters accounts for them.
 preflight_probe() {
@@ -236,6 +243,8 @@ select_clusters() {
       reason="container '$container' does not exist"
     elif ! cluster_ready "$container" "$label"; then
       reason="container '$container' not accepting connections"
+    elif ! cluster_queryable "$container" "$label"; then
+      reason="container '$container' refuses queries as its admin role"
     else
       ACTIVE_CLUSTERS+=("$entry")
       continue
@@ -378,7 +387,9 @@ dump_cluster() {
   mkdir -p "$cluster_dir"
 
   local all
-  all="$(docker exec "$container" psql -U "$admin_user" -At \
+  # Always name the database. Without -d, psql connects to one named after the
+  # role, which only works on a cluster that happens to have one (PLIM-8).
+  all="$(docker exec "$container" psql -U "$admin_user" -d postgres -At \
     -c "select datname from pg_database where not datistemplate order by 1")"
 
   local -a dumped=() excluded=()
@@ -421,14 +432,14 @@ dump_cluster() {
   for n in "${excluded[@]}"; do
     [ -z "$n" ] && continue
     local size
-    size="$(docker exec "$container" psql -U "$admin_user" -At \
+    size="$(docker exec "$container" psql -U "$admin_user" -d postgres -At \
       -c "select pg_database_size('$n')" 2>/dev/null || echo unknown)"
     err "$label: excluded '$n' (${size} bytes)"
   done
 
   local client_ver server_ver
   client_ver="$(docker exec "$container" pg_dump --version | grep -oE '[0-9]+' | head -1)"
-  server_ver="$(docker exec "$container" psql -U "$admin_user" -At -c "show server_version_num" | cut -c1-2)"
+  server_ver="$(docker exec "$container" psql -U "$admin_user" -d postgres -At -c "show server_version_num" | cut -c1-2)"
   if [ "$client_ver" != "$server_ver" ]; then
     err "$label: pg_dump major $client_ver != server major $server_ver — dumper is not the server's own binary?"
     ANY_DUMP_FAILED=1
