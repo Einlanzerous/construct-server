@@ -36,12 +36,13 @@ backup.
 
 ## What gets backed up
 
-One Postgres cluster today, backed up from its own container so client/server
+Two Postgres clusters, each backed up from its own container so client/server
 version skew is structurally impossible (a cluster is a config entry, so more can be added):
 
 | Cluster | Container | Admin role | Notes |
 |---|---|---|---|
 | `shared` | `postgres` | `postgres` (default) | This stack's own cluster — 15 real service databases plus scratch/test copies. |
+| `private` | `postgres-private` | `private_admin` | Off `construct_net`, no published port (PLIM-8). The job uses `docker exec`, so it needs neither a route nor a new credential. Floor: `plimsoll`, `postgres`. |
 
 > **`argosy` is no longer a separate cluster** (SERV-245). The standalone
 > `argosy-db-1` project was retired and the stack's `argosy` service uses the

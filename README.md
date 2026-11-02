@@ -117,7 +117,7 @@ Previously on the roadmap, now in active use: Copyparty, Switchyard (which repla
 
 ## 🗄️ Database Architecture
 
-A single PostgreSQL 16 instance provides logically isolated databases for application services:
+A shared PostgreSQL 16 instance provides logically isolated databases for application services. A second cluster, `postgres-private`, holds Plimsoll's database apart from them: no published port, off `construct_net`, with its own admin role.
 
 | Service | Database | User | Migrations |
 |---------|----------|------|------------|

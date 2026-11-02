@@ -63,7 +63,7 @@ default is a common-but-wrong instinct worth pushing back on explicitly.
 | Frontend | **Vue 3** + Vite | Prefer over React. Composition API. |
 | Backend (standalone) | Go (stdlib HTTP first; chi if routing) | Don't reach for a framework on day one. |
 | Backend (full-stack web) | TypeScript (Bun preferred, Node fine) | Share types with the Vue frontend across the API boundary. |
-| Database | PostgreSQL | Single shared instance on `construct_net`, one database per service. |
+| Database | PostgreSQL | Single shared instance on `construct_net`, one database per service. The one exception is `postgres-private`, off `construct_net`, for data that needs separating from the other services (PLIM-8). |
 | LLM (local) | Ollama + `gemma4:31b` | Local-first. See §7. |
 | LLM (cloud) | Claude 5 family (Opus 5 / Sonnet 5) | Escalation, not default. |
 | Auth | Per-actor bearer tokens | Switchyard-style: one token per service. |

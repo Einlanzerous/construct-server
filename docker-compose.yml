@@ -376,6 +376,54 @@ services:
       - construct_net
 
   # --- APP SERVICES ---
+  # --- PRIVATE POSTGRES (PLIM-8) ---
+  # A second cluster for data that should not sit beside the estate's other
+  # services: its own admin role, no published port, and an internal network it
+  # shares with only the services that use it. It is NOT on construct_net.
+  #
+  # This keeps other services out, not the host: anything with the docker socket
+  # can still exec in. Nothing depends_on it, so recreating it touches no one else.
+  #
+  # The log settings are the point of the `command`. log_statement=none alone does
+  # not stop Postgres logging a failed statement's text, its DETAIL (`Key (x)=(y)`)
+  # or an error that quotes the bad input, and these logs are readable in Dozzle and
+  # through `docker logs`. log_min_messages=fatal also drops startup and checkpoint
+  # lines; use the healthcheck, and the client's own errors, instead.
+  #
+  # Backed up nightly as label `private` (config/backup/backup.conf). Provisioned by
+  # db/init-private-db.sh on first init only; see that file for rotation.
+  postgres-private:
+    image: postgres:16.15-alpine@sha256:44c4ee9810eff91f7eab4d822642e01115b1a9eccce4bcbdde7604752d68eac6
+    container_name: postgres-private
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - log_statement=none
+      - -c
+      - log_min_duration_statement=-1
+      - -c
+      - log_min_error_statement=panic
+      - -c
+      - log_error_verbosity=terse
+      - -c
+      - log_min_messages=fatal
+    volumes:
+      - postgres_private_data:/var/lib/postgresql/data
+      - ./db/init-private-db.sh:/docker-entrypoint-initdb.d/init-private-db.sh:ro
+    environment:
+      - POSTGRES_USER=private_admin
+      - POSTGRES_DB=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PRIVATE_PASSWORD}
+      - PLIMSOLL_DB_PASSWORD=${PLIMSOLL_DB_PASSWORD}
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "private_admin", "-d", "postgres"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks:
+      - private_db_net
+
   cook_book:
     image: ghcr.io/einlanzerous/cook_book:${COOK_BOOK_TAG:-latest}
     container_name: cook_book
@@ -2554,6 +2602,7 @@ volumes:
   uptime-kuma-data:
   semaphore_data:
   postgres_data:
+  postgres_private_data:
   switchyard_uploads:
   argosy_artwork:
   argosy_subtitles:
@@ -2577,6 +2626,13 @@ volumes:
 networks:
   construct_net:
     external: true
+
+  # postgres-private and the services that use it, and nothing else (PLIM-8).
+  # `internal` means no route out of it, so a service on it that needs publishing
+  # also needs a second network.
+  private_db_net:
+    name: private_db_net
+    internal: true
 
   # The cloudflared -> Traefik leg, and nothing else (SERV-107).
   #
