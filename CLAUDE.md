@@ -25,7 +25,9 @@ anything deploys or gets versioned.
 - `db/init-private-db.sh` — bootstrap for the second cluster, `postgres-private`
   (PLIM-8). First init only, unlike the script below. That cluster has its own admin
   role (`private_admin`, not `postgres`), no published port, and sits on the internal
-  `private_db_net`, not `construct_net`; it is backed up as label `private`.
+  `private_db_net`, not `construct_net`; it is backed up as label `private`. Plimsoll
+  (port 4016, PLIM-7) is its only client, and must never get a router, tunnel, public
+  hostname or Access app.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
   Since SERV-169 it provisions chronicle and `asr` too (`asr` keeps its own database
   and role on the shared Postgres, not a schema inside Chronicle's — CHRN-25), with
