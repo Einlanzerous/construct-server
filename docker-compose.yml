@@ -448,6 +448,9 @@ services:
       # Keyword/value with the password single-quoted: catenary's shape, handed to
       # pgxpool.ParseConfig untouched.
       - PLIMSOLL_DATABASE_URL=host=postgres-private port=5432 user=plimsoll password='${PLIMSOLL_DB_PASSWORD}' dbname=plimsoll sslmode=disable
+      # Every route but the probes requires this, as a bearer token or the HTTP Basic
+      # password a browser prompts for. Blank closes those routes (PLIM-12).
+      - PLIMSOLL_API_TOKEN=${PLIMSOLL_API_TOKEN}
     networks:
       - construct_net
       - private_db_net
