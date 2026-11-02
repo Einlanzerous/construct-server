@@ -61,7 +61,7 @@ DEV_EDGE_NET="${DEV_EDGE_NET:-construct_dev_edge_net}"
 # construct_net because dev now HAS an edge: the plausible mistake is no longer only
 # "a dev service joined the prod app network", it is "cloudflared-dev was pointed at
 # the prod edge network", which construct_net alone would not see.
-PROD_NETS=(construct_net construct_edge_net)
+PROD_NETS=(construct_net construct_edge_net private_db_net)
 
 err() { printf '%s\n' "$*" >&2; }
 for dep in docker python3; do

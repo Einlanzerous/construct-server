@@ -6,6 +6,11 @@
 #
 #   docker exec -i postgres-private bash < db/init-private-db.sh
 #
+# Rotate in this order: `signet sync`, then a deploy that takes the full path, then
+# the command above. `docker exec` sees the environment the container was created
+# with, so running it before the recreate re-applies the OLD password and exits 0.
+# A pin-only scoped deploy does not recreate this container.
+#
 # The password reaches psql through \getenv, never a command-line argument, so
 # it cannot show up in `ps`.
 set -euo pipefail
