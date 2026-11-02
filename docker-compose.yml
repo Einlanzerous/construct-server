@@ -424,6 +424,41 @@ services:
     networks:
       - private_db_net
 
+  # --- PLIMSOLL (self-hosted health dashboard; port 4016) — PLIM-7 ---
+  # Published directly for LAN and Tailscale, like Argosy and Lyceum. It must never
+  # get a Traefik router, tunnel, public hostname or Access app: this is one person's
+  # medical data (Plimsoll's CLAUDE.md, invariant 10). It serves only probes today,
+  # and no endpoint returning health data ships without bearer auth.
+  #
+  # construct_net is here for the delivery matrix, which probes by container name,
+  # and because a port can't be published from an internal network alone. The
+  # database stays off construct_net: only this service shares private_db_net with it.
+  #
+  # Migrations run at boot. A bad one stops the boot and rolls back.
+  plimsoll:
+    image: ghcr.io/einlanzerous/plimsoll:${PLIMSOLL_TAG:-latest}
+    container_name: plimsoll
+    restart: unless-stopped
+    ports:
+      - "4016:4016"
+    environment:
+      - PLIMSOLL_PORT=4016
+      # Keyword/value with the password single-quoted: catenary's shape, handed to
+      # pgxpool.ParseConfig untouched.
+      - PLIMSOLL_DATABASE_URL=host=postgres-private port=5432 user=plimsoll password='${PLIMSOLL_DB_PASSWORD}' dbname=plimsoll sslmode=disable
+    networks:
+      - construct_net
+      - private_db_net
+    depends_on:
+      - postgres-private
+    # /healthz, never /readyz: a database blip shouldn't restart the service.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4016/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   cook_book:
     image: ghcr.io/einlanzerous/cook_book:${COOK_BOOK_TAG:-latest}
     container_name: cook_book
