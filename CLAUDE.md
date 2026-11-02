@@ -22,6 +22,10 @@ anything deploys or gets versioned.
   `config/traefik-dev/` is the **dev** edge's own Traefik config (SERV-93) — a
   second edge in the dev compose project, not a leg of prod's.
 - `caddy/`, edge routing — public 443 paths and Cloudflare Access.
+- `db/init-private-db.sh` — bootstrap for the second cluster, `postgres-private`
+  (PLIM-8). First init only, unlike the script below. That cluster has its own admin
+  role (`private_admin`, not `postgres`), no published port, and sits on the internal
+  `private_db_net`, not `construct_net`; it is backed up as label `private`.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
   Since SERV-169 it provisions chronicle and `asr` too (`asr` keeps its own database
   and role on the shared Postgres, not a schema inside Chronicle's — CHRN-25), with
