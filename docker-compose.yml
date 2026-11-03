@@ -429,8 +429,8 @@ services:
   # --- PLIMSOLL (self-hosted health dashboard; port 4016) — PLIM-7 ---
   # Published directly for LAN and Tailscale, like Argosy and Lyceum. It must never
   # get a Traefik router, tunnel, public hostname or Access app: this is one person's
-  # medical data (Plimsoll's CLAUDE.md, invariant 10). It serves only probes today,
-  # and no endpoint returning health data ships without bearer auth.
+  # medical data (Plimsoll's CLAUDE.md, invariant 10). Every route but /healthz and
+  # /readyz requires PLIMSOLL_API_TOKEN (invariant 11, token auth since PLIM-12).
   #
   # construct_net is here for the delivery matrix, which probes by container name,
   # and because a port can't be published from an internal network alone. The
@@ -448,6 +448,10 @@ services:
       # Keyword/value with the password single-quoted: catenary's shape, handed to
       # pgxpool.ParseConfig untouched.
       - PLIMSOLL_DATABASE_URL=host=postgres-private port=5432 user=plimsoll password='${PLIMSOLL_DB_PASSWORD}' dbname=plimsoll sslmode=disable
+      # Every route but the probes requires this. Reads take it as a bearer token or
+      # as the HTTP Basic password a browser prompts for; writes take bearer only.
+      # Blank closes those routes rather than opening them (PLIM-12).
+      - PLIMSOLL_API_TOKEN=${PLIMSOLL_API_TOKEN}
     networks:
       - construct_net
       - private_db_net
