@@ -452,6 +452,10 @@ services:
       # as the HTTP Basic password a browser prompts for; writes take bearer only.
       # Blank closes those routes rather than opening them (PLIM-12).
       - PLIMSOLL_API_TOKEN=${PLIMSOLL_API_TOKEN}
+      # Age and sex for the facts layer's cohort comparison (PLIM-13 ruling 1). Both
+      # or neither: one alone refuses boot. Values live in Signet only.
+      - PLIMSOLL_BIRTH_MONTH=${PLIMSOLL_BIRTH_MONTH}
+      - PLIMSOLL_REFERENCE_SEX=${PLIMSOLL_REFERENCE_SEX}
     networks:
       - construct_net
       - private_db_net
