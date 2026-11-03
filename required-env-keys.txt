@@ -44,8 +44,10 @@ SWITCHYARD_DB_PASSWORD
 PLIMSOLL_DB_PASSWORD
 POSTGRES_PRIVATE_PASSWORD
 
-# --- plimsoll (read by the plimsoll container only) — PLIM-12 ---
+# --- plimsoll (read by the plimsoll container only) — PLIM-12, PLIM-13 ---
 PLIMSOLL_API_TOKEN
+PLIMSOLL_BIRTH_MONTH
+PLIMSOLL_REFERENCE_SEX
 
 # --- the deploy itself (deploy.yml logs in to GHCR with these; promote.yml too) ---
 GITHUB_USER
