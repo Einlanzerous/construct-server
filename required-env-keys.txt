@@ -41,9 +41,11 @@ SEXTANT_DB_PASSWORD
 SWITCHYARD_DB_PASSWORD
 
 # --- private postgres (postgres-private, db/init-private-db.sh) — PLIM-8 ---
-PLIMSOLL_API_TOKEN
 PLIMSOLL_DB_PASSWORD
 POSTGRES_PRIVATE_PASSWORD
+
+# --- plimsoll (read by the plimsoll container only) — PLIM-12 ---
+PLIMSOLL_API_TOKEN
 
 # --- the deploy itself (deploy.yml logs in to GHCR with these; promote.yml too) ---
 GITHUB_USER
