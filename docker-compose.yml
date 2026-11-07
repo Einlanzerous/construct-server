@@ -590,8 +590,15 @@ services:
     image: ghcr.io/einlanzerous/cook_book:${COOK_BOOK_TAG:-latest}
     container_name: cook_book
     restart: unless-stopped
+    # Loopback only (COOK-21). Commonplace is reached through Cloudflare Access and
+    # Traefik's `internal` entrypoint, both of which check the Access assertion. A
+    # LAN-wide host port was a second way in that checked nothing. Until COOK-23 the
+    # write routes are unauthenticated in-app, so this bind (with Access) is the only
+    # thing protecting them: do not relax it as defence in depth. Once reads go
+    # public (Phase 2) the one path that skips the edge must still not exist.
+    # Loopback keeps `curl localhost:4001` working on the box for operators.
     ports:
-      - "${COOK_BOOK_PORT}:${COOK_BOOK_PORT}"
+      - "127.0.0.1:${COOK_BOOK_PORT}:${COOK_BOOK_PORT}"
     environment:
       - PORT=${COOK_BOOK_PORT}
       - DATABASE_URL=postgres://cook_book_user:${COOK_BOOK_DB_PASSWORD}@postgres:5432/cook_book?sslmode=disable
@@ -2567,7 +2574,7 @@ services:
       # tunneled router that nobody mapped is unreachable, which is loud, rather than
       # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
       # and the routers agree, so they cannot drift apart silently.
-      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway — it exists so the cutover could be rehearsed against real traffic
       # before three live routers went fail-closed at once, and it is not a steady state.

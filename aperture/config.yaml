@@ -23,7 +23,7 @@ services:
   - name: "cook_book"
     type: docker
     container: "cook_book"
-    href: "http://imperial-construct:4001"
+    href: "https://commonplace.zerogravity.industries"
     category: "Applications"
     size: s
   - name: "Switchyard"
