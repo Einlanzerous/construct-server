@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.42.0](https://github.com/Einlanzerous/construct-server/compare/v4.41.0...v4.42.0) (2026-11-07)
+
+
+### Features
+
+* **plimsoll:** deploy the service on port 4016 (PLIM-7) ([#266](https://github.com/Einlanzerous/construct-server/issues/266)) ([f3057f3](https://github.com/Einlanzerous/construct-server/commit/f3057f30226fc548e049b07b6c8f55a136366df4))
+* **plimsoll:** isolated model sandbox, seed, isolation and canary checks (PLIM-14) ([#269](https://github.com/Einlanzerous/construct-server/issues/269)) ([77cf49e](https://github.com/Einlanzerous/construct-server/commit/77cf49eccde9de6e51d46e18af442ddaac6e592b))
+* **plimsoll:** pass age and sex for the cohort comparison (PLIM-13) ([#268](https://github.com/Einlanzerous/construct-server/issues/268)) ([028810e](https://github.com/Einlanzerous/construct-server/commit/028810e4c14c4fc5e68d81064c03889e8730fba5))
+* **plimsoll:** pass PLIMSOLL_API_TOKEN to the service (PLIM-12) ([#267](https://github.com/Einlanzerous/construct-server/issues/267)) ([d529223](https://github.com/Einlanzerous/construct-server/commit/d529223a6164e53ea42b05f6123cac62809373d1))
+* **postgres:** add a private cluster and back it up (PLIM-8) ([#263](https://github.com/Einlanzerous/construct-server/issues/263)) ([373c345](https://github.com/Einlanzerous/construct-server/commit/373c345117338fcfee335b07400979d25afa6e8a))
+
+
+### Bug Fixes
+
+* **backup:** name the database on every psql call (PLIM-8) ([#265](https://github.com/Einlanzerous/construct-server/issues/265)) ([6ff3545](https://github.com/Einlanzerous/construct-server/commit/6ff354558f6d9d67c4270d6ad6b2fdf1cd6fa20a))
+
 ## [4.41.0](https://github.com/Einlanzerous/construct-server/compare/v4.40.0...v4.41.0) (2026-10-31)
 
 
