@@ -23,6 +23,12 @@ It fails when:
   * plimsoll-llm's models volume is not mounted read-only;
   * plimsoll-llm's image is not the shared ollama service's exact pin (a seeded blob
     must be read by the version that wrote it);
+  * plimsoll-llm sets any service key outside a fixed set (so `privileged`,
+    `cap_add`, `pid`, `ipc`, `env_file`, a second bind mount and the like are refused
+    by default, not by name), or mounts anything but its models volume;
+  * any service shares plimsoll-llm's or plimsoll's network namespace through
+    `network_mode: service:…` / `container:…` — that reaches the sandbox while
+    `docker network inspect` still lists two members;
   * the shared ollama service loses its mem_limit (PLIM-14 ruling 6).
 
 It proves configuration only. That the running network behaves is
@@ -69,6 +75,16 @@ ENV_ALLOWLIST = {
 }
 # Values that must be present, not merely allowed.
 ENV_REQUIRED = {k: v for k, v in ENV_ALLOWLIST.items() if v is not None}
+
+# Every service-level key plimsoll-llm may set. Anything else fails: what widens a
+# container is usually one key (privileged, cap_add, pid: host, a socket mount), and a
+# denylist would have to have thought of it first.
+SANDBOX_KEYS = {
+    "image", "container_name", "restart", "environment", "volumes", "tmpfs",
+    "read_only", "cap_drop", "security_opt", "devices", "group_add", "mem_limit",
+    "logging", "networks", "healthcheck",
+}
+MODELS_VOLUME = "plimsoll_llm_models"
 
 # The discrete GPU (the R9700) by PCI path, plus the KFD node ROCm needs. A bare
 # /dev/dri would hand over the iGPU's nodes too, and a cardN/renderDN source would
@@ -147,12 +163,20 @@ def check(compose):
         problems.append(f"service {name} joins {NETWORK}; only {sorted(MEMBERS)} may")
     for name in sorted(MEMBERS - joined):
         problems.append(f"service {name} is not on {NETWORK}")
+    # A shared namespace is membership the network's member list cannot show.
+    for name, other in sorted(services.items()):
+        mode = str((other or {}).get("network_mode") or "")
+        kind, _, target = mode.partition(":")
+        if kind in ("service", "container") and target in MEMBERS and name not in MEMBERS:
+            problems.append(f"service {name} shares {target}'s network namespace (network_mode: {mode})")
 
     # --- the sandbox -------------------------------------------------------
     svc = services.get(SANDBOX)
     if not isinstance(svc, dict):
         problems.append(f"service {SANDBOX} is not defined")
         return problems
+    for key in sorted(set(svc) - SANDBOX_KEYS):
+        problems.append(f"{SANDBOX} sets {key}, which is outside its allowed keys")
     if svc.get("ports"):
         problems.append(f"{SANDBOX} publishes a port")
     if svc.get("expose"):
@@ -191,12 +215,16 @@ def check(compose):
     models_ro = False
     for v in svc.get("volumes") or []:
         if isinstance(v, dict):
-            if v.get("target") == MODELS_TARGET and truthy(v.get("read_only")):
-                models_ro = True
+            src, dst, ro = v.get("source"), v.get("target"), truthy(v.get("read_only"))
         else:
             parts = str(v).split(":")
-            if len(parts) >= 3 and parts[1] == MODELS_TARGET and "ro" in parts[2].split(","):
-                models_ro = True
+            src = parts[0]
+            dst = parts[1] if len(parts) > 1 else parts[0]
+            ro = len(parts) >= 3 and "ro" in parts[2].split(",")
+        if src == MODELS_VOLUME and dst == MODELS_TARGET and ro:
+            models_ro = True
+        else:
+            problems.append(f"{SANDBOX} mounts {src}:{dst}; only {MODELS_VOLUME} at {MODELS_TARGET} (read-only) is allowed")
     if not models_ro:
         problems.append(f"{SANDBOX} does not mount its models volume read-only at {MODELS_TARGET}")
 

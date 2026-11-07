@@ -35,7 +35,9 @@ anything deploys or gets versioned.
   the list (never `OLLAMA_DEBUG`), the discrete GPU only, capped `json-file` logs, a
   `mem_limit`, and the same image pin as `ollama`, which carries its own `mem_limit` for
   the same reason (PLIM-14 ruling 6). Weights arrive only through `make plimsoll-llm-seed`
-  (digest-verified copy from the shared volume, `--network none`); `deploy.yml` runs
+  (digest-verified copy from the shared volume, `--network none`), which must run
+  **before** the deploy that adds the service or moves the pin: an empty read-only
+  models volume crashes Ollama at start and keeps `assert-healthy` red. `deploy.yml` runs
   `scripts/check-plimsoll-llm-isolation.sh` after every deploy, and
   `make plimsoll-llm-canary` checks the logs after a live eval.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.

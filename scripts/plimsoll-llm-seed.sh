@@ -22,10 +22,20 @@
 # the sandbox. The pin is trust-on-first-use: check it once by hand against the
 # registry's published manifest digest when it changes.
 #
-# Costs about 20 GB of disk and a few minutes of I/O. Run it after the first deploy
-# that creates the volume, and again whenever the digest pin changes. It does not
-# touch either running Ollama; recreate plimsoll-llm afterwards
-# (`make recreate svc=plimsoll-llm`) so it lists the new model.
+# Costs about 20 GB of disk and a few minutes of I/O. It does not touch either
+# running Ollama.
+#
+# ORDER MATTERS: SEED BEFORE THE DEPLOY THAT ADDS plimsoll-llm. An EMPTY models
+# volume mounted read-only crashes the pinned Ollama at start (it mkdirs
+# $OLLAMA_MODELS/blobs even with OLLAMA_NOPRUNE), so a deploy that creates the
+# service unseeded leaves it crash-looping and `assert-healthy` red on every deploy
+# until this has run. So when the destination volume does not exist yet, this
+# CREATES it, with the labels compose would give it (project read off the shared
+# volume's own label), and compose adopts it on the next `up` without complaint.
+# Run it from a checkout of the branch that adds the service, before merging; on a
+# pin change, run it before merging the new digest, then let the deploy recreate
+# plimsoll-llm. If a deploy ever went out unseeded: run this, then
+# `make recreate svc=plimsoll-llm`.
 #
 # Usage:
 #   scripts/plimsoll-llm-seed.sh                          # model and digest from the deploy root
@@ -70,17 +80,36 @@ MANIFEST="manifests/registry.ollama.ai/library/$NAME/$TAG"
 volume() {
 	local found
 	found="$(docker volume ls -q --filter "label=com.docker.compose.volume=$1")"
-	if [[ -z "$found" || "$(wc -l <<<"$found")" -ne 1 ]]; then
-		echo "ERROR: expected exactly one compose volume labelled $1, found: ${found:-none}" >&2
-		echo "       Deploy first, so compose creates it." >&2
+	if [[ "$(grep -c . <<<"$found")" -gt 1 ]]; then
+		echo "ERROR: more than one compose volume is labelled $1: $found" >&2
 		exit 2
 	fi
 	printf '%s' "$found"
 }
 # SEED_SRC / SEED_DST override the volumes with any `-v` source, which is how
 # scripts/test/test-plimsoll-llm-seed.sh runs this against small fake models.
-SRC_VOL="${SEED_SRC:-$(volume ollama_data)}"
-DST_VOL="${SEED_DST:-$(volume plimsoll_llm_models)}"
+if [[ -n "${SEED_SRC:-}" ]]; then
+	SRC_VOL="$SEED_SRC"
+else
+	SRC_VOL="$(volume ollama_data)"
+	[[ -n "$SRC_VOL" ]] || { echo "ERROR: no compose volume labelled ollama_data (the shared models)" >&2; exit 2; }
+fi
+if [[ -n "${SEED_DST:-}" ]]; then
+	DST_VOL="$SEED_DST"
+else
+	DST_VOL="$(volume plimsoll_llm_models)"
+	if [[ -z "$DST_VOL" ]]; then
+		# Not deployed yet: create it as compose would, in the shared volume's project.
+		project="$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "$SRC_VOL")"
+		[[ -n "$project" ]] || { echo "ERROR: $SRC_VOL carries no compose project label" >&2; exit 2; }
+		DST_VOL="${project}_plimsoll_llm_models"
+		docker volume create \
+			--label "com.docker.compose.project=$project" \
+			--label "com.docker.compose.volume=plimsoll_llm_models" \
+			"$DST_VOL" >/dev/null
+		echo "Created $DST_VOL for compose project $project."
+	fi
+fi
 
 echo "Seeding $MODEL ($DIGEST) from $SRC_VOL into $DST_VOL, with no network."
 

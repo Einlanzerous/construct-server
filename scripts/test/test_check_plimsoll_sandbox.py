@@ -135,6 +135,17 @@ CASES = [
     ("shared ollama loses mem_limit", set_path(("services", "ollama", "mem_limit"), DELETE),
      "ollama (the shared instance) has no mem_limit"),
     ("sandbox removed", set_path(LLM, DELETE), "plimsoll-llm"),
+    ("sandbox privileged", set_path(LLM + ("privileged",), True), "sets privileged"),
+    ("sandbox cap_add", set_path(LLM + ("cap_add",), ["SYS_ADMIN"]), "sets cap_add"),
+    ("sandbox pid host", set_path(LLM + ("pid",), "host"), "sets pid"),
+    ("sandbox extra bind mount", lambda c: c["services"]["plimsoll-llm"]["volumes"].append(
+        "/var/run/docker.sock:/var/run/docker.sock"), "mounts /var/run/docker.sock"),
+    ("another service shares the sandbox namespace",
+     set_path(("services", "open-webui", "network_mode"), "service:plimsoll-llm"),
+     "open-webui shares plimsoll-llm's network namespace"),
+    ("another service shares plimsoll's namespace",
+     set_path(("services", "open-webui", "network_mode"), "container:plimsoll"),
+     "open-webui shares plimsoll's network namespace"),
 ]
 
 

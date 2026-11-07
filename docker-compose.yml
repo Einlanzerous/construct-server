@@ -112,7 +112,15 @@ services:
   #   (`make plimsoll-llm-seed`), mounted read-only with OLLAMA_NOPRUNE. Plimsoll's
   #   readiness check refuses any other digest.
   # - The discrete GPU's nodes only, found by PCI path so a renumbering after a reboot
-  #   cannot hand it the iGPU. One model, one request at a time.
+  #   cannot hand it the iGPU. The in-container names are fixed to today's numbering
+  #   (card1, renderD129), which ROCm matches against the host's KFD topology; if the
+  #   kernel ever renumbers the card, ROCm finds no node, the model loads on CPU, the
+  #   healthcheck stays green, and Plimsoll's post-call check (model 100% on GPU)
+  #   fails the run. Update the two targets then. One model, one request at a time.
+  # - SEED BEFORE THE FIRST DEPLOY of this service: an empty read-only models volume
+  #   crashes Ollama at start (it mkdirs /models/blobs), which would turn
+  #   assert-healthy red on every deploy until seeded. `make plimsoll-llm-seed`
+  #   creates the volume itself, so it runs from a checkout before the merge.
   #
   # The image MUST stay the same pin as `ollama` above, so a seeded blob is read by
   # the version that wrote it. scripts/check-plimsoll-sandbox.py fails CI on any drift

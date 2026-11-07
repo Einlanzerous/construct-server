@@ -853,11 +853,14 @@ plimsoll-sandbox-test:
 
 # Copy the pinned model from the shared ollama volume into plimsoll-llm's own, with no
 # network, verifying every blob and the manifest against PLIMSOLL_LLM_MODEL_DIGEST.
-# About 20 GB. Run after the first deploy that creates the volume and after any change
-# of pin, then `make recreate svc=plimsoll-llm`. The shared volume is mounted read-only.
+# About 20 GB; the shared volume is mounted read-only. Reads the pin from THIS
+# checkout's docker-compose.yml, and creates the volume if compose has not, so it runs
+# BEFORE the merge that adds the service or changes the pin: an empty read-only models
+# volume crashes plimsoll-llm at start and turns every deploy red until it is seeded.
+# If one went out unseeded anyway: run this, then `make recreate svc=plimsoll-llm`.
 # Usage: make plimsoll-llm-seed
 plimsoll-llm-seed:
-	@COMPOSE_FILE=$(DEPLOY_ROOT)/docker-compose.yml ./scripts/plimsoll-llm-seed.sh
+	@COMPOSE_FILE=$(CURDIR)/docker-compose.yml ./scripts/plimsoll-llm-seed.sh
 
 # Prove the seed refuses a wrong digest, a corrupted blob and a missing one, against
 # small fake models in temp directories. Touches no estate volume.
