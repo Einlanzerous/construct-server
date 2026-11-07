@@ -5,7 +5,8 @@
         wiki-fetch wiki-fetch-local wiki-generate wiki-build wiki-serve \
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
         comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight \
-        backup-test backup-status
+        backup-test backup-status \
+        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test plimsoll-llm-isolation plimsoll-llm-canary
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -830,3 +831,53 @@ comfy-gpu:
 	@echo
 	@docker ps --filter name=ollama --filter name=comfyui --filter name=asr \
 	  --format 'table {{.Names}}\t{{.Status}}'
+
+# --- PLIMSOLL MODEL SANDBOX (PLIM-14) -------------------------------------------------
+# plimsoll-llm sees health facts in its prompts. These four targets are the whole proof
+# that it stays sealed: the config in git, the weights, the running network, the logs.
+
+# Fail on any drift from the sandbox's allowlisted configuration: the plimsoll_ai
+# network's options and members, plimsoll-llm's ports, networks, env, devices, logging
+# and limits, and the shared ollama's mem_limit. Reads the tracked compose file only.
+# CI runs it on every change (plimsoll-sandbox.yml).
+# Usage: make plimsoll-sandbox-check
+plimsoll-sandbox-check:
+	@./scripts/check-plimsoll-sandbox.py docker-compose.yml
+
+# Prove that check still goes RED on each drift it claims to catch, from the real
+# compose file and a minimal fixture. A check that stopped firing looks like a sealed
+# sandbox, so this is the one that matters after editing it.
+# Usage: make plimsoll-sandbox-test
+plimsoll-sandbox-test:
+	@python3 scripts/test/test_check_plimsoll_sandbox.py
+
+# Copy the pinned model from the shared ollama volume into plimsoll-llm's own, with no
+# network, verifying every blob and the manifest against PLIMSOLL_LLM_MODEL_DIGEST.
+# About 20 GB; the shared volume is mounted read-only. Reads the pin from THIS
+# checkout's docker-compose.yml, and creates the volume if compose has not, so it runs
+# BEFORE the merge that adds the service or changes the pin: an empty read-only models
+# volume crashes plimsoll-llm at start and turns every deploy red until it is seeded.
+# If one went out unseeded anyway: run this, then `make recreate svc=plimsoll-llm`.
+# Usage: make plimsoll-llm-seed
+plimsoll-llm-seed:
+	@COMPOSE_FILE=$(CURDIR)/docker-compose.yml ./scripts/plimsoll-llm-seed.sh
+
+# Prove the seed refuses a wrong digest, a corrupted blob and a missing one, against
+# small fake models in temp directories. Touches no estate volume.
+# Usage: make plimsoll-llm-seed-test
+plimsoll-llm-seed-test:
+	@./scripts/test/test-plimsoll-llm-seed.sh
+
+# Prove the RUNNING sandbox is isolated: plimsoll_ai's options and its two members, no
+# default route, no external TCP or DNS, and no connection from the host or from a
+# construct_net container — each with a positive control. Starts two --rm probes and
+# changes nothing. Run after every deploy touching plimsoll, plimsoll-llm or the network.
+# Usage: make plimsoll-llm-isolation
+plimsoll-llm-isolation:
+	@./scripts/check-plimsoll-llm-isolation.sh
+
+# After a live Plimsoll eval: zero hits of its canary in plimsoll-llm's and plimsoll's
+# logs, and json-file as the only log driver. Prints counts, never a matching line.
+# Usage: make plimsoll-llm-canary CANARY=<the canary the eval printed>
+plimsoll-llm-canary:
+	@./scripts/check-plimsoll-llm-canary.sh "$(CANARY)"

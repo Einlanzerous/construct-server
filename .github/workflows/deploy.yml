@@ -840,6 +840,24 @@ jobs:
           fi
           docker compose exec -T chronicle chronicle tier1-audit
 
+      - name: Assert the Plimsoll model sandbox is isolated
+        id: plimsoll-isolation
+        if: ${{ !cancelled() && steps.healthy.outcome == 'success' }}
+        # PLIM-14 criterion 2. plimsoll-llm sees health facts in its prompts, and
+        # check-plimsoll-sandbox.py proves only the config in git. This asks the
+        # RUNNING network: plimsoll_ai's options and exactly two members, no default
+        # route, no external TCP or DNS from the sandbox's namespace, and no connection
+        # from the host or from a construct_net container — each with a positive
+        # control, so a probe that can reach nothing reads as UNTESTED, not isolated.
+        #
+        # Every deploy rather than only those touching the two services: it takes a few
+        # seconds, and "which deploys touched the network" is a question a scoped check
+        # would have to answer correctly forever. Gated like tier1-audit, so a red edge
+        # or audit gate cannot skip it and it cannot skip them. It starts two `--rm`
+        # probes and changes nothing; it detects, it does not recover.
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: ./scripts/check-plimsoll-llm-isolation.sh
+
       # ── Report this deploy to the Switchyard delivery ledger (SERV-117) ─────────
       #
       # The push half of SWY-191's two-producer ledger. The reconciler already

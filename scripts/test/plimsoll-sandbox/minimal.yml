@@ -1,0 +1,51 @@
+# A minimal compose file that satisfies check-plimsoll-sandbox.py (PLIM-14). The test
+# drifts it one property at a time; it is not deployed anywhere.
+services:
+  ollama:
+    image: ollama/ollama:rocm@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    mem_limit: 16g
+    networks: [default, construct_net]
+  open-webui:
+    image: example/open-webui
+  plimsoll:
+    image: example/plimsoll
+    networks:
+      construct_net:
+      private_db_net:
+      plimsoll_ai:
+  plimsoll-llm:
+    image: ollama/ollama:rocm@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_MODELS: /models
+      OLLAMA_NOPRUNE: "1"
+      OLLAMA_NOHISTORY: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - type: volume
+        source: plimsoll_llm_models
+        target: /models
+        read_only: true
+    tmpfs: /root/.ollama
+    devices:
+      - /dev/kfd:/dev/kfd
+      - source: /dev/dri/by-path/pci-0000:03:00.0-card
+        target: /dev/dri/card1
+      - source: /dev/dri/by-path/pci-0000:03:00.0-render
+        target: /dev/dri/renderD129
+    mem_limit: 12g
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: 3}
+    networks: [plimsoll_ai]
+volumes:
+  plimsoll_llm_models:
+networks:
+  construct_net: {external: true}
+  private_db_net: {internal: true}
+  plimsoll_ai:
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated

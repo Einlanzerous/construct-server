@@ -1,0 +1,56 @@
+name: Plimsoll sandbox
+
+# Keep Plimsoll's model sandbox sealed on every change (PLIM-14, criterion 1).
+#
+# plimsoll-llm sees health facts in its prompts, and what keeps them in is
+# configuration: an internal, isolated network with two members; no port; one
+# network; an exact env allowlist (no debug or log-level key); the discrete GPU
+# only; capped json-file logs; a memory ceiling here and on the shared ollama.
+# Any of those can drift in one reasonable-looking edit, and none of them fails
+# anything else. check-plimsoll-sandbox.py fails on each; the fixture test proves
+# it still does.
+#
+# Hosted runner on purpose: this reads tracked files only, needs nothing from the
+# box, and should still report when the self-hosted runner is busy or down. The
+# seed test needs docker, which the hosted image has; it uses fake models in temp
+# directories and no estate volume.
+
+on:
+  pull_request:
+    paths:
+      - 'docker-compose.yml'
+      - 'scripts/check-plimsoll-sandbox.py'
+      - 'scripts/plimsoll-llm-seed.sh'
+      - 'scripts/test/test_check_plimsoll_sandbox.py'
+      - 'scripts/test/test-plimsoll-llm-seed.sh'
+      - 'scripts/test/plimsoll-sandbox/**'
+      - '.github/workflows/plimsoll-sandbox.yml'
+  push:
+    branches: ["main"]
+    paths:
+      - 'docker-compose.yml'
+      - 'scripts/check-plimsoll-sandbox.py'
+      - 'scripts/plimsoll-llm-seed.sh'
+      - 'scripts/test/test_check_plimsoll_sandbox.py'
+      - 'scripts/test/test-plimsoll-llm-seed.sh'
+      - 'scripts/test/plimsoll-sandbox/**'
+      - '.github/workflows/plimsoll-sandbox.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The sandbox configuration holds
+        run: ./scripts/check-plimsoll-sandbox.py docker-compose.yml
+
+      - name: The check still fails on every drift it claims to catch
+        run: python3 scripts/test/test_check_plimsoll_sandbox.py
+
+      - name: The seed refuses a wrong digest, a corrupted blob and a missing one
+        run: ./scripts/test/test-plimsoll-llm-seed.sh

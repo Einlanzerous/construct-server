@@ -80,9 +80,108 @@ services:
     group_add:
       - "44"   # video
       - "993"  # render (host GID — name lookup fails in ollama:rocm image)
+    # A memory ceiling (PLIM-14 ruling 6). While plimsoll-llm holds its model in VRAM,
+    # a load here can no longer fit on the card and spills into host RAM; with no
+    # ceiling that spill reaches the GLOBAL OOM killer and can take any service on the
+    # box with it. With one, it is killed inside this container instead. Sized from
+    # this container's own cgroup: idle anon use is tens of MB, a fully offloaded
+    # 31B adds about 6 GB of host RAM, and most of memory.peak (about 25 GiB since
+    # the last start) is reclaimable page cache from reading the weights, which a
+    # ceiling only reclaims sooner. 16g leaves that headroom while keeping this plus
+    # plimsoll-llm's 12g under the host's 31 GiB. A caller asking for a context that
+    # spills by design (128K+ on a 30B model, see above) now fails here rather than
+    # swapping the host. Enforced by scripts/check-plimsoll-sandbox.py.
+    mem_limit: 16g
     networks:
       - default
       - construct_net
+
+  # --- PLIMSOLL MODEL SANDBOX (PLIM-14) ---
+  # A dedicated Ollama for Plimsoll's model calls, separate from the shared one above
+  # (PLIM-1): the shared instance serves other callers, sits on construct_net, and its
+  # env belongs to the estate. This one sees health facts in its prompts, so:
+  #
+  # - It is on plimsoll_ai ONLY (internal + isolated gateway, see networks:) and
+  #   publishes no port. Nothing reaches it but `plimsoll`, and it reaches nothing.
+  # - Its env is an exact allowlist. No OLLAMA_DEBUG, log level or GIN_MODE key, ever
+  #   (Plimsoll invariant 4): a debug log is where a prompt would land.
+  # - OLLAMA_NOHISTORY and a tmpfs /root/.ollama keep nothing on disk; json-file logs
+  #   capped at 10m x 3 are the only place logs go, and the canary target proves they
+  #   hold no prompt text.
+  # - Weights come from a dedicated volume, seeded by digest with no network
+  #   (`make plimsoll-llm-seed`), mounted read-only with OLLAMA_NOPRUNE. Plimsoll's
+  #   readiness check refuses any other digest.
+  # - The discrete GPU's nodes only, found by PCI path so a renumbering after a reboot
+  #   cannot hand it the iGPU. The in-container names are fixed to today's numbering
+  #   (card1, renderD129), which ROCm matches against the host's KFD topology; if the
+  #   kernel ever renumbers the card, ROCm finds no node, the model loads on CPU, the
+  #   healthcheck stays green, and Plimsoll's post-call check (model 100% on GPU)
+  #   fails the run. Update the two targets then. One model, one request at a time.
+  # - SEED BEFORE THE FIRST DEPLOY of this service: an empty read-only models volume
+  #   crashes Ollama at start (it mkdirs /models/blobs), which would turn
+  #   assert-healthy red on every deploy until seeded. `make plimsoll-llm-seed`
+  #   creates the volume itself, so it runs from a checkout before the merge.
+  #
+  # The image MUST stay the same pin as `ollama` above, so a seeded blob is read by
+  # the version that wrote it. scripts/check-plimsoll-sandbox.py fails CI on any drift
+  # from all of this; `make plimsoll-llm-isolation` proves the network after a deploy.
+  #
+  # read_only and cap_drop are kept on the assumption ROCm runs without them — not yet
+  # verified on this card. If the first deploy's healthcheck fails on a ROCm write or
+  # a capability, drop the offending line and say so in the PR, not silently.
+  plimsoll-llm:
+    image: ollama/ollama:rocm@sha256:b5d0813b23540019b2a40d70af6531b1d76e5ebcbf17899e5922445c627b6063
+    container_name: plimsoll-llm
+    restart: unless-stopped
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_MODELS=/models
+      - OLLAMA_NOPRUNE=1
+      - OLLAMA_NOHISTORY=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_KEEP_ALIVE=1m
+      - OLLAMA_CONTEXT_LENGTH=16384
+    volumes:
+      - plimsoll_llm_models:/models:ro
+    tmpfs:
+      - /root/.ollama
+      - /tmp
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Long syntax because the by-path names contain colons, which the short
+    # `src:dst` form splits on.
+    devices:
+      - /dev/kfd
+      - source: /dev/dri/by-path/pci-0000:03:00.0-card
+        target: /dev/dri/card1
+        permissions: rwm
+      - source: /dev/dri/by-path/pci-0000:03:00.0-render
+        target: /dev/dri/renderD129
+        permissions: rwm
+    group_add:
+      - "44"   # video
+      - "993"  # render (host GID)
+    # The measured peak was about 6 GB of host RAM with the 31B fully offloaded; 12g
+    # is the plan's starting value and gets re-sized to peak + 25% after the live run.
+    mem_limit: 12g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - plimsoll_ai
+    # Can fail: `ollama list` exits non-zero when the server is not answering.
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # --- WEB UI (Open WebUI) ---
   open-webui:
@@ -456,9 +555,27 @@ services:
       # or neither: one alone refuses boot. Values live in Signet only.
       - PLIMSOLL_BIRTH_MONTH=${PLIMSOLL_BIRTH_MONTH}
       - PLIMSOLL_REFERENCE_SEX=${PLIMSOLL_REFERENCE_SEX}
+      # The model sandbox (PLIM-14). None of these is a secret: Ollama has no auth, and
+      # the network is the control. Unset PLIMSOLL_LLM_URL turns model features off.
+      - PLIMSOLL_LLM_URL=http://plimsoll-llm:11434
+      - PLIMSOLL_LLM_MODEL=gemma4:31b
+      # The manifest's own sha256, as `make plimsoll-llm-seed` verifies it and as the
+      # sandbox's /api/tags reports it. Change it only together with a re-seed.
+      - PLIMSOLL_LLM_MODEL_DIGEST=6316f0629137b426c9d9b853ffc4c8209589f30ee39aebede6285096c0ff47e7
+      - PLIMSOLL_LLM_THINK_BATCH=off
+      - PLIMSOLL_LLM_THINK_INTERACTIVE=off
+      # Used only to unload the shared instance's models before a run. Reached over
+      # construct_net, which both containers already share.
+      - PLIMSOLL_SHARED_OLLAMA_URL=http://ollama:11434
+      # The discrete GPU's PCI device directory; Plimsoll reads mem_info_vram_used in
+      # it. No mount is needed: a container's read-only /sys shows the host's device
+      # tree (checked from a throwaway container), and only this node is read.
+      - PLIMSOLL_LLM_GPU_SYSFS=/sys/bus/pci/devices/0000:03:00.0
+      - PLIMSOLL_LLM_VRAM_MAX_USED=4GiB
     networks:
       - construct_net
       - private_db_net
+      - plimsoll_ai
     depends_on:
       - postgres-private
     # /healthz, never /readyz: a database blip shouldn't restart the service.
@@ -2659,6 +2776,10 @@ volumes:
   catenary_media:
   # sextant's httpx response cache (SERV-242): losable, not backed up.
   sextant_cache:
+  # plimsoll-llm's weights (PLIM-14), written only by `make plimsoll-llm-seed` and
+  # mounted read-only by the sandbox. A copy of a blob the shared instance pulled
+  # (about 20 GB), re-creatable from it, so not backed up.
+  plimsoll_llm_models:
   # Zero Gravity Industries hybrid edge (SERV-19/20)
   traefik_letsencrypt:
   traefik_access_logs:
@@ -2678,6 +2799,19 @@ networks:
   private_db_net:
     name: private_db_net
     internal: true
+
+  # plimsoll and plimsoll-llm, and nothing else (PLIM-14). Measured on a throwaway
+  # probe network: `internal: true` alone still lets the host reach a container through
+  # the bridge address; the `isolated` gateway mode closes that. IPv6 stays off so no
+  # second path exists to reason about. scripts/check-plimsoll-sandbox.py fails CI if
+  # any of the three changes or any other service joins; `make plimsoll-llm-isolation`
+  # proves it on the running network.
+  plimsoll_ai:
+    name: plimsoll_ai
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
 
   # The cloudflared -> Traefik leg, and nothing else (SERV-107).
   #
