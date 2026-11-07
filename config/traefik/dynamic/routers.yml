@@ -773,8 +773,10 @@ http:
     cook_book:
       loadBalancer:
         # Express serving the API and the built SPA on COOK_BOOK_PORT (4001). Literal
-        # here because Traefik's file provider does not expand compose variables; the
-        # port is fixed by .env.example and required-env-keys.txt.
+        # here because Traefik's file provider does not expand compose variables. It
+        # must equal COOK_BOOK_PORT in the vault-rendered .env (the container listens
+        # on PORT=${COOK_BOOK_PORT}); change the two together or this 502s while every
+        # gate stays green. required-env-keys.txt only checks the key is non-empty.
         servers:
           - url: "http://cook_book:4001"
 

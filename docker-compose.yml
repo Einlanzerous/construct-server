@@ -430,8 +430,10 @@ services:
     restart: unless-stopped
     # Loopback only (COOK-21). Commonplace is reached through Cloudflare Access and
     # Traefik's `internal` entrypoint, both of which check the Access assertion. A
-    # LAN-wide host port was a second way in that checked nothing: with reads public
-    # and writes gated in-app, the one path that skips the edge must not exist.
+    # LAN-wide host port was a second way in that checked nothing. Until COOK-23 the
+    # write routes are unauthenticated in-app, so this bind (with Access) is the only
+    # thing protecting them: do not relax it as defence in depth. Once reads go
+    # public (Phase 2) the one path that skips the edge must still not exist.
     # Loopback keeps `curl localhost:4001` working on the box for operators.
     ports:
       - "127.0.0.1:${COOK_BOOK_PORT}:${COOK_BOOK_PORT}"
