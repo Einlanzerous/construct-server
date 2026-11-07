@@ -28,6 +28,16 @@ anything deploys or gets versioned.
   `private_db_net`, not `construct_net`; it is backed up as label `private`. Plimsoll
   (port 4016, PLIM-7) is its only client, and must never get a router, tunnel, public
   hostname or Access app.
+- `plimsoll-llm` — Plimsoll's own Ollama (PLIM-14), on the internal, isolated-gateway
+  `plimsoll_ai` network with exactly one other member, `plimsoll`. It sees health facts
+  in its prompts, so its config is an allowlist that `scripts/check-plimsoll-sandbox.py`
+  enforces in CI (`plimsoll-sandbox.yml`): no port, no second network, no env key outside
+  the list (never `OLLAMA_DEBUG`), the discrete GPU only, capped `json-file` logs, a
+  `mem_limit`, and the same image pin as `ollama`, which carries its own `mem_limit` for
+  the same reason (PLIM-14 ruling 6). Weights arrive only through `make plimsoll-llm-seed`
+  (digest-verified copy from the shared volume, `--network none`); `deploy.yml` runs
+  `scripts/check-plimsoll-llm-isolation.sh` after every deploy, and
+  `make plimsoll-llm-canary` checks the logs after a live eval.
 - `db/init-db.sh` — idempotent role/database bootstrap, runs on **every** deploy.
   Since SERV-169 it provisions chronicle and `asr` too (`asr` keeps its own database
   and role on the shared Postgres, not a schema inside Chronicle's — CHRN-25), with
