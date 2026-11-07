@@ -479,6 +479,29 @@ http:
         - cf-access-jwt
       # No TLS: internal is plain HTTP, as above.
 
+    # Commonplace (COOK-21), Phase 1: the WHOLE host sits behind Cloudflare Access and
+    # carries cf-access-jwt like every other router here. Nothing is public yet.
+    #
+    # The target shape is tiered: reads public, writes need an account, with Access
+    # narrowed to the one login path (/auth/sso) and the app minting its own session.
+    # That narrowing is a SEPARATE change — it adds an exemption here and a
+    # check-edge-auth.sh allowlist entry — and it must not land until the write gate
+    # (COOK-23) is in the PROD image, because until then POST/PUT/DELETE /api/recipes
+    # and the import routes are unauthenticated. Access on the whole host is what
+    # keeps them closed in the meantime.
+    #
+    # The AUD for this host is in cf-access-guard's CF_ACCESS_AUD_MAP (compose). A
+    # host missing from that map is refused, so this router cannot serve before the
+    # Access application exists and its tag is recorded there.
+    cook_book:
+      entryPoints:
+        - internal
+      rule: "Host(`commonplace.zerogravity.industries`)"
+      service: cook_book
+      middlewares:
+        - cf-access-jwt
+      # No TLS: internal is plain HTTP, as above.
+
     # THE ONE EXEMPTION from origin auth, and the only router on this entrypoint
     # without cf-access-jwt (SERV-106).
     #
@@ -746,6 +769,14 @@ http:
         # /sync (CANT-18) land on this same address and port.
         servers:
           - url: "http://catenary:4012"
+
+    cook_book:
+      loadBalancer:
+        # Express serving the API and the built SPA on COOK_BOOK_PORT (4001). Literal
+        # here because Traefik's file provider does not expand compose variables; the
+        # port is fixed by .env.example and required-env-keys.txt.
+        servers:
+          - url: "http://cook_book:4001"
 
     placard:
       loadBalancer:
