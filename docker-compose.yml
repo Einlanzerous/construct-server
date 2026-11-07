@@ -602,6 +602,23 @@ services:
     environment:
       - PORT=${COOK_BOOK_PORT}
       - DATABASE_URL=postgres://cook_book_user:${COOK_BOOK_DB_PASSWORD}@postgres:5432/cook_book?sslmode=disable
+      # Contributor identity from the Access assertion (COOK-23, SERV-262). The
+      # 2.0.0 image ignores all three, so this deploys BEFORE the COOK-23 image: that
+      # image boot-fails when any is unset, and its entrypoint migrates before it
+      # boots, so image-first would migrate and then crash-loop. Env first, image
+      # second; verify with `docker exec cook_book env` before promoting.
+      #
+      # Literals, not ${...}: an unset substitution would be an empty string, which
+      # is "set but malformed" to the app's boot check. AUTH_MODE and NODE_ENV are
+      # deliberately NOT set here; the default (`access`) is the production mode and
+      # the dev bypass must stay unreachable from this file.
+      #
+      # The AUD is Commonplace's Phase 1 Access application and must equal this
+      # host's CF_ACCESS_AUD_MAP entry on cf-access-guard (check-edge-auth.sh asserts
+      # it). Phase 2 changes the AUD: flip this and the map entry together.
+      - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      - CF_ACCESS_AUD=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e
+      - PUBLIC_ORIGIN=https://commonplace.zerogravity.industries
     networks:
       - construct_net
     depends_on:
