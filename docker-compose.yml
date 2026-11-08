@@ -2216,14 +2216,14 @@ services:
     # which would kill the process mid-drain.
     stop_grace_period: 30s
 
-  # --- TENDER (swipe-to-rate preference learner over ComfyUI renders) — SERV-273 / SERV-279 ---
-  # Bun + Hono + a Vue SPA in one image (published by the tender repo). State is
-  # SQLite plus the stored renders on tender_data; nothing else in the stack reads
+  # --- ARCUS (swipe-to-rate preference learner over ComfyUI renders) — SERV-273 / SERV-279 ---
+  # Bun + Hono + a Vue SPA in one image (published by the arcus repo). State is
+  # SQLite plus the stored renders on arcus_data; nothing else in the stack reads
   # it. It renders through the box's ComfyUI, which is NOT a service here: it is
   # the separate construct-comfyui compose project (IDEA-52, docs/comfyui.md) and
-  # publishes 8188 on the host, so tender reaches it through host.docker.internal
+  # publishes 8188 on the host, so arcus reaches it through host.docker.internal
   # the way switchyard reaches the Signet daemon. ComfyUI has no authentication of
-  # any kind; tender never proxies it (its own /api is the only surface) and must
+  # any kind; arcus never proxies it (its own /api is the only surface) and must
   # never be given a router that forwards to :8188.
   #
   # Loopback only, like trestle: the tunneled host is reached through Traefik's
@@ -2234,9 +2234,9 @@ services:
   # One render in flight at a time is enforced in the app, not here — the host's
   # 31 GiB of RAM is the binding constraint for ComfyUI (docs/comfyui.md), and
   # a second concurrent prompt is how it gets OOM-killed.
-  tender:
-    image: ghcr.io/einlanzerous/tender:${TENDER_TAG:-latest}
-    container_name: tender
+  arcus:
+    image: ghcr.io/einlanzerous/arcus:${ARCUS_TAG:-latest}
+    container_name: arcus
     restart: unless-stopped
     # 4017: the next free slot in the estate's 40xx block after sextant's 4016.
     ports:
@@ -2247,16 +2247,16 @@ services:
       - COMFY_URL=http://host.docker.internal:8188
       # Literal, not ${...}: the checkpoint name is a deploy fact about the box
       # (the spike put animagine-xl-4.0 in /srv/comfyui/models/checkpoints,
-      # SERV-274), and an empty substitution would make tender submit a graph
+      # SERV-274), and an empty substitution would make arcus submit a graph
       # ComfyUI rejects on every card.
       - COMFY_CHECKPOINT=animagine-xl-4.0.safetensors
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - tender_data:/data
+      - arcus_data:/data
     networks:
       - construct_net
-    # No depends_on: ComfyUI is outside this project, and tender degrades to a
+    # No depends_on: ComfyUI is outside this project, and arcus degrades to a
     # "COMFY offline" pill rather than failing when it is down.
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health || exit 1"]
@@ -2640,7 +2640,7 @@ services:
       # tunneled router that nobody mapped is unreachable, which is loud, rather than
       # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
       # and the routers agree, so they cannot drift apart silently.
-      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e,tender.zerogravity.industries=846a88d9327ce6e7bce48862657b39840725e8260298951d5a3c87d5b45d6457
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e,arcus.zerogravity.industries=846a88d9327ce6e7bce48862657b39840725e8260298951d5a3c87d5b45d6457
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway — it exists so the cutover could be rehearsed against real traffic
       # before three live routers went fail-closed at once, and it is not a steady state.
@@ -2844,9 +2844,9 @@ volumes:
   argosy_transcode:
   lyceum_data:
   trestle_data:
-  # tender's SQLite and stored renders (SERV-279): a taste profile that is slow
+  # arcus's SQLite and stored renders (SERV-279): a taste profile that is slow
   # to rebuild, but not backed up yet — see docs/backups.md.
-  tender_data:
+  arcus_data:
   # Catenary's uploaded chat media (SERV-244): NOT in Postgres, so not in the nightly
   # dump. Not backed up yet — see docs/backups.md.
   catenary_media:

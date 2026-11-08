@@ -582,14 +582,14 @@ http:
       middlewares:
         - cf-access-jwt
 
-    # Tender (SERV-279): one tunneled host, gated like lyceum. The app has no auth
+    # Arcus (SERV-279): one tunneled host, gated like lyceum. The app has no auth
     # of its own; Access is the whole of it, and the origin guard makes reaching
     # the entrypoint insufficient.
-    tender:
+    arcus:
       entryPoints:
         - internal
-      rule: "Host(`tender.zerogravity.industries`)"
-      service: tender
+      rule: "Host(`arcus.zerogravity.industries`)"
+      service: arcus
       middlewares:
         - cf-access-jwt
 
@@ -786,12 +786,12 @@ http:
         servers:
           - url: "http://lyceum:4005"
 
-    tender:
+    arcus:
       loadBalancer:
         # Bun serves the API and the built SPA same-origin on :3000 inside the
         # container (the host sees it as loopback :4017).
         servers:
-          - url: "http://tender:3000"
+          - url: "http://arcus:3000"
 
     wiki:
       loadBalancer:
