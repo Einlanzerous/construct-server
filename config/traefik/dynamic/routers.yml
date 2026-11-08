@@ -503,7 +503,8 @@ http:
     # cook-login: the one gated path. Priority is EXPLICIT and far above cook-public's:
     # Traefik otherwise ranks by rule length, and a rule that grows or shrinks must not
     # let cook-public swallow /auth/sso. check-edge-auth.sh asserts login > public in
-    # config (a lowered priority fails CI). Never 0: Traefik reads 0 as unset.
+    # config (a lowered priority fails the post-deploy edge-auth gate, NOT a PR check, and
+    # Traefik hot-reloads this file first, so review priority edits by hand). Never 0: Traefik reads 0 as unset.
     # `Path` is exact and case-sensitive, so /AUTH/SSO and /auth/sso/ fall to
     # cook-public, lose the assertion to strip-cf-access, and the app answers 401.
     #
