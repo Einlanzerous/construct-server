@@ -479,27 +479,63 @@ http:
         - cf-access-jwt
       # No TLS: internal is plain HTTP, as above.
 
-    # Commonplace (COOK-21), Phase 1: the WHOLE host sits behind Cloudflare Access and
-    # carries cf-access-jwt like every other router here. Nothing is public yet.
+    # Commonplace (COOK-21, COOK-41): reads public, writes need an account. One host,
+    # two routers, both to the one cook_book service.
     #
-    # The target shape is tiered: reads public, writes need an account, with Access
-    # narrowed to the one login path (/auth/sso) and the app minting its own session.
-    # That narrowing is a SEPARATE change — it adds an exemption here and a
-    # check-edge-auth.sh allowlist entry — and it must not land until the write gate
-    # (COOK-23) is in the PROD image, because until then POST/PUT/DELETE /api/recipes
-    # and the import routes are unauthenticated. Access on the whole host is what
-    # keeps them closed in the meantime.
+    # PHASE 1 (before the owner narrows the Cloudflare Access app): Access still covers
+    # the WHOLE host, so every request from the internet is stopped at the edge with the
+    # Access login, whatever these routers say. Merging this change alone opens nothing
+    # to the internet.
     #
-    # The AUD for this host is in cf-access-guard's CF_ACCESS_AUD_MAP (compose). A
-    # host missing from that map is refused, so this router cannot serve before the
-    # Access application exists and its tag is recorded there.
-    cook_book:
+    # PHASE 2 (after the owner narrows the Access app's destination to exactly
+    # commonplace.zerogravity.industries/auth/sso, a Cloudflare dashboard step this repo
+    # cannot do or see): only /auth/sso is behind Access. Everything else reaches the
+    # app anonymously, and the app enforces writes itself (401 without its own session
+    # cookie, minted at /auth/sso from the Access assertion).
+    #
+    # DO NOT DEPLOY THIS BEFORE cook_book 2.2.0 (read hardening: result caps, query-shape
+    # 400s, generic 500s, noindex; COOK-41) IS PROMOTED TO PROD. From the moment this
+    # lands, cook-public has no origin guard, so anything that can send
+    # `Host: commonplace.zerogravity.industries` to the internal entrypoint gets
+    # unauthenticated reads, even while Access still covers the whole host from the
+    # internet. Since SERV-107 that entrypoint binds only 172.31.240.10 on
+    # construct_edge_net, whose members are traefik, cf-access-guard and cloudflared, so
+    # the Phase 1 exposure is the box itself plus cloudflared (not construct_net).
+    #
+    # cook-login: the one gated path. Priority is EXPLICIT and far above cook-public's:
+    # Traefik otherwise ranks by rule length, and a rule that grows or shrinks must not
+    # let cook-public swallow /auth/sso. check-edge-auth.sh asserts login > public in
+    # config (a lowered priority fails the post-deploy edge-auth gate, NOT a PR check, and
+    # Traefik hot-reloads this file first, so review priority edits by hand). Never 0: Traefik reads 0 as unset.
+    # `Path` is exact and case-sensitive, so /AUTH/SSO and /auth/sso/ fall to
+    # cook-public, lose the assertion to strip-cf-access, and the app answers 401.
+    #
+    # The host's AUD stays in cf-access-guard's CF_ACCESS_AUD_MAP (compose), unchanged
+    # here. If narrowing changes the Access app's AUD, that is a later lockstep PR.
+    cook-login:
+      entryPoints:
+        - internal
+      rule: "Host(`commonplace.zerogravity.industries`) && Path(`/auth/sso`)"
+      priority: 1000
+      service: cook_book
+      middlewares:
+        - cf-access-jwt
+      # No TLS: internal is plain HTTP, as above.
+
+    # cook-public: everything else on the host. NO cf-access-jwt, by design (named in
+    # check-edge-auth.sh's exemption list with its reason). strip-cf-access blanks exactly two
+    # client-supplied headers, Cf-Access-Jwt-Assertion and
+    # Cf-Access-Authenticated-User-Email, so a forged assertion never reaches the app
+    # on the public paths (the app trusts only the JWT; any other Cf-Access-* header
+    # is NOT stripped). No explicit priority: it must stay the lowest rule for the
+    # host (the check requires cook-login strictly above it).
+    cook-public:
       entryPoints:
         - internal
       rule: "Host(`commonplace.zerogravity.industries`)"
       service: cook_book
       middlewares:
-        - cf-access-jwt
+        - strip-cf-access
       # No TLS: internal is plain HTTP, as above.
 
     # THE ONE EXEMPTION from origin auth, and the only router on this entrypoint
