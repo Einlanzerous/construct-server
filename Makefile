@@ -884,7 +884,9 @@ plimsoll-llm-canary:
 
 # Measure every MCP's tools/list: count, JSON bytes, estimated tokens (SERV-263).
 # Needs source checkouts of the services in scripts/mcp-tools-baseline.json
-# (MCP_SRC_<SERVICE> overrides the sibling-directory default). CI: mcp-tools.yml.
+# (MCP_SRC_<SERVICE> overrides the sibling-directory default, which only resolves from
+# a worktree under ~/projects/; elsewhere set them). Use FRESH clones: --update records
+# whatever the checkout holds, and the baseline names each source commit. CI: mcp-tools.yml.
 # Usage: make mcp-tools [update=1]
 mcp-tools:
 	@./scripts/measure-mcp-tools.py $(if $(update),--update,--check)

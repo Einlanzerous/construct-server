@@ -48,6 +48,7 @@ jobs:
           repository: Einlanzerous/switchyard
           path: src/switchyard
           token: ${{ secrets.WIKI_DOCS_TOKEN }}
+          persist-credentials: false
 
       - uses: actions/checkout@v4
         with:
@@ -55,6 +56,8 @@ jobs:
           path: src/chronicle
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: src/switchyard/package.json
 
       - uses: actions/setup-go@v5
         with:
