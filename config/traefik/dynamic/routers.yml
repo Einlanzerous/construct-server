@@ -496,9 +496,11 @@ http:
     # DO NOT DEPLOY THIS BEFORE cook_book 2.2.0 (read hardening: result caps, query-shape
     # 400s, generic 500s, noindex; COOK-41) IS PROMOTED TO PROD. From the moment this
     # lands, cook-public has no origin guard, so anything that can send
-    # `Host: commonplace.zerogravity.industries` to the internal entrypoint (this box,
-    # any container on construct_net) gets unauthenticated reads, even while Access
-    # still covers the whole host from the internet.
+    # `Host: commonplace.zerogravity.industries` to the internal entrypoint gets
+    # unauthenticated reads, even while Access still covers the whole host from the
+    # internet. Since SERV-107 that entrypoint binds only 172.31.240.10 on
+    # construct_edge_net, whose members are traefik, cf-access-guard and cloudflared, so
+    # the Phase 1 exposure is the box itself plus cloudflared (not construct_net).
     #
     # cook-login: the one gated path. Priority is EXPLICIT and far above cook-public's:
     # Traefik otherwise ranks by rule length, and a rule that grows or shrinks must not
@@ -521,9 +523,11 @@ http:
       # No TLS: internal is plain HTTP, as above.
 
     # cook-public: everything else on the host. NO cf-access-jwt, by design (named in
-    # check-edge-auth.sh's exemption list with its reason). strip-cf-access drops any
-    # client-supplied Cf-Access-* header so a forged assertion never reaches the app
-    # on the public paths. No explicit priority: it must stay the lowest rule for the
+    # check-edge-auth.sh's exemption list with its reason). strip-cf-access blanks exactly two
+    # client-supplied headers, Cf-Access-Jwt-Assertion and
+    # Cf-Access-Authenticated-User-Email, so a forged assertion never reaches the app
+    # on the public paths (the app trusts only the JWT; any other Cf-Access-* header
+    # is NOT stripped). No explicit priority: it must stay the lowest rule for the
     # host (the check requires cook-login strictly above it).
     cook-public:
       entryPoints:
