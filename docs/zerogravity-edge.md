@@ -118,6 +118,13 @@ gated path, never `/` or `/healthz` (both reach the public router), and the edge
 answer the Access 302 there, not the SPA's 200 or Traefik's 404. The shape is
 exercised by fixtures in `check-edge-auth-test.sh`; no real host uses it yet.
 
+Known gap, deliberate (SERV-271): the edge probe covers only the gated path. It does
+not yet assert that the public path (`/`) is NOT behind Access, so an Access
+application scoped to the whole host instead of the gated path stays green (it fails
+closed: the public site would sit behind a login). That probe lands after the COOK-41
+Access narrowing; before it, the whole host still answers the Access 302 on `/` and the
+probe would turn the deploy gate red on the router-split commit.
+
 ## The dev edge is a second, separate one (SERV-93)
 
 Dev has its own Traefik, its own `cf-access-guard`, its own tunnel and its own Access
