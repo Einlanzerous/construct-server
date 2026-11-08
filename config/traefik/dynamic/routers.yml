@@ -582,6 +582,17 @@ http:
       middlewares:
         - cf-access-jwt
 
+    # Arcus (SERV-279): one tunneled host, gated like lyceum. The app has no auth
+    # of its own; Access is the whole of it, and the origin guard makes reaching
+    # the entrypoint insufficient.
+    arcus:
+      entryPoints:
+        - internal
+      rule: "Host(`arcus.zerogravity.industries`)"
+      service: arcus
+      middlewares:
+        - cf-access-jwt
+
     # Estate wiki (SERV-101): generated static site, tunneled + Cloudflare Access.
     # `internal` only, like switchyard and lyceum — the wiki assembles the whole
     # stack's topology, host exposure and environment-variable names onto one
@@ -774,6 +785,13 @@ http:
         # on :4005 — no separate frontend, so route the tunneled host straight at it.
         servers:
           - url: "http://lyceum:4005"
+
+    arcus:
+      loadBalancer:
+        # Bun serves the API and the built SPA same-origin on :3000 inside the
+        # container (the host sees it as loopback :4017).
+        servers:
+          - url: "http://arcus:3000"
 
     wiki:
       loadBalancer:
