@@ -64,6 +64,9 @@ case "$url" in
   https://*)
     h="${url#https://}"; h="${h%%/*}"
     f="$FIX/public/$h"
+    # A MIXED host (COOK-41) is asked for its gated path; a case can make that one path
+    # answer differently (the SPA's 200, Traefik's 404) without touching the rest.
+    [ "${url#https://"$h"}" = /auth/sso ] && [ -f "$f.authsso" ] && f="$f.authsso"
     # A host that answers non-browser clients differently (mcp: Managed OAuth, 401).
     [ "$html" -eq 0 ] && [ -f "$f.nohtml" ] && f="$f.nohtml"
     [ -f "$f" ] || exit 6
@@ -72,7 +75,12 @@ case "$url" in
     # The only non-/ paths the script asks the origin for are the exempt ones, which
     # bypass the guard even on a gated host (switchyard's webhook).
     path="/${url#http://*/}"
-    if [ "$path" != / ]; then head='HTTP/1.1 404'
+    if grep -qxF "$host" "$FIX/mixed" 2>/dev/null; then
+      # Mixed host: public on /, gated on the one exact path.
+      if [ "$path" = /auth/sso ]; then head=$'HTTP/1.1 403\nx-cf-access-guard: deny'
+      elif [ "$path" = / ]; then head='HTTP/1.1 200'
+      else head='HTTP/1.1 404'; fi
+    elif [ "$path" != / ]; then head='HTTP/1.1 404'
     elif grep -qxF "$host" "$FIX/gated"; then head=$'HTTP/1.1 403\nx-cf-access-guard: deny'
     elif [[ $host != definitely-not-a-real-host* ]]; then head='HTTP/1.1 200'
     else head='HTTP/1.1 404'; fi ;;
@@ -225,6 +233,121 @@ run_planted "crowdsec-bouncer removed from catenary-public-auth -> red" 1 \
 planted; strip_mw chronicle-public strip-cf-access
 run_planted "the guard covers the older direct hosts too -> red for chronicle-public" 1 \
   "FAIL  -direct router chronicle-public lacks strip-cf-access"
+
+echo
+echo "=== check-edge-auth.sh mixed host: gated on /auth/sso, public elsewhere (COOK-41) ==="
+
+# The real routers.yml still has the single gated cook_book router (the split is a later
+# change), so the mixed shape lives only here: a planted copy with cook_book replaced by
+# cook-login + cook-public, and the script copy given the exemption the split will carry.
+CB_HOST="commonplace.zerogravity.industries"
+split_cook_book() {
+  python3 - "$TMP/planted" "$CB_HOST" <<'PYEND'
+import re, sys
+root, host = sys.argv[1:3]
+rp = f"{root}/config/traefik/dynamic/routers.yml"
+s = open(rp).read()
+pat = re.compile(r"^    cook_book:\n      entryPoints:\n        - internal\n      rule: \"Host\(`" + re.escape(host) + r"`\)\"\n      service: cook_book\n      middlewares:\n        - cf-access-jwt\n", re.M)
+assert pat.search(s), "cook_book router block not found"
+new = f"""    cook-login:
+      entryPoints:
+        - internal
+      rule: "Host(`{host}`) && Path(`/auth/sso`)"
+      priority: 100
+      service: cook_book
+      middlewares:
+        - cf-access-jwt
+    cook-public:
+      entryPoints:
+        - internal
+      rule: "Host(`{host}`)"
+      service: cook_book
+      middlewares:
+        - strip-cf-access
+"""
+open(rp, "w").write(pat.sub(lambda m: new, s, count=1))
+sp = f"{root}/scripts/check-edge-auth.sh"
+t = open(sp).read()
+key = "EXEMPT_JSON='{\"switchyard-github-webhook\":"
+assert key in t
+reason = "test fixture reason: the SPA and read API are public by design, only the sign-in path is gated"
+open(sp, "w").write(t.replace(key, "EXEMPT_JSON='{\"cook-public\": \"" + reason + "\", \"switchyard-github-webhook\":", 1))
+PYEND
+}
+# Edit one planted file: <relative path> <old> <new>.
+subst() {
+  python3 - "$TMP/planted/$1" "$2" "$3" <<'PYEND'
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+assert old in s, f"{old!r} not in {p}"
+open(p, "w").write(s.replace(old, new, 1))
+PYEND
+}
+ROUTERS_REL=config/traefik/dynamic/routers.yml
+run_planted_live() {
+  local name="$1" want="$2"; shift 2
+  OUT="$(PATH="$BIN:$PATH" FIX="$TMP/case" "$TMP/planted/scripts/check-edge-auth.sh" 2>&1)"; local rc=$?
+  local missing=""
+  for needle in "$@"; do printf '%s' "$OUT" | grep -qF -- "$needle" || missing="$missing [$needle]"; done
+  if [ "$rc" -ne "$want" ]; then bad "$name: exit $rc, expected $want"
+  elif [ -n "$missing" ]; then bad "$name: output lacks$missing"
+  else ok "$name"; fi
+}
+mixed_world() { world; printf '%s\n' "$CB_HOST" > "$TMP/case/mixed"; planted; split_cook_book; }
+
+mixed_world
+run_planted_live "the intended mixed shape -> green, config and live (gated path 302)" 0 \
+  "ok    mixed host $CB_HOST: gated only on /auth/sso" \
+  "ok    spoofed Host: $CB_HOST/auth/sso -> 403" \
+  "ok    exempt host $CB_HOST serves openly" \
+  "ok    edge: $CB_HOST is gated by Access" "The edge gates:"
+
+mixed_world; strip_mw cook-login cf-access-jwt
+run_planted "cook-login loses cf-access-jwt -> red" 1 \
+  "FAIL  internal routers with no cf-access-jwt middleware: cook-login"
+
+mixed_world; subst docker-compose.yml "$CB_HOST=" "removed-host.zerogravity.industries="
+run_planted "the host's AUD missing from CF_ACCESS_AUD_MAP -> red" 1 \
+  "FAIL  tunneled host(s) with no AUD registered: $CB_HOST"
+
+mixed_world; strip_mw cook-public strip-cf-access
+run_planted "cook-public lacks strip-cf-access while cook-login is gated -> red" 1 \
+  "FAIL  mixed host $CB_HOST: public router cook-public lacks strip-cf-access"
+
+mixed_world; subst $ROUTERS_REL 'Path(`/auth/sso`)' '!PathPrefix(`/api`)'
+run_planted "a !PathPrefix rule on the mixed host -> red" 1 \
+  "negated matcher"
+
+mixed_world; subst scripts/check-edge-auth.sh '"cook-public": "test fixture' '"cook-public": "", "x-unused": "test fixture'
+run_planted "an exemption with no stated reason -> red" 1 \
+  "FAIL  EXEMPT entry cook-public has no stated reason"
+
+LOGIN_PRIO=$'priority: 100\n      service: cook_book'
+mixed_world; subst $ROUTERS_REL "$LOGIN_PRIO" $'priority: 20\n      service: cook_book'
+run_planted "cook-login priority below cook-public (default = rule length) -> red" 1 \
+  "is not above public router cook-public"
+
+mixed_world; subst $ROUTERS_REL "$LOGIN_PRIO" $'priority: 10\n      service: cook_book'
+subst $ROUTERS_REL $'      service: cook_book\n      middlewares:\n        - strip-cf-access' $'      priority: 0\n      service: cook_book\n      middlewares:\n        - strip-cf-access'
+run_planted "public router priority 0 is Traefik's default (rule length), not rank 0 -> red" 1 \
+  "is not above public router cook-public (priority 42)"
+
+mixed_world; subst $ROUTERS_REL "$LOGIN_PRIO" $'priority: 42\n      service: cook_book'
+run_planted "cook-login priority equal to cook-public's rule length -> red" 1 \
+  "is not above public router cook-public"
+
+mixed_world; subst $ROUTERS_REL $'      priority: 100\n      service: cook_book' '      service: cook_book'
+run_planted "cook-login with no explicit priority -> red" 1 \
+  "has no explicit integer priority"
+
+mixed_world; printf 'HTTP/2 200\nserver: cloudflare\n' > "$TMP/case/public/$CB_HOST.authsso"
+run_planted_live "gated-path probe gets the SPA's 200 instead of the 302 -> red" 1 \
+  "FAIL  edge: $CB_HOST/auth/sso answered 200 instead of the Access 302"
+
+mixed_world; printf 'HTTP/2 404\nserver: cloudflare\n' > "$TMP/case/public/$CB_HOST.authsso"
+run_planted_live "gated-path probe gets Traefik's unrouted 404 instead of the 302 -> red" 1 \
+  "FAIL  edge: $CB_HOST/auth/sso answered 404 instead of the Access 302"
 
 echo
 echo "$PASS passed, $FAIL failed"

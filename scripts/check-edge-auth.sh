@@ -66,6 +66,16 @@
 #      An unauthenticated request through Cloudflare's edge must be redirected to the
 #      guard's own team domain, at the login for THAT host, and the audience in the
 #      redirect (`kid=`) must equal the host's CF_ACCESS_AUD_MAP entry.
+#  12. MIXED HOSTS (COOK-41). A host may be gated on ONE exact path and public
+#      everywhere else: a gated router for `Host(h) && Path(p)` carrying cf-access-jwt
+#      with an explicit `priority`, above a public router (bare Host, strip-cf-access,
+#      NO cf-access-jwt) that is exempt WITH A STATED REASON. Config: the gated rule is
+#      exactly Host + one exact Path (no PathPrefix, no negation anywhere on the host),
+#      the gated priority is strictly above the public one's (explicit, or Traefik's
+#      default of rule length), the public router strips Cf-Access-* and every exemption
+#      carries a non-empty reason. Live: the spoofed-Host and edge probes target the
+#      GATED PATH, not `/` or `/healthz` (both would reach the public router), and the
+#      edge must answer the Access 302 there, never the SPA's 200 or Traefik's 404.
 #
 # TWO CLAIMS, NOT ONE (SERV-171). Checks 1-10 prove the ORIGIN authenticates. They
 # cannot prove the host is Access-GATED, because whether an Access application exists
@@ -298,6 +308,58 @@ for name, r in internal.items():
 # because switchyard's host carries both a gated router and the exempt webhook
 # path and must stay in the gated set.
 open_hosts = {h for h, names in host_routers.items() if all(n in EXEMPT for n in names)}
+
+# MIXED HOSTS (COOK-41): gated on one exact path, public elsewhere. See the header.
+# A host is mixed when it has BOTH a gated router and an exempt router whose rule is a
+# bare Host(). Everything that keeps such a host safe is asserted here, in config, so CI
+# catches a lowered priority or a dropped middleware without needing the live probe.
+for _n, _why in EXEMPT.items():
+    if not isinstance(_why, str) or not _why.strip():
+        bad(f"EXEMPT entry {_n} has no stated reason — an exemption nobody argued for")
+
+BARE_HOST = re.compile(r"Host\(`([^`]+)`\)")
+def _norm(rule):
+    return re.sub(r"\s+", " ", (rule or "").strip())
+mixed = {}   # host -> exact gated path
+for h, names in sorted(host_routers.items()):
+    public = [n for n in names if n in EXEMPT and BARE_HOST.fullmatch(_norm(internal[n].get("rule")))]
+    gated_rs = [n for n in names if n not in EXEMPT]
+    if not (public and gated_rs):
+        continue
+    ok_host = True
+    def mbad(msg):
+        global ok_host
+        ok_host = False
+        bad(msg)
+    for n in names:
+        if "!" in internal[n].get("rule", ""):
+            mbad(f"mixed host {h}: router {n} uses a negated matcher; a negation cannot be reasoned about, spell the gated path as an exact Path()")
+    if len(gated_rs) != 1:
+        mbad(f"mixed host {h}: expected exactly one gated router, found {', '.join(gated_rs)}")
+    for g in gated_rs:
+        m = re.fullmatch(r"Host\(`" + re.escape(h) + r"`\) && Path\(`(/[^`]*)`\)", _norm(internal[g].get("rule")), re.I)
+        if not m:
+            mbad(f"mixed host {h}: gated router {g} must match exactly Host(`{h}`) && Path(`/...`), not {internal[g].get('rule')!r}")
+            continue
+        gp = internal[g].get("priority")
+        if isinstance(gp, bool) or not isinstance(gp, int) or gp == 0:
+            mbad(f"mixed host {h}: gated router {g} has no explicit integer priority; Traefik would rank it by rule length")
+        else:
+            for pn in public:
+                pr = internal[pn]
+                pp = pr.get("priority") or len(pr.get("rule", ""))   # Traefik reads priority 0 as unset
+                if gp <= pp:
+                    mbad(f"mixed host {h}: gated router {g} (priority {gp}) is not above public router {pn} (priority {pp}); the public router would swallow the gated path")
+        if ok_host:
+            mixed[h] = m.group(1)
+    for pn in public:
+        mws = internal[pn].get("middlewares") or []
+        if "strip-cf-access" not in mws:
+            mbad(f"mixed host {h}: public router {pn} lacks strip-cf-access, so a forged Cf-Access-* header reaches the app on the public paths")
+        if middleware in mws:
+            mbad(f"mixed host {h}: public router {pn} carries {middleware}; it would refuse every anonymous request")
+    if ok_host:
+        print(f"  ok    mixed host {h}: gated only on {mixed[h]} ({', '.join(gated_rs)} above {', '.join(public)}), public elsewhere")
 
 raw = open(compose_file).read()
 
@@ -611,6 +673,8 @@ with open(os.environ["PROBE_OUT"], "w") as fh:
         fh.write(f"team {team_domain}\n")
     for h in sorted(set(hosts) - open_hosts):
         fh.write(f"host {h}\n")
+        if h in mixed:
+            fh.write(f"gpath {h} {mixed[h]}\n")
         if h in aud_map:
             fh.write(f"aud {h} {aud_map[h]}\n")
     for name in sorted(EXEMPT):
@@ -694,6 +758,8 @@ done
 ADDR="$(awk '$1=="addr"{print $2}' "$PROBES")"
 mapfile -t HOSTS < <(awk '$1=="host"{print $2}' "$PROBES")
 mapfile -t EXEMPTS < <(awk '$1=="exempt"{print $2, $3}' "$PROBES")
+declare -A GPATH=()
+while read -r _ gp_host gp_path; do GPATH["$gp_host"]="$gp_path"; done < <(awk '$1=="gpath"' "$PROBES")
 mapfile -t EXEMPT_HOSTS < <(awk '$1=="exempt-host"{print $2}' "$PROBES")
 if [ -z "$ADDR" ] || [ "${#HOSTS[@]}" -eq 0 ]; then
   err "ERROR: could not derive the internal entrypoint address or its hosts from the config"
@@ -734,18 +800,20 @@ probe() {
   # exits non-zero, so an `echo` on the right-hand side appends a SECOND line to a
   # value the caller compares as one string.
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "Host: $1" "http://$ADDR/" 2>/dev/null || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "Host: $1" "http://$ADDR${2:-/}" 2>/dev/null || true)"
   printf '%s\n' "${code:-000}"
 }
 
-# 6. The exploit, verbatim, per tunneled host.
+# 6. The exploit, verbatim, per tunneled host. A MIXED host (COOK-41) is public on `/`
+# by design, so its spoof is aimed at its gated path instead.
 echo
 for host in "${HOSTS[@]}"; do
-  code="$(probe "$host")"
+  gpath="${GPATH[$host]:-}"
+  code="$(probe "$host" "${gpath:-/}")"
   if [ "$code" = "403" ]; then
-    echo "  ok    spoofed Host: $host -> 403"
+    echo "  ok    spoofed Host: $host${gpath} -> 403"
   else
-    echo "  FAIL  spoofed Host: $host -> $code (expected 403)"
+    echo "  FAIL  spoofed Host: $host${gpath} -> $code (expected 403)"
     case "$code" in
       200) echo "        The origin served this host to an unauthenticated request. This is SERV-106." ;;
       000) echo "        Could not connect to $ADDR at all. That is not a pass: this asserts the"
@@ -903,9 +971,11 @@ if [ -z "$TEAM" ]; then
   EDGE_FAIL=1
 else
   for host in "${HOSTS[@]}"; do
-    head="$(curl -s -D- -o /dev/null --max-time 10 -H 'Accept: text/html' "https://$host/healthz" 2>/dev/null | tr -d '\r' || true)"
+    # A mixed host's `/healthz` is public, so its edge probe asks for the gated path.
+    epath="${GPATH[$host]:-/healthz}"
+    head="$(curl -s -D- -o /dev/null --max-time 10 -H 'Accept: text/html' "https://$host$epath" 2>/dev/null | tr -d '\r' || true)"
     if ! printf '%s' "$head" | grep -qi '^HTTP/'; then
-      echo "  FAIL  edge: could not reach https://$host/healthz"
+      echo "  FAIL  edge: could not reach https://$host$epath"
       echo "        That is not a pass: this asks what Cloudflare does with an unauthenticated"
       echo "        request, and an unreachable edge proves nothing about it."
       EDGE_FAIL=1
@@ -947,6 +1017,12 @@ else
       echo "        and no way to obtain an assertion for this host, so the guard will 403"
       echo "        legitimate callers for ever. Check the hostname on the Access application"
       echo "        for a typo (SERV-171)."
+      EDGE_FAIL=1
+    elif [ -n "${GPATH[$host]:-}" ] && { [ "$code" = "200" ] || [ "$code" = "404" ]; }; then
+      echo "  FAIL  edge: $host$epath answered $code instead of the Access 302 — the gated path is not gated"
+      echo "        200 is the public router (the SPA) serving it; 404 is Traefik with no router"
+      echo "        for it. Either way no login is demanded: check the gated router's priority"
+      echo "        and that the Access application's destination is exactly $epath."
       EDGE_FAIL=1
     else
       echo "  FAIL  edge: $host answered $code, which is neither an Access login redirect nor"
