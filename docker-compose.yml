@@ -2258,12 +2258,16 @@ services:
       - construct_net
     # No depends_on: ComfyUI is outside this project, and arcus degrades to a
     # "COMFY offline" pill rather than failing when it is down.
+    # The image is oven/bun:1-slim: no wget, no curl. Probe with bun itself,
+    # the same line as the image's own HEALTHCHECK (compose overrides it, so it
+    # has to be repeated here or the container is unhealthy for lack of wget —
+    # which is exactly how the first deploy failed).
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health || exit 1"]
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 30s
 
   # --- SEXTANT (ATS-first role discovery: one person's scored job search) — SERV-242 / SXT-1 ---
   # One static Go binary on a distroless runtime (gcr.io/distroless/static-debian12:
