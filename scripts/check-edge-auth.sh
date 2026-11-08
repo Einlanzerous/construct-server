@@ -342,12 +342,12 @@ for h, names in sorted(host_routers.items()):
             mbad(f"mixed host {h}: gated router {g} must match exactly Host(`{h}`) && Path(`/...`), not {internal[g].get('rule')!r}")
             continue
         gp = internal[g].get("priority")
-        if isinstance(gp, bool) or not isinstance(gp, int):
+        if isinstance(gp, bool) or not isinstance(gp, int) or gp == 0:
             mbad(f"mixed host {h}: gated router {g} has no explicit integer priority; Traefik would rank it by rule length")
         else:
             for pn in public:
                 pr = internal[pn]
-                pp = pr.get("priority", len(pr.get("rule", "")))
+                pp = pr.get("priority") or len(pr.get("rule", ""))   # Traefik reads priority 0 as unset
                 if gp <= pp:
                     mbad(f"mixed host {h}: gated router {g} (priority {gp}) is not above public router {pn} (priority {pp}); the public router would swallow the gated path")
         if ok_host:

@@ -328,6 +328,11 @@ mixed_world; subst $ROUTERS_REL "$LOGIN_PRIO" $'priority: 20\n      service: coo
 run_planted "cook-login priority below cook-public (default = rule length) -> red" 1 \
   "is not above public router cook-public"
 
+mixed_world; subst $ROUTERS_REL "$LOGIN_PRIO" $'priority: 10\n      service: cook_book'
+subst $ROUTERS_REL $'      service: cook_book\n      middlewares:\n        - strip-cf-access' $'      priority: 0\n      service: cook_book\n      middlewares:\n        - strip-cf-access'
+run_planted "public router priority 0 is Traefik's default (rule length), not rank 0 -> red" 1 \
+  "is not above public router cook-public (priority 42)"
+
 mixed_world; subst $ROUTERS_REL "$LOGIN_PRIO" $'priority: 42\n      service: cook_book'
 run_planted "cook-login priority equal to cook-public's rule length -> red" 1 \
   "is not above public router cook-public"
