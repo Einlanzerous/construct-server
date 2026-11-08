@@ -116,7 +116,7 @@ default of rule length), when the public router lacks `strip-cf-access`, or when
 exemption has an empty reason. Live, the spoofed-Host and edge probes aim at the
 gated path, never `/` or `/healthz` (both reach the public router), and the edge must
 answer the Access 302 there, not the SPA's 200 or Traefik's 404. The shape is
-exercised by fixtures in `check-edge-auth-test.sh`; no real host uses it yet.
+exercised by fixtures in `check-edge-auth-test.sh`. `commonplace.zerogravity.industries` is the first real mixed host: `cook-login` (`/auth/sso`, priority 1000, gated) above `cook-public` (exempt, `strip-cf-access`). The split must not be deployed before cook_book 2.2.0 (read hardening) is promoted, because it makes the internal entrypoint serve unauthenticated reads from the box and `construct_net`; until the owner narrows the Access app to `/auth/sso`, Access still gates the whole host from the internet.
 
 Known gap, deliberate (SERV-271): the edge probe covers only the gated path. It does
 not yet assert that the public path (`/`) is NOT behind Access, so an Access

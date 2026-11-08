@@ -113,6 +113,9 @@ open(f"{out}/team", "w").write(team)
 PY
 HOST="$(head -n 1 "$TMP/base/gated")"
 TEAM="$(cat "$TMP/base/team")"
+# commonplace is a mixed host in the real routers.yml (COOK-21/COOK-41 router split): public
+# on /, gated on /auth/sso. The stub origin must answer that way for every case.
+printf '%s\n' commonplace.zerogravity.industries > "$TMP/base/mixed"
 AUD="$(sed -n 's/.*kid=\([0-9a-f]*\).*/\1/p' "$TMP/base/public/$HOST")"
 
 PASS=0; FAIL=0
@@ -237,42 +240,16 @@ run_planted "the guard covers the older direct hosts too -> red for chronicle-pu
 echo
 echo "=== check-edge-auth.sh mixed host: gated on /auth/sso, public elsewhere (COOK-41) ==="
 
-# The real routers.yml still has the single gated cook_book router (the split is a later
-# change), so the mixed shape lives only here: a planted copy with cook_book replaced by
-# cook-login + cook-public, and the script copy given the exemption the split will carry.
+# The real routers.yml and the real exemption list now carry the split (COOK-41 router
+# split), so the mixed shape is the one under test as shipped, not a planted copy. The
+# helper only asserts that, so a revert of the split fails loudly here rather than making
+# every mutation below pass for the wrong reason.
 CB_HOST="commonplace.zerogravity.industries"
 split_cook_book() {
-  python3 - "$TMP/planted" "$CB_HOST" <<'PYEND'
-import re, sys
-root, host = sys.argv[1:3]
-rp = f"{root}/config/traefik/dynamic/routers.yml"
-s = open(rp).read()
-pat = re.compile(r"^    cook_book:\n      entryPoints:\n        - internal\n      rule: \"Host\(`" + re.escape(host) + r"`\)\"\n      service: cook_book\n      middlewares:\n        - cf-access-jwt\n", re.M)
-assert pat.search(s), "cook_book router block not found"
-new = f"""    cook-login:
-      entryPoints:
-        - internal
-      rule: "Host(`{host}`) && Path(`/auth/sso`)"
-      priority: 100
-      service: cook_book
-      middlewares:
-        - cf-access-jwt
-    cook-public:
-      entryPoints:
-        - internal
-      rule: "Host(`{host}`)"
-      service: cook_book
-      middlewares:
-        - strip-cf-access
-"""
-open(rp, "w").write(pat.sub(lambda m: new, s, count=1))
-sp = f"{root}/scripts/check-edge-auth.sh"
-t = open(sp).read()
-key = "EXEMPT_JSON='{\"switchyard-github-webhook\":"
-assert key in t
-reason = "test fixture reason: the SPA and read API are public by design, only the sign-in path is gated"
-open(sp, "w").write(t.replace(key, "EXEMPT_JSON='{\"cook-public\": \"" + reason + "\", \"switchyard-github-webhook\":", 1))
-PYEND
+  grep -qF 'cook-login:' "$TMP/planted/config/traefik/dynamic/routers.yml" \
+    && grep -qF 'cook-public:' "$TMP/planted/config/traefik/dynamic/routers.yml" \
+    && grep -qF '"cook-public":' "$TMP/planted/scripts/check-edge-auth.sh" \
+    || { echo "split_cook_book: the real routers.yml / exemption list lack the cook-login + cook-public split" >&2; exit 2; }
 }
 # Edit one planted file: <relative path> <old> <new>.
 subst() {
@@ -319,11 +296,11 @@ mixed_world; subst $ROUTERS_REL 'Path(`/auth/sso`)' '!PathPrefix(`/api`)'
 run_planted "a !PathPrefix rule on the mixed host -> red" 1 \
   "negated matcher"
 
-mixed_world; subst scripts/check-edge-auth.sh '"cook-public": "test fixture' '"cook-public": "", "x-unused": "test fixture'
+mixed_world; subst scripts/check-edge-auth.sh '"cook-public": "public reads' '"cook-public": "", "x-unused": "public reads'
 run_planted "an exemption with no stated reason -> red" 1 \
   "FAIL  EXEMPT entry cook-public has no stated reason"
 
-LOGIN_PRIO=$'priority: 100\n      service: cook_book'
+LOGIN_PRIO=$'priority: 1000\n      service: cook_book'
 mixed_world; subst $ROUTERS_REL "$LOGIN_PRIO" $'priority: 20\n      service: cook_book'
 run_planted "cook-login priority below cook-public (default = rule length) -> red" 1 \
   "is not above public router cook-public"
@@ -337,7 +314,7 @@ mixed_world; subst $ROUTERS_REL "$LOGIN_PRIO" $'priority: 42\n      service: coo
 run_planted "cook-login priority equal to cook-public's rule length -> red" 1 \
   "is not above public router cook-public"
 
-mixed_world; subst $ROUTERS_REL $'      priority: 100\n      service: cook_book' '      service: cook_book'
+mixed_world; subst $ROUTERS_REL $'      priority: 1000\n      service: cook_book' '      service: cook_book'
 run_planted "cook-login with no explicit priority -> red" 1 \
   "has no explicit integer priority"
 
