@@ -99,6 +99,7 @@ on:
         options:
           - amber
           - aperture
+          - arcus
           - argosy
           - asr
           - catenary
