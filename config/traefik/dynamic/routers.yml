@@ -850,6 +850,24 @@ http:
         servers:
           - url: "http://trestle:4014"
 
+    # SATLINK (SERV-295 / SATL-15): the BACKEND ONLY, and no router points at it. That is
+    # the decision, not an omission: a router here is `internal`, so it needs
+    # `cf-access-jwt` and a CF_ACCESS_AUD_MAP entry for its host (check-edge-auth.sh
+    # fails on one without the other), and the AUD does not exist until the Access
+    # application does. DNS, the tunnel route and that application are one separate
+    # purser step (`purser provision-service`, SATL-16). Until it lands the service is
+    # reachable only from construct_net, which is what we want of an unauthenticated-
+    # at-the-edge dashboard. The router that eventually lands is Access-gated like every
+    # other `internal` one; satlink has its own /api bearer gate behind it.
+    satlink:
+      loadBalancer:
+        # Bun serving the API and the built SPA same-origin on :4018 — the next free
+        # slot in the 40xx block after arcus's loopback 4017, NOT the image's default 4015
+        # (sextant's). Literal because the file provider does not expand compose
+        # variables; it must equal PORT on the satlink service.
+        servers:
+          - url: "http://satlink:4018"
+
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.
     blackhole:

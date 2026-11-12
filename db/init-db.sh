@@ -211,3 +211,22 @@ ensure_chronicle_tier1() {
 }
 
 ensure_chronicle_tier1 "$CHRONICLE_TIER1_DB_PASSWORD" chronicle chronicle_test
+
+# --- Satlink (SERV-295 / SATL-15) ---
+#
+# Sextant's shape: bare role, owner only, PUBLIC revoked. The role name is
+# load-bearing in SATLINK's DATABASE_URL in docker-compose.yml; renaming it locks the
+# service out of its own samples. The password reaches this script from the postgres
+# container's environment (the SATLINK_DB_PASSWORD line on that service), and the
+# empty-password guard in ensure_db skips loudly without it.
+#
+# satlink_test exists because satlink's integration tier refuses to run without
+# DATABASE_URL_TEST (its CLAUDE.md invariant 1) and truncates what it points at; the
+# `*_test` exclusion in config/backup/backup.conf keeps it out of the nightly dump.
+# Nothing deployed reads it. NOT in the backup must-dump floor yet: that floor fails the
+# nightly run when a listed database is absent, so it joins only after this has run.
+ensure_db satlink "$SATLINK_DB_PASSWORD" satlink
+ensure_db satlink "$SATLINK_DB_PASSWORD" satlink_test
+
+revoke_public satlink
+revoke_public satlink_test

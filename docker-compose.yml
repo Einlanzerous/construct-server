@@ -471,6 +471,13 @@ services:
       # and `svc=interlock-worker` straight after and expect that run's health
       # gate to fail, correctly. Be at a terminal when it lands.
       - SEXTANT_DB_PASSWORD=${SEXTANT_DB_PASSWORD}
+      #
+      # SATLINK (SERV-295): same mechanism and the same BUDGET FOR A RECREATE as the
+      # SEXTANT line above. This `environment:` edit moves postgres's config hash, so
+      # the next `up -d` recreates postgres; run `make force-recreate svc=switchyard`
+      # and `svc=interlock-worker` straight after and expect that run's health gate to
+      # fail, correctly. Be at a terminal when it lands.
+      - SATLINK_DB_PASSWORD=${SATLINK_DB_PASSWORD}
     networks:
       - construct_net
 
@@ -2403,6 +2410,89 @@ services:
     # box (/etc/docker/daemon.json sets none), so a crash loop naming a missing
     # figure every few seconds would grow a log without bound. First service in
     # this file to set it; the others ride the daemon default.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- SATLINK (estate health dashboard) — SERV-295 / SATL-15 ---
+  # Bun + Hono + a Vue SPA in one image (published by the satlink repo). It reads
+  # the estate rather than serving it: the Traefik access log, Postgres stats, the
+  # Switchyard delivery ledger and GitHub for the practices scan.
+  #
+  # NO IMAGE EXISTS YET. satlink has no build/publish job and its first
+  # release-please PR is deliberately unmerged, so SATLINK_TAG has no pin in
+  # versions.env and this block cannot deploy: it floats to `:latest`, which the
+  # "tags are pinned" step in deploy.yml rejects. Same rule as SEXTANT and ARCUS —
+  # the pin and the block merge together, after ghcr.io/einlanzerous/satlink:<tag>
+  # exists. See versions.env.
+  #
+  # No `ports:` and no routers.yml-reachable edge: the dashboard is reached through
+  # Traefik's `internal` entrypoint only, and the public edge (DNS, tunnel route,
+  # Access app) is a separate purser step decided in SATL-16. `expose:` is
+  # documentation, as on catenary and sextant.
+  #
+  # TODO(SATL-16): Docker access for the Docker-state collector (DOCKER_API_BASE).
+  # The decision between a GET-only socket proxy and anything broader is NOT made,
+  # so NO Docker socket is mounted and DOCKER_API_BASE is unset: the collector
+  # registers and reports `unavailable`, which shows as a gap on the dashboard
+  # instead of a failure. Do not mount /var/run/docker.sock here to "finish" this.
+  #
+  # Not wired, on purpose, each one reports `unavailable` rather than failing boot:
+  # HOST_DISK_MOUNTS / HOST_BACKUP_STATE_PATH (no host bind mounts yet) and
+  # HOST_APERTURE_URL. They are separate decisions, not part of this onboarding.
+  satlink:
+    image: ghcr.io/einlanzerous/satlink:${SATLINK_TAG:-latest}
+    container_name: satlink
+    restart: unless-stopped
+    environment:
+      # 4018, NOT the image's default of 4015: that is sextant's, and the PORT env var
+      # overrides it (the image's own HEALTHCHECK reads the same variable). 4017 is
+      # arcus's loopback publish, so 4018 is the next free slot in the 40xx block.
+      - PORT=4018
+      # URL form: satlink parses DATABASE_URL with z.url(), so the keyword/value form
+      # catenary and sextant use is refused at boot. The role is BARE (`satlink`),
+      # like sextant's. A password with @ / # ? % would misparse here; see .env.example.
+      - DATABASE_URL=postgres://satlink:${SATLINK_DB_PASSWORD}@postgres:5432/satlink?sslmode=disable
+      # The /api bearer gate. Unset refuses every /api request, so it is in
+      # required-env-keys.txt: a missing key must fail the deploy, not boot "healthy".
+      - API_TOKEN=${SATLINK_API_TOKEN}
+      # A pg_monitor-only role, never the DATABASE_URL credential (docs/collectors/postgres.md).
+      - PG_MONITOR_URL=${SATLINK_PG_MONITOR_URL}
+      # Cleartext http is accepted only for the one host named below (SATL-49): the
+      # bearer token stays on the bridge network and never leaves the host.
+      - SWITCHYARD_URL=http://switchyard:4002
+      - SWITCHYARD_ALLOW_HTTP_HOST=switchyard
+      - SWITCHYARD_TOKEN=${SATLINK_SWITCHYARD_TOKEN}
+      # Fine-grained read-only GitHub token for the practices scan, this consumer alone.
+      - PRACTICES_GITHUB_TOKEN=${SATLINK_PRACTICES_GH_TOKEN}
+      # The traefik_access_logs volume, mounted read-only below. The rotated file is
+      # left to its default of <path>.1.
+      - TRAEFIK_ACCESS_LOG_PATH=/var/log/traefik/access.log
+    expose:
+      - "4018"
+    volumes:
+      # Read-only, like crowdsec's mount. traefik.yml writes /var/log/traefik/access.log.
+      # satlink runs as the image's `bun` user: if the file is not world-readable the
+      # collector reports `unavailable` — check on the first deploy.
+      - traefik_access_logs:/var/log/traefik:ro
+    networks:
+      - construct_net
+    depends_on:
+      - postgres
+    # /healthz, never /readyz: it reports the database watchdog and the collector
+    # summary but a blip must not restart the scheduler mid-run. wget is busybox's, in
+    # the bun alpine base. `wget -q` exits non-zero on the 503 a dead database returns.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4018/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # Migrations run in-process before it listens, so give a shutdown room to finish one.
+    stop_grace_period: 30s
+    # Explicit, as on sextant: the daemon's json-file driver has no size cap on this box.
     logging:
       driver: json-file
       options:
