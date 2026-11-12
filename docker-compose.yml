@@ -2421,12 +2421,9 @@ services:
   # the estate rather than serving it: the Traefik access log, Postgres stats, the
   # Switchyard delivery ledger and GitHub for the practices scan.
   #
-  # NO IMAGE EXISTS YET. satlink has no build/publish job and its first
-  # release-please PR is deliberately unmerged, so SATLINK_TAG has no pin in
-  # versions.env and this block cannot deploy: it floats to `:latest`, which the
-  # "tags are pinned" step in deploy.yml rejects. Same rule as SEXTANT and ARCUS —
-  # the pin and the block merge together, after ghcr.io/einlanzerous/satlink:<tag>
-  # exists. See versions.env.
+  # Published by the satlink repo's image workflow on release (SATL-50); SATLINK_TAG in
+  # versions.env pins major.minor like the other first-party images. The package is
+  # private, so the host must be logged in to ghcr.io to pull it.
   #
   # No `ports:` and no routers.yml-reachable edge: the dashboard is reached through
   # Traefik's `internal` entrypoint only, and the public edge (DNS, tunnel route,
