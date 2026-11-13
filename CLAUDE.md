@@ -74,6 +74,13 @@ anything deploys or gets versioned.
   it: catenary crash-loops on an unreachable database until `provision.sql` is run.
   (Chronicle used to be in this sentence; since SERV-182 its one crash cycle on a
   rebuild is the script's ordering, not a missing hand-run step, and it recovers.)
+- `satlink` — the estate health dashboard (SERV-295 / SATL-15, repo `Einlanzerous/satlink`):
+  port 4018 (not its image default 4015, which is sextant's), no host port, own database
+  `satlink` on the shared Postgres via `db/init-db.sh`, the `traefik_access_logs` volume
+  mounted read-only. `routers.yml` carries the backend only: no router yet, so it is
+  reachable only from `construct_net` until SATL-16 adds an Access-gated `internal`
+  router. That edge step is also the decision on Docker access
+  (`DOCKER_API_BASE` is unset and no socket is mounted, a TODO in the block).
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).
