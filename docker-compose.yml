@@ -2425,9 +2425,9 @@ services:
   # versions.env pins major.minor like the other first-party images. The package is
   # private, so the host must be logged in to ghcr.io to pull it.
   #
-  # No `ports:` and no routers.yml-reachable edge: the dashboard is reached through
-  # Traefik's `internal` entrypoint only, and the public edge (DNS, tunnel route,
-  # Access app) is a separate purser step decided in SATL-16. `expose:` is
+  # No `ports:` and no router yet: reachable only from construct_net until SATL-16 adds
+  # an Access-gated `internal` router (the public edge, DNS, tunnel route and Access app,
+  # is a separate purser step decided there). `expose:` is
   # documentation, as on catenary and sextant.
   #
   # TODO(SATL-16): Docker access for the Docker-state collector (DOCKER_API_BASE).
@@ -2478,15 +2478,10 @@ services:
       - construct_net
     depends_on:
       - postgres
-    # /healthz, never /readyz: it reports the database watchdog and the collector
-    # summary but a blip must not restart the scheduler mid-run. wget is busybox's, in
-    # the bun alpine base. `wget -q` exits non-zero on the 503 a dead database returns.
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4018/healthz || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+    # No `healthcheck:` override on purpose: the image's own HEALTHCHECK reads $PORT (4018
+    # here) and checks the /healthz body (status ok, version, sha), which catches a 200 that
+    # is really an auth redirect or the SPA fallback. A `wget -q` override would pass on any
+    # 2xx. It probes /healthz, never /readyz, so a database blip does not restart it.
     # Migrations run in-process before it listens, so give a shutdown room to finish one.
     stop_grace_period: 30s
     # Explicit, as on sextant: the daemon's json-file driver has no size cap on this box.
