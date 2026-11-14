@@ -2463,7 +2463,7 @@ services:
       # a literal in this public file. The AUD must equal this host's CF_ACCESS_AUD_MAP
       # entry on cf-access-guard (check-edge-auth.sh asserts it): change both together.
       - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
-      - CF_ACCESS_AUD=__SATLINK_ACCESS_AUD__
+      - CF_ACCESS_AUD=c557b5c9a3258be279cd8ad9c8a483ee6c722adb8468f90048aa8e543f3534d3
       - ACCESS_ALLOWED_EMAILS=${SATLINK_ACCESS_ALLOWED_EMAILS}
       # A pg_read_all_stats-only role, never the DATABASE_URL credential (the narrowest role
       # the collector's own check accepts; pg_monitor is wider and needs a recorded reason;
@@ -2754,7 +2754,7 @@ services:
       # tunneled router that nobody mapped is unreachable, which is loud, rather than
       # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
       # and the routers agree, so they cannot drift apart silently.
-      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e,arcus.zerogravity.industries=846a88d9327ce6e7bce48862657b39840725e8260298951d5a3c87d5b45d6457,satlink.zerogravity.industries=__SATLINK_ACCESS_AUD__
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e,arcus.zerogravity.industries=846a88d9327ce6e7bce48862657b39840725e8260298951d5a3c87d5b45d6457,satlink.zerogravity.industries=c557b5c9a3258be279cd8ad9c8a483ee6c722adb8468f90048aa8e543f3534d3
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway — it exists so the cutover could be rehearsed against real traffic
       # before three live routers went fail-closed at once, and it is not a steady state.
