@@ -1,0 +1,80 @@
+{
+  "_comment": "One entry per MCP the estate has (SERV-263). A new service is one entry here, then 'scripts/measure-mcp-tools.py --update'. 'command' runs a stdio MCP server; {src} is replaced by the service's source checkout (the env var named by src_env, else src_default relative to the repo root). 'env' is set for the child; values here are placeholders, never real credentials. 'stub_me' makes the script serve GET /auth/me with that body and put its URL in 'url_env': Chronicle's stdio server asks the API who it runs as, and an agent account is offered write tools a person is not, so both are measured. The 'prepare' command runs once per entry.",
+  "services": {
+    "switchyard": {
+      "src_env": "MCP_SRC_SWITCHYARD",
+      "src_default": "../switchyard",
+      "prepare": [
+        "bun",
+        "install",
+        "--frozen-lockfile",
+        "--cwd",
+        "{src}/mcp"
+      ],
+      "command": [
+        "bun",
+        "{src}/mcp/src/index.ts"
+      ],
+      "env": {
+        "SWITCHYARD_TOKEN": "measure-only-not-a-credential",
+        "SWITCHYARD_URL": "http://127.0.0.1:9"
+      }
+    },
+    "chronicle-agent": {
+      "src_env": "MCP_SRC_CHRONICLE",
+      "src_default": "../chronicle",
+      "prepare": [
+        "go",
+        "build",
+        "-C",
+        "{src}",
+        "-o",
+        "{tmp}/chronicle",
+        "./cmd/chronicle"
+      ],
+      "command": [
+        "{tmp}/chronicle",
+        "mcp"
+      ],
+      "env": {
+        "CHRONICLE_TOKEN": "measure-only-not-a-credential"
+      },
+      "url_env": "CHRONICLE_URL",
+      "stub_me": {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "kind": "agent",
+        "display_name": "measure",
+        "email": "measure@invalid",
+        "is_owner": false
+      }
+    },
+    "chronicle-person": {
+      "src_env": "MCP_SRC_CHRONICLE",
+      "src_default": "../chronicle",
+      "prepare": [
+        "go",
+        "build",
+        "-C",
+        "{src}",
+        "-o",
+        "{tmp}/chronicle",
+        "./cmd/chronicle"
+      ],
+      "command": [
+        "{tmp}/chronicle",
+        "mcp"
+      ],
+      "env": {
+        "CHRONICLE_TOKEN": "measure-only-not-a-credential"
+      },
+      "url_env": "CHRONICLE_URL",
+      "stub_me": {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "kind": "person",
+        "display_name": "measure",
+        "email": "measure@invalid",
+        "is_owner": false
+      }
+    }
+  }
+}

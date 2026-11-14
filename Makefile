@@ -6,7 +6,7 @@
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
         comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight \
         backup-test backup-status \
-        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test plimsoll-llm-isolation plimsoll-llm-canary
+        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test plimsoll-llm-isolation plimsoll-llm-canary mcp-tools
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -888,3 +888,12 @@ plimsoll-llm-isolation:
 # Usage: make plimsoll-llm-canary CANARY=<the canary the eval printed>
 plimsoll-llm-canary:
 	@./scripts/check-plimsoll-llm-canary.sh "$(CANARY)"
+
+# Measure every MCP's tools/list: count, JSON bytes, estimated tokens (SERV-263).
+# Needs source checkouts of the services in scripts/mcp-tools-baseline.json
+# (MCP_SRC_<SERVICE> overrides the sibling-directory default, which only resolves from
+# a worktree under ~/projects/; elsewhere set them). Use FRESH clones: --update records
+# whatever the checkout holds, and the baseline names each source commit. CI: mcp-tools.yml.
+# Usage: make mcp-tools [update=1]
+mcp-tools:
+	@./scripts/measure-mcp-tools.py $(if $(update),--update,--check)

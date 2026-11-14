@@ -1,0 +1,71 @@
+name: MCP tools
+
+# Measure every MCP's tools/list (SERV-263, from SERV-257).
+#
+# A client that connects an MCP pays for its whole tool list in context before it
+# asks anything: Switchyard's is ~44k estimated tokens. scripts/measure-mcp-tools.py
+# starts each service in scripts/mcp-tools-baseline.json as a stdio server, runs
+# initialize + tools/list, and records count, JSON bytes and a chars/3.5 token
+# ESTIMATE against the baseline in docs/records/mcp-tools-baseline.json.
+#
+# It records and does not gate: drift from the baseline is written to the job
+# summary, and only a service that cannot be measured fails the run. Per-bundle
+# budgets belong to SERV-267 (see check_budgets() in the script).
+#
+# Hosted runner: it needs two source checkouts and no estate resources. Switchyard
+# is private, so it is read with WIKI_DOCS_TOKEN, the same private-capable token
+# base-images.yml uses; GITHUB_TOKEN cannot read another repository.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/measure-mcp-tools.py'
+      - 'scripts/mcp-tools-baseline.json'
+      - 'docs/records/mcp-tools-baseline.json'
+      - '.github/workflows/mcp-tools.yml'
+  push:
+    branches: ["main"]
+    paths:
+      - 'scripts/measure-mcp-tools.py'
+      - 'scripts/mcp-tools-baseline.json'
+      - 'docs/records/mcp-tools-baseline.json'
+      - '.github/workflows/mcp-tools.yml'
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Einlanzerous/switchyard
+          path: src/switchyard
+          token: ${{ secrets.WIKI_DOCS_TOKEN }}
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Einlanzerous/chronicle
+          path: src/chronicle
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: src/switchyard/package.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/chronicle/go.mod
+          cache: false
+
+      - name: Measure tools/list and compare with the baseline
+        env:
+          MCP_SRC_SWITCHYARD: ${{ github.workspace }}/src/switchyard
+          MCP_SRC_CHRONICLE: ${{ github.workspace }}/src/chronicle
+        run: ./scripts/measure-mcp-tools.py --check

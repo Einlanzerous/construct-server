@@ -89,6 +89,9 @@ anything deploys or gets versioned.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).
 - `scripts/check-compose-drift.sh` — the SERV-8 guardrail (see Invariants).
+- `scripts/measure-mcp-tools.py` — per-MCP `tools/list` count, bytes and estimated tokens (SERV-263),
+  config in `scripts/mcp-tools-baseline.json`, record in `docs/records/mcp-tools-baseline.json`,
+  CI in `mcp-tools.yml`. Records only; per-bundle budgets are SERV-267's.
 - `required-env-keys.txt` / `dev-required-env-keys.txt` — the keys each tier's rendered
   `.env` must carry with a value (SERV-173), names only. `scripts/assert-env-keys.sh`
   gates both deploys on them before anything is pulled. See the invariant below.
