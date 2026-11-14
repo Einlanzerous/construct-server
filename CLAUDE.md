@@ -77,10 +77,14 @@ anything deploys or gets versioned.
 - `satlink` — the estate health dashboard (SERV-295 / SATL-15, repo `Einlanzerous/satlink`):
   port 4018 (not its image default 4015, which is sextant's), no host port, own database
   `satlink` on the shared Postgres via `db/init-db.sh`, the `traefik_access_logs` volume
-  mounted read-only. `routers.yml` carries the backend only: no router yet, so it is
-  reachable only from `construct_net` until SATL-16 adds an Access-gated `internal`
-  router. That edge step is also the decision on Docker access
-  (`DOCKER_API_BASE` is unset and no socket is mounted, a TODO in the block).
+  mounted read-only. Gated by Cloudflare Access (SATL-16): an `internal`-only router with
+  `cf-access-jwt`, its host in `CF_ACCESS_AUD_MAP`, and the app verifies the assertion
+  itself (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `ACCESS_ALLOWED_EMAILS` from the Signet key
+  `SATLINK_ACCESS_ALLOWED_EMAILS`, kept out of this public repo). Pinned to a FULL version in
+  `versions.env`, not major.minor. No Docker socket: a host systemd user timer writes
+  `docker-state.json` and compose bind-mounts its directory read-only with
+  `create_host_path: false`, so the exporter install precedes any deploy that adds or
+  recreates the service. The retired `SATLINK_API_TOKEN` key stays in the vault, unreferenced.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).

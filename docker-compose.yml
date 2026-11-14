@@ -2421,20 +2421,24 @@ services:
   # the estate rather than serving it: the Traefik access log, Postgres stats, the
   # Switchyard delivery ledger and GitHub for the practices scan.
   #
-  # Published by the satlink repo's image workflow on release (SATL-50); SATLINK_TAG in
-  # versions.env pins major.minor like the other first-party images. The package is
+  # Published by the satlink repo's image workflow on release (SATL-50). SATLINK_TAG in
+  # versions.env pins the FULL version (0.2.0), not major.minor: 0.2 is the first release that
+  # REQUIRES the three Access variables below, so a floating 0.2 plus a later patch would pull
+  # in an image this block might lack variables for (SATL-16, "the tag rule"). The package is
   # private, so the host must be logged in to ghcr.io to pull it.
   #
-  # No `ports:` and no router yet: reachable only from construct_net until SATL-16 adds
-  # an Access-gated `internal` router (the public edge, DNS, tunnel route and Access app,
-  # is a separate purser step decided there). `expose:` is
-  # documentation, as on catenary and sextant.
+  # No `ports:`. Reachable two ways, both gated: the `satlink` router on the `internal`
+  # entrypoint (cf-access-jwt, so Cloudflare Access at the edge), and `satlink:4018` from
+  # construct_net, where the app's OWN origin check refuses any request without a valid
+  # Access assertion for an allowlisted address (SATL-16 rulings 2 and 4). There is no bearer
+  # token any more: API_TOKEN and SATLINK_API_TOKEN are retired. `expose:` is documentation,
+  # as on catenary and sextant.
   #
-  # TODO(SATL-16): Docker access for the Docker-state collector (DOCKER_API_BASE).
-  # The decision between a GET-only socket proxy and anything broader is NOT made,
-  # so NO Docker socket is mounted and DOCKER_API_BASE is unset: the collector
-  # registers and reports `unavailable`, which shows as a gap on the dashboard
-  # instead of a failure. Do not mount /var/run/docker.sock here to "finish" this.
+  # Docker state (SATL-16 ruling 6, option 0): NO Docker socket is mounted and DOCKER_API_BASE
+  # stays unset. A systemd USER timer on the host (satlink repo, host/docker-state/install.sh,
+  # run by the owner from a checkout at the pinned tag) writes the six stored fields per
+  # container to docker-state.json; the file is mounted read-only below and
+  # DOCKER_STATE_FILE points the collector at it. Do not mount /var/run/docker.sock here.
   #
   # Not wired, on purpose, each one reports `unavailable` rather than failing boot:
   # HOST_DISK_MOUNTS / HOST_BACKUP_STATE_PATH (no host bind mounts yet) and
@@ -2452,10 +2456,18 @@ services:
       # catenary and sextant use is refused at boot. The role is BARE (`satlink`),
       # like sextant's. A password with @ / # ? % would misparse here; see .env.example.
       - DATABASE_URL=postgres://satlink:${SATLINK_DB_PASSWORD}@postgres:5432/satlink?sslmode=disable
-      # The /api bearer gate. Unset refuses every /api request, so it is in
-      # required-env-keys.txt: a missing key must fail the deploy, not boot "healthy".
-      - API_TOKEN=${SATLINK_API_TOKEN}
-      # A pg_monitor-only role, never the DATABASE_URL credential (docs/collectors/postgres.md).
+      # Cloudflare Access origin check (SATL-16): the app verifies the Access assertion
+      # itself, so a construct_net neighbour cannot read it. All three are REQUIRED and a
+      # blank one fails boot. Team domain and AUD are public identifiers, tracked like the
+      # other services'; the allowlist is the owner's address and comes from Signet, never
+      # a literal in this public file. The AUD must equal this host's CF_ACCESS_AUD_MAP
+      # entry on cf-access-guard (check-edge-auth.sh asserts it): change both together.
+      - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      - CF_ACCESS_AUD=c557b5c9a3258be279cd8ad9c8a483ee6c722adb8468f90048aa8e543f3534d3
+      - ACCESS_ALLOWED_EMAILS=${SATLINK_ACCESS_ALLOWED_EMAILS}
+      # A pg_read_all_stats-only role, never the DATABASE_URL credential (the narrowest role
+      # the collector's own check accepts; pg_monitor is wider and needs a recorded reason;
+      # docs/collectors/postgres.md).
       - PG_MONITOR_URL=${SATLINK_PG_MONITOR_URL}
       # Cleartext http is accepted only for the one host named below (SATL-49): the
       # bearer token stays on the bridge network and never leaves the host.
@@ -2467,6 +2479,10 @@ services:
       # The traefik_access_logs volume, mounted read-only below. The rotated file is
       # left to its default of <path>.1.
       - TRAEFIK_ACCESS_LOG_PATH=/var/log/traefik/access.log
+      # The exporter's file as the container sees it (the bind mount below). Not
+      # DOCKER_API_BASE, which reads any '/'-leading value as a socket, and setting both
+      # fails boot. Stale beyond 90 s, missing or malformed reads `unavailable`.
+      - DOCKER_STATE_FILE=/var/lib/satlink-docker-state/docker-state.json
     expose:
       - "4018"
     volumes:
@@ -2474,6 +2490,18 @@ services:
       # satlink runs as the image's `bun` user: if the file is not world-readable the
       # collector reports `unavailable` — check on the first deploy.
       - traefik_access_logs:/var/log/traefik:ro
+      # The Docker-state exporter's output DIRECTORY (not the file: the exporter replaces the
+      # file atomically, and a single-file bind would keep the old inode). Long syntax so
+      # `create_host_path: false` can be set: a missing directory must FAIL the `up -d`
+      # loudly, not be created root-owned by the daemon and read as an empty state forever.
+      # The owner runs the install script BEFORE this merges; a host rebuild or a deleted
+      # directory fails the next satlink recreate until it is re-run.
+      - type: bind
+        source: /home/magos/.local/share/satlink-docker-state/state
+        target: /var/lib/satlink-docker-state
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       - construct_net
     depends_on:
@@ -2726,7 +2754,7 @@ services:
       # tunneled router that nobody mapped is unreachable, which is loud, rather than
       # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
       # and the routers agree, so they cannot drift apart silently.
-      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e,arcus.zerogravity.industries=846a88d9327ce6e7bce48862657b39840725e8260298951d5a3c87d5b45d6457
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e,arcus.zerogravity.industries=846a88d9327ce6e7bce48862657b39840725e8260298951d5a3c87d5b45d6457,satlink.zerogravity.industries=c557b5c9a3258be279cd8ad9c8a483ee6c722adb8468f90048aa8e543f3534d3
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway — it exists so the cutover could be rehearsed against real traffic
       # before three live routers went fail-closed at once, and it is not a steady state.
