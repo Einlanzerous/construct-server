@@ -2440,9 +2440,17 @@ services:
   # container to docker-state.json; the file is mounted read-only below and
   # DOCKER_STATE_FILE points the collector at it. Do not mount /var/run/docker.sock here.
   #
-  # Not wired, on purpose, each one reports `unavailable` rather than failing boot:
-  # HOST_DISK_MOUNTS / HOST_BACKUP_STATE_PATH (no host bind mounts yet) and
-  # HOST_APERTURE_URL. They are separate decisions, not part of this onboarding.
+  # Host inputs (SATL-61), all read-only long-syntax binds with `create_host_path: false`:
+  #  - disks: the collector only statfs-es, which needs the filesystem and not its
+  #    contents, so each drive binds its `lost+found` (root-owned 0700, empty by design, on
+  #    the same filesystem as the drive root) at the path HOST_DISK_MOUNTS names. The `bun`
+  #    user cannot list it, so no file name or byte of either drive's contents is exposed, only its
+  #    capacity figures. A drive remount needs a satlink recreate (the bind pins the old one). `/` stays the container's own root filesystem.
+  #  - backup: /var/lib/construct-backup (0700 magos, state.json 0600; written by
+  #    construct-backup.timer) read-only. The image's `bun` user is uid 1000, the same uid
+  #    as magos, so it can read it. If either uid ever changes this reads `unavailable`.
+  # Still not wired, on purpose: HOST_APERTURE_URL (the GPU, SATL-63) reports `unavailable`
+  # rather than failing boot.
   satlink:
     image: ghcr.io/einlanzerous/satlink:${SATLINK_TAG:-latest}
     container_name: satlink
@@ -2483,6 +2491,10 @@ services:
       # DOCKER_API_BASE, which reads any '/'-leading value as a socket, and setting both
       # fails boot. Stale beyond 90 s, missing or malformed reads `unavailable`.
       - DOCKER_STATE_FILE=/var/lib/satlink-docker-state/docker-state.json
+      # SATL-61: the in-container paths of the binds below (both equal the image defaults,
+      # stated so the pairing with the mounts is visible).
+      - HOST_DISK_MOUNTS=/mnt/ssd_storage,/data,/
+      - HOST_BACKUP_STATE_PATH=/var/lib/construct-backup/state.json
     expose:
       - "4018"
     volumes:
@@ -2499,6 +2511,27 @@ services:
       - type: bind
         source: /home/magos/.local/share/satlink-docker-state/state
         target: /var/lib/satlink-docker-state
+        read_only: true
+        bind:
+          create_host_path: false
+      # SATL-61 disks: lost+found, not the drive root (see the host-inputs note above). If
+      # fsck ever removes it the next recreate fails loudly rather than reading the overlay.
+      - type: bind
+        source: /mnt/ssd_storage/lost+found
+        target: /mnt/ssd_storage
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/lost+found
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      # SATL-61 backup state: the DIRECTORY (backup-nightly.sh replaces the file), 0700 magos.
+      - type: bind
+        source: /var/lib/construct-backup
+        target: /var/lib/construct-backup
         read_only: true
         bind:
           create_host_path: false
