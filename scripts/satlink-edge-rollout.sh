@@ -28,8 +28,10 @@
 #               --confirm-apply  skip the pause before an --apply (--yes alone never does)
 #               --apply     (access only) really run `purser provision-service ... --apply`
 #
-# SECRET HANDLING. Two values must never reach the record, stdout, argv, the repo or a child's
-# environment: the allowlist email and the Access AUD. Both live only in unexported shell
+# SECRET HANDLING. The allowlist email is the secret: it must never reach the record, stdout,
+# argv, the repo or a child's environment. The Access AUD is a public identifier (it is committed
+# to docker-compose.yml), so it is not secret; it is kept out of argv, the record and the screen
+# anyway, as tidiness and so the record never has to be vetted. Both live only in unexported shell
 # variables; the email reaches `signet set` on stdin through a `printf` builtin (no argv), and
 # reaches the non-empty check only through `signet exec`, which is what injects it. The AUD is
 # patched in with bash string replacement, not sed, so it is in no argv either, and the diff is

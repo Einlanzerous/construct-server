@@ -6,7 +6,7 @@
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
         comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight \
         backup-test backup-status \
-        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test plimsoll-llm-isolation plimsoll-llm-canary
+        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test plimsoll-llm-isolation plimsoll-llm-canary
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -867,6 +867,13 @@ plimsoll-llm-seed:
 # Usage: make plimsoll-llm-seed-test
 plimsoll-llm-seed-test:
 	@./scripts/test/test-plimsoll-llm-seed.sh
+
+# Prove scripts/satlink-edge-rollout.sh against fake binaries: the allowlist email never
+# reaches the record, stdout, argv or a child's environment, dry-run runs nothing, `access`
+# applies only with --apply, and a failing check stops the run. Touches nothing on the host.
+# Usage: make satlink-edge-rollout-test
+satlink-edge-rollout-test:
+	@./scripts/test/test-satlink-edge-rollout.sh
 
 # Prove the RUNNING sandbox is isolated: plimsoll_ai's options and its two members, no
 # default route, no external TCP or DNS, and no connection from the host or from a
