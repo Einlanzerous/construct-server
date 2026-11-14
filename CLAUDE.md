@@ -86,7 +86,8 @@ anything deploys or gets versioned.
   `create_host_path: false`, so the exporter install precedes any deploy that adds or
   recreates the service. Host inputs (SATL-61), also read-only with `create_host_path: false`:
   `lost+found` of `/mnt/ssd_storage` and `/data` (statfs only; nothing readable) and
-  `/var/lib/construct-backup` (0700 magos; works because the image's `bun` is uid 1000). The retired `SATLINK_API_TOKEN` key stays in the vault, unreferenced.
+  `/var/lib/construct-backup` (0700 magos; works because the image's `bun` is uid 1000).
+  The retired `SATLINK_API_TOKEN` key stays in the vault, unreferenced.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).

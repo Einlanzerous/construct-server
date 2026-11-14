@@ -2444,8 +2444,8 @@ services:
   #  - disks: the collector only statfs-es, which needs the filesystem and not its
   #    contents, so each drive binds its `lost+found` (root-owned 0700, empty by design, on
   #    the same filesystem as the drive root) at the path HOST_DISK_MOUNTS names. The `bun`
-  #    user cannot list it, so no file name or byte of either drive is exposed, only its
-  #    capacity figures. `/` stays the container's own root filesystem.
+  #    user cannot list it, so no file name or byte of either drive's contents is exposed, only its
+  #    capacity figures. A drive remount needs a satlink recreate (the bind pins the old one). `/` stays the container's own root filesystem.
   #  - backup: /var/lib/construct-backup (0700 magos, state.json 0600; written by
   #    construct-backup.timer) read-only. The image's `bun` user is uid 1000, the same uid
   #    as magos, so it can read it. If either uid ever changes this reads `unavailable`.
