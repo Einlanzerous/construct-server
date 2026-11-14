@@ -13,6 +13,7 @@
 * **mcp:** measure every MCP's tools/list, with a committed baseline and a CI job (SERV-263) ([#273](https://github.com/Einlanzerous/construct-server/issues/273)) ([8896412](https://github.com/Einlanzerous/construct-server/commit/8896412955b6f3f517e9f86f933142b7e510f7e8))
 * **satlink:** Access-gated router, pin 0.2.0, Docker-state mount (SATL-58) ([#281](https://github.com/Einlanzerous/construct-server/issues/281)) ([b2f4381](https://github.com/Einlanzerous/construct-server/commit/b2f4381c52642cc0b7e291cfa5ee50dd102fedb7))
 * **satlink:** onboard Satlink: compose block, internal backend, env keys, DB (SERV-295) ([#280](https://github.com/Einlanzerous/construct-server/issues/280)) ([b103600](https://github.com/Einlanzerous/construct-server/commit/b103600abcdb13c3d8f4a7e93fce4dbcbb249226))
+* **satlink:** read-only host mounts for the disk and backup collectors (SATL-61) ([#283](https://github.com/Einlanzerous/construct-server/issues/283)) ([8dea065](https://github.com/Einlanzerous/construct-server/commit/8dea065f7d5fadceb0147fb94bbb7deff349b932))
 * SERV-279 — arcus service, tunneled host behind Access, 0.1 pin ([#277](https://github.com/Einlanzerous/construct-server/issues/277)) ([36ccfea](https://github.com/Einlanzerous/construct-server/commit/36ccfeab3175ac2b9282605408fcfc83981700a7))
 
 
