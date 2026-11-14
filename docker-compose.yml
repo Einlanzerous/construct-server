@@ -2242,8 +2242,9 @@ services:
   # ONE HOST PATH FOR ALL LIBRARY DATA: ${GENZO_DATA_DIR_HOST:-/srv/genzo} (owner
   # decision 4: root volume now, a bigger drive later). Two directories under it:
   #
-  #   <root>/trestle   trestle-genzo's data dir: the ORIGINALS. Irreplaceable.
-  #   <root>/inbox     the drop folder genzo imports from.
+  #   <root>/trestle     trestle-genzo's data dir: the ORIGINALS. Irreplaceable.
+  #   <root>/inbox       the drop folder genzo imports from.
+  #   <root>/derive-tmp  genzo's derivative-worker scratch (disposable; see the genzo block).
   #
   # Moving the library is: stop both services, rsync -aH the root to the new drive, set
   # GENZO_DATA_DIR_HOST in the vault, add it to required-env-keys.txt, deploy, and only
@@ -2259,9 +2260,9 @@ services:
   # it, and nothing in Docker's lifecycle removes it. Long syntax with
   # `create_host_path: false` (satlink's shape): a missing directory FAILS the `up -d`
   # loudly instead of the daemon creating an empty root-owned one that Trestle would
-  # then refuse to write, or, after a move, silently boot empty. The owner creates both
-  # directories before the first deploy (the PR body has the commands; both images run
-  # as uid 10001).
+  # then refuse to write, or, after a move, silently boot empty. The owner creates all
+  # three directories before the first deploy (the PR body has the commands; both images
+  # run as uid 10001).
   #
   # NOT BACKED UP OFF-BOX. The library's bytes are NOT in the nightly backup: that
   # pipeline dumps Postgres and nothing else (docs/backups.md, "Not covered"). The
@@ -2299,33 +2300,53 @@ services:
       # own vault key, never TRESTLE_TOKENS: sharing the public instance's list would let
       # every screenshot uploader read the photo library. Blank refuses the boot.
       - TRESTLE_TOKENS=${TRESTLE_GENZO_TOKENS}
-      # Trestle's default seven MINUS image/svg+xml (a photo library has no use for
-      # vector images, and SVG is the one type that can carry script), PLUS the four
-      # phone formats 0.2 recognises from the ISO-BMFF brand (GENZO-7): HEIC/HEIF and
-      # AVIF stills, QuickTime .mov video. An unknown type refuses the boot.
-      - TRESTLE_ALLOWED_TYPES=image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,image/avif,video/mp4,video/webm,video/quicktime
+      # Exactly what genzo's importer can produce, and nothing else (design of record,
+      # "What the Trestle instance must allow"): JPEG, PNG, WebP, and the phone formats
+      # Trestle 0.2 recognises from the ISO-BMFF brand (GENZO-7) — HEIC, HEIF, AVIF —
+      # plus mp4 and QuickTime .mov video. WebP is also the type of every derivative
+      # (thumb, preview): leave it out and the worker's uploads are refused 415 and the
+      # whole pool pauses. Trestle's default list has none of HEIC/HEIF/AVIF/MOV. Not
+      # here on purpose: image/svg+xml (the one type that can carry script; the importer
+      # reads no SVG), image/gif and video/webm (the importer never recognises them, so
+      # allowing them would only widen what a bug could store). 3GP files the importer
+      # reads are stored as video/mp4 by Trestle when a brand starts `mp4`, so they need
+      # nothing extra. An unknown type refuses the boot.
+      - TRESTLE_ALLOWED_TYPES=image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif,video/mp4,video/quicktime
       # Caps, sized for a personal library and set explicitly (the code defaults are the
       # screenshot host's 10 MiB / 100 MiB / 2 GiB):
       #   images 64 MiB  — phone stills run to ~50 MB at the top end (48 MP HEIC/JPEG).
       #                    RAW is not accepted at all yet (owner decision 6).
-      #   video   8 GiB  — several minutes of 4K phone video. Uploads stream to disk
-      #                    (<data>/tmp, then a rename), so this costs no memory.
+      #   video   4 GiB  — about ten minutes of 4K phone video. Uploads stream to disk
+      #                    (<data>/tmp, then a rename), so the upload costs no memory. It
+      #                    is NOT free elsewhere: the derivative worker downloads a FULL
+      #                    copy of each original it renders into GENZO_DERIVE_TEMP_DIR,
+      #                    so the scratch volume must hold GENZO_DERIVE_CONCURRENCY (2) x
+      #                    this cap = 8 GiB at 4 GiB (16 GiB at the old 8 GiB cap, on the
+      #                    root disk). Raise it only together with that volume's room, or
+      #                    lower the worker's concurrency. A longer clip is refused as
+      #                    `too-large` with this setting named, and retried after a day.
       #   quota  64 GiB  — the binding constraint is the ROOT DISK, which every
-      #                    container, image and the shared Postgres also live on: 232 GiB
-      #                    free when this was written (df /, 2026-11-14). genzo holds the
-      #                    only token, so this quota is the whole instance — originals AND
-      #                    every derivative (thumbnails, previews, video posters) count
-      #                    against it. And the importer leaves sources in the inbox by
-      #                    default, so on the same disk each original exists TWICE until
-      #                    the inbox is cleared. At 64 GiB that is ~130 GiB worst case,
-      #                    leaving the disk under ~90% full. Hitting it is a clean 413
+      #                    container, image and the shared Postgres also live on: 193 GiB
+      #                    free of 936 when this was written (df /, 2026-11-14). genzo
+      #                    holds the only token, so this quota is the whole instance —
+      #                    originals AND derivatives. Each photo also stores a ~27 KB
+      #                    thumbnail and a ~190 KB preview (design of record; a video's
+      #                    are cut from its poster frame): ~0.2 MB per frame, about 20
+      #                    GiB per 100k frames, inside the quota. NOTHING is ever deleted
+      #                    yet — genzo's invariant 9 forbids it until the sweeper ticket
+      #                    (GENZO-24) lands, and a replaced derivative's old blob stays —
+      #                    so usage only grows. The importer leaves sources in the inbox
+      #                    by default, so each original also exists TWICE on the same disk
+      #                    until the inbox is cleared. At 64 GiB that is ~128 GiB plus up
+      #                    to 8 GiB of scratch worst case, about 136 of the 193 GiB free,
+      #                    leaving the disk near 90% full. Hitting it is a clean 413
       #                    `quota_exceeded` that stops the import; filling / instead would
       #                    take postgres, and every service with it, down.
       # TO RAISE: edit the numbers here (bytes; at most 1 TiB each) and merge; the deploy
       # recreates trestle-genzo. Raise the quota freely once the library has moved to its
       # own drive; on the root disk check `df /` first.
       - TRESTLE_MAX_IMAGE_BYTES=67108864
-      - TRESTLE_MAX_VIDEO_BYTES=8589934592
+      - TRESTLE_MAX_VIDEO_BYTES=4294967296
       - TRESTLE_QUOTA_BYTES_PER_TOKEN=68719476736
       - TRESTLE_LOG_LEVEL=${TRESTLE_GENZO_LOG_LEVEL:-info}
       - TRESTLE_LOG_FORMAT=json
@@ -2354,9 +2375,15 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # genzo: the app. Not mergeable before its image carries GENZO-17 (edge sign-in) —
-  # genzo's own CLAUDE.md forbids exposing it before then, and from that release it
-  # refuses to boot without the three Access variables below.
+  # genzo: the app, and — inside `genzo serve` — the inbox importer, the derivative
+  # worker (thumbnails and previews, with vips and ffmpeg in the image) and the roll
+  # grouper. Not mergeable before its image carries edge sign-in (GENZO-17), which this
+  # block's CF_ACCESS_* / GENZO_OWNER_EMAILS depend on: serve REFUSES TO BOOT without
+  # all three (or without the dev bypass, which is never set here: GENZO_DEV_NO_AUTH
+  # and GENZO_BIND_ADDR are deliberately absent, and the first is refused in a container).
+  # Settings not listed below are left at genzo's own defaults on purpose (the PR body
+  # has the table): scan every 5m, settle 30s, 4 files at once, 2 derive jobs, 100 MP
+  # pixel limit, roll gap 36h, 32 media relays.
   #
   # Reached ONLY through the tunnel: the `genzo` router on Traefik's `internal`
   # entrypoint with cf-access-jwt, and genzo re-verifies the Access assertion itself
@@ -2382,6 +2409,20 @@ services:
       - GENZO_TRESTLE_TOKEN=${GENZO_TRESTLE_TOKEN}
       # The inbox bind below, as genzo sees it.
       - GENZO_INBOX_DIR=/inbox
+      # The zone in which a capture time with NO recorded offset (most camera JPEGs, no
+      # OffsetTime tag) is read to estimate its instant; never stored as an offset, so a
+      # wrong value shifts ordering across midnight/DST at worst and is never baked in.
+      # America/Chicago is the box's own zone (/etc/timezone) and the one
+      # SEXTANT_SNAPSHOT_TZ above uses; the owner confirms it is where their photos are
+      # shot, and overrides GENZO_HOME_TZ in the vault if not (IANA name; `Local` is refused).
+      - GENZO_HOME_TZ=${GENZO_HOME_TZ:-America/Chicago}
+      # The owner's home, for trip detection in the roll grouper: frames farther than
+      # GENZO_HOME_RADIUS_KM (default 50) from it, for at least 3 frames, form a trip. Personal
+      # location data, so NEVER a literal in this public file: from the vault, both or
+      # neither (blank = no home, and the grouper falls back to gap/size heuristics).
+      # genzo never logs them. Left blank until the owner sets them (a PR owner step).
+      - GENZO_HOME_LAT=${GENZO_HOME_LAT:-}
+      - GENZO_HOME_LON=${GENZO_HOME_LON:-}
       # Cloudflare Access origin check (GENZO-17): genzo verifies the assertion itself, so
       # a construct_net neighbour reaching genzo:4019 directly is refused. All three are
       # required from that release on. Team domain and AUD are public identifiers,
@@ -2401,18 +2442,62 @@ services:
       - GENZO_LOG_LEVEL=${GENZO_LOG_LEVEL:-info}
       - GENZO_LOG_FORMAT=json
       - GENZO_SHUTDOWN_GRACE=10s
+      # Derivative worker memory. Budget = GENZO_DERIVE_CONCURRENCY (2, the default) x
+      # this + ~100 MiB for genzo itself: 3.1 GiB at the default 1536, 2.1 GiB at 1024.
+      # 1024 is the documented floor (the worst child inside the pixel limits peaks near
+      # 500 MiB, 540 under load, so it keeps a 2x margin; do not go lower). Chosen over
+      # the default because this box is tight on RAM (31 GiB, ~4 GiB free and 6 of 7 GiB
+      # swap in use when this was written, free -g 2026-11-14): see mem_limit below.
+      - GENZO_DERIVE_CHILD_MAX_RSS_MIB=1024
+      # Scratch for the worker: each job holds a full copy of its original here (a video
+      # can be gigabytes) plus a few frames. The bind below. A job that would not fit is
+      # released and the pool pauses; nothing is burned.
+      - GENZO_DERIVE_TEMP_DIR=/var/tmp/genzo-derive
     expose:
       - "4019"
+    # The container's ceiling, and the house way to say it (mem_limit, as ollama and
+    # plimsoll-llm above; no service here uses deploy.resources for memory). 3g covers the
+    # 2.1 GiB budget (2 jobs x 1024 MiB + genzo) with ~0.9 GiB for the Go heap's peaks and
+    # the catalog/media relay; page cache from the scratch files is reclaimable and is not
+    # counted against it. At the defaults (1536) it would have to be 4g. If a vips or
+    # ffmpeg child passes 1024 MiB genzo kills just that child first (a second kill of the
+    # same job fails it for good, with the size in `genzo derive status`), long before the
+    # kernel's OOM killer would pick this container.
+    mem_limit: 3g
+    # No `init: true`: the image's ENTRYPOINT is tini (PID 1), which reaps the vips and
+    # ffmpeg grandchildren a killed job can leave behind. Adding Docker's init would put a
+    # second one in front of it.
     volumes:
       # The inbox, READ-ONLY. Genzo never modifies a source file by default (invariant
-      # 1); the importer (GENZO-11, not built yet) may add an opt-in "move to done/",
-      # and only if that ships AND is switched on does this become read-write. Read-only
-      # until then means a bug cannot delete or rewrite the only other copy of a photo.
+      # 1). The importer's opt-in `GENZO_INBOX_DONE=move` (rename imported files to
+      # <inbox>/done/<same path>, never overwriting, never deleting) needs this mount
+      # READ-WRITE: to switch it on, set that variable AND drop `read_only: true` in the
+      # same commit, and make the directory group-writable for uid 10001
+      # (`chmod g+w`, setgid is already on). Without it a move fails per file ("move-failed",
+      # counted, the import still stands). Read-only until then means a bug cannot delete or
+      # rewrite the only other copy of a photo. Fill the inbox with a tool that writes to a
+      # temporary name and renames when done (copyparty, rsync): SMB, scp and plain cp
+      # write in place, and the importer then relies on its 30s settle check alone.
       # Same root variable as trestle-genzo's data; same fail-if-missing rule.
       - type: bind
         source: ${GENZO_DATA_DIR_HOST:-/srv/genzo}/inbox
         target: /inbox
         read_only: true
+        bind:
+          create_host_path: false
+      # The derivative worker's scratch. A DEDICATED directory, not the container's overlay
+      # layer (the default temp dir) and not the inbox: on the root disk the overlay and
+      # this directory share one filesystem, but a bind is visible, `du`-able and cleaned
+      # up by the worker (stale genzo-derive-* directories over an hour old are removed at
+      # boot). Sizing: GENZO_DERIVE_CONCURRENCY (2) x the largest original Trestle admits
+      # (TRESTLE_MAX_VIDEO_BYTES, 4 GiB) = 8 GiB, plus ~32 MiB + 8 bytes/pixel each. The
+      # mount cannot enforce a size (same filesystem as /), so the real limit is `df /`,
+      # which the worker checks before every download; the Trestle caps above are what
+      # keep it bounded. Disposable: losing it loses nothing. Not under the Trestle data
+      # directory, so a `tar` of the originals never picks it up.
+      - type: bind
+        source: ${GENZO_DATA_DIR_HOST:-/srv/genzo}/derive-tmp
+        target: /var/tmp/genzo-derive
         bind:
           create_host_path: false
     networks:
@@ -2430,7 +2515,8 @@ services:
       # scope a single-service recreate with --no-deps — `make recreate svc=genzo`.
       trestle-genzo:
         condition: service_healthy
-    # /healthz, never /readyz: a database or Trestle blip must not restart the service.
+    # /healthz on 4019 (genzo's default port), never /readyz: /readyz also pings the
+    # catalog and Trestle, and a database or Trestle blip must not restart the service.
     # busybox wget is in the image for exactly this (genzo's deploy/Dockerfile).
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:4019/healthz || exit 1"]
@@ -2438,7 +2524,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    # Exceeds GENZO_SHUTDOWN_GRACE (10s) with room for an in-flight migration.
+    # Must EXCEED GENZO_SHUTDOWN_GRACE (10s): the HTTP drain, the scan pass in flight, and
+    # derivative jobs (2s of it, then their children are killed and the jobs released so
+    # no lease has to expire). Docker's default 10s would SIGKILL mid-drain. 30s leaves
+    # room for an in-flight migration too.
     stop_grace_period: 30s
     logging:
       driver: json-file

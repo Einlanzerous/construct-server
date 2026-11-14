@@ -801,7 +801,7 @@ a known gap, not an oversight. What *is* covered is the `genzo` catalog database
 nightly with the rest of the shared cluster — so a restore today brings back a catalog that
 can name blobs no longer present. The inbox (`<root>/inbox`) is a second copy of each
 original only until it is cleared, and it sits on the same disk, so it is not a backup
-either. A Trestle data directory is backed up by a `tar` of it (Trestle's README); the
+either, and `<root>/derive-tmp` (the derivative worker's scratch) is disposable and never needs a copy. A Trestle data directory is backed up by a `tar` of it (Trestle's README); the
 ordering rule is the catenary one above — snapshot the blobs *after* the catalog dump.
 
 ## Not yet in this file

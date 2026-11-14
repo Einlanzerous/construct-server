@@ -96,9 +96,9 @@ anything deploys or gets versioned.
   port, no router and one network, `genzo_blob_net` — internal, isolated gateway,
   plimsoll_ai's shape — whose only other member is `genzo`. All library data sits under
   ONE host path, `${GENZO_DATA_DIR_HOST:-/srv/genzo}` (`trestle/` the originals, `inbox/`
-  the read-only drop folder), bind-mounted with `create_host_path: false` so the library
+  the read-only drop folder, `derive-tmp/` the derivative worker's scratch), bind-mounted with `create_host_path: false` so the library
   can move to a bigger drive by changing one variable. **The originals are not backed up
-  off-box** (owner-deferred; `docs/backups.md`). `TRESTLE_TAG` now covers both Trestles.
+  off-box** (owner-deferred; `docs/backups.md`). genzo runs `mem_limit: 3g` (2 derive jobs x 1024 MiB). `TRESTLE_TAG` now covers both Trestles.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).
