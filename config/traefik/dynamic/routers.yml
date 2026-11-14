@@ -593,6 +593,17 @@ http:
       middlewares:
         - cf-access-jwt
 
+    # Satlink (SATL-16): the estate health dashboard, one tunneled host, gated like arcus.
+    # `internal` ONLY, never `web`/`websecure`: it shows estate topology and health. The app
+    # verifies the Access assertion again at its own origin.
+    satlink:
+      entryPoints:
+        - internal
+      rule: "Host(`satlink.zerogravity.industries`)"
+      service: satlink
+      middlewares:
+        - cf-access-jwt
+
     # Estate wiki (SERV-101): generated static site, tunneled + Cloudflare Access.
     # `internal` only, like switchyard and lyceum — the wiki assembles the whole
     # stack's topology, host exposure and environment-variable names onto one
@@ -850,15 +861,13 @@ http:
         servers:
           - url: "http://trestle:4014"
 
-    # SATLINK (SERV-295 / SATL-15): the BACKEND ONLY, and no router points at it. That is
-    # the decision, not an omission: a router here is `internal`, so it needs
-    # `cf-access-jwt` and a CF_ACCESS_AUD_MAP entry for its host (check-edge-auth.sh
-    # fails on one without the other), and the AUD does not exist until the Access
-    # application does. DNS, the tunnel route and that application are one separate
-    # purser step (`purser provision-service`, SATL-16). Until it lands the service is
-    # reachable only from construct_net, which is what we want of an unauthenticated-
-    # at-the-edge dashboard. The router that eventually lands is Access-gated like every
-    # other `internal` one; satlink has its own /api bearer gate behind it.
+    # SATLINK (SERV-295 / SATL-15, SATL-16): the backend for the `satlink` router above, which
+    # is `internal` only and carries `cf-access-jwt`. Its host's AUD is in cf-access-guard's
+    # CF_ACCESS_AUD_MAP (check-edge-auth.sh fails on one without the other). DNS, the tunnel
+    # route and the Access application are one purser step (`purser provision-service
+    # --access gated`). satlink also verifies the Access assertion itself on every route but
+    # GET /healthz, so a construct_net neighbour reaching satlink:4018 directly is refused;
+    # there is no bearer token behind it any more.
     satlink:
       loadBalancer:
         # Bun serving the API and the built SPA same-origin on :4018 — the next free

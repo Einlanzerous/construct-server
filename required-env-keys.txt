@@ -155,7 +155,11 @@ SEMAPHORE_ADMIN_PASSWORD
 # --- satlink (read by the satlink container only) — SERV-295 / SATL-15 ---
 # Vault first (see the ORDER OF OPERATIONS above): until `signet sync` has run and
 # `make assert-env-keys vault=1` passes, merging this blocks every prod deploy.
-SATLINK_API_TOKEN
+# SATLINK_ACCESS_ALLOWED_EMAILS is the owner's allowed address(es), comma-separated: a
+# present-but-empty value passes this manifest and then fails satlink's boot, so the owner
+# also runs the non-empty check in SATL-58. SATLINK_API_TOKEN is retired (SATL-16 ruling 4):
+# nothing reads it, and the vault key is left in place because Signet has no delete command.
+SATLINK_ACCESS_ALLOWED_EMAILS
 SATLINK_SWITCHYARD_TOKEN
 SATLINK_PG_MONITOR_URL
 SATLINK_PRACTICES_GH_TOKEN
