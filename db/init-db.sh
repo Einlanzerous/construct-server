@@ -230,3 +230,32 @@ ensure_db satlink "$SATLINK_DB_PASSWORD" satlink_test
 
 revoke_public satlink
 revoke_public satlink_test
+
+# --- Genzo (GENZO-8) ---
+#
+# Sextant's and satlink's grade — owner only, PUBLIC revoked — because the catalog is one
+# person's photo metadata: capture times, places (GPS latitude/longitude) and everything
+# the EXIF extractor read. revoke_public takes the default TEMP + CONNECT away from PUBLIC
+# on this database, so no other role on the shared cluster can even connect to it; the
+# owner role keeps both through ensure_db's GRANT ALL. Nothing else needs to connect:
+# genzo runs its own migrations at boot as genzo_user.
+#
+# The role is `genzo_user`, load-bearing in GENZO_DATABASE_URL in docker-compose.yml;
+# renaming it locks genzo out of its own catalog. The password reaches this script from
+# the postgres container's environment (the GENZO_DB_PASSWORD line on that service), and
+# the empty-password guard in ensure_db skips loudly without it.
+#
+# No genzo_test here, unlike satlink and sextant: genzo's store tests DROP the public
+# schema of whatever `*_test` database they are pointed at, and its CLAUDE.md sends them
+# to a throwaway container instead of this cluster. Nothing would use one.
+#
+# Ordering on the first deploy: this script runs AFTER `up -d`, so genzo boots once
+# against a cluster with no `genzo` database, refuses to start (a missing catalog stops
+# its boot), and `restart: unless-stopped` brings it up clean once this has run. One
+# crash cycle by construction, chronicle's shape. NOT in the backup must-dump floor yet
+# (config/backup/backup.conf): the floor fails the nightly run when a listed database
+# is absent, so genzo joins it after the first deploy has created it. Until then it is
+# still dumped — enumeration, not the floor, decides what is dumped.
+ensure_db genzo_user "$GENZO_DB_PASSWORD" genzo
+
+revoke_public genzo

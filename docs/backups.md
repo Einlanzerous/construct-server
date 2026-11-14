@@ -793,6 +793,17 @@ itself, deliberately (see that file's header).
 
 This pipeline backs up Postgres and nothing else. There is no list of sources to add a path to: the run is `dump_cluster` then `hub_backup_cluster` per entry in `BACKUP_CLUSTERS`, each snapshot tagged with its cluster label, then `restic copy --tag <label>` to each destination. A restic container only ever sees `$BACKUP_DATA_DIR`. So the `catenary_media` volume (uploaded chat media, which is not in Postgres) is **not backed up**, and adding it is a new stage in `backup-nightly.sh` rather than a config line. Its ordering requirement is that the media snapshot is taken *after* the database dump, so a restored message row never points at a blob the media snapshot lacks (blobs are only ever added between the two). In this script that holds by construction if the stage runs after the cluster loop and its label is appended last to `all_labels`. It is tracked on SERV-244.
 
+**Genzo's photo library is NOT backed up off-box — deliberately, for now (GENZO-8).** The
+originals live in `trestle-genzo`'s data directory, a host bind at
+`${GENZO_DATA_DIR_HOST:-/srv/genzo}/trestle` on the root disk, and nothing in this pipeline
+reads it. The owner deferred the off-box copy (Genzo's design of record, owner decision 5):
+a known gap, not an oversight. What *is* covered is the `genzo` catalog database, dumped
+nightly with the rest of the shared cluster — so a restore today brings back a catalog that
+can name blobs no longer present. The inbox (`<root>/inbox`) is a second copy of each
+original only until it is cleared, and it sits on the same disk, so it is not a backup
+either. A Trestle data directory is backed up by a `tar` of it (Trestle's README); the
+ordering rule is the catenary one above — snapshot the blobs *after* the catalog dump.
+
 ## Not yet in this file
 
 - **The restore drill's numbers** — full-cluster restore time, the worst-case
