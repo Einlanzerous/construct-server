@@ -88,6 +88,17 @@ anything deploys or gets versioned.
   `lost+found` of `/mnt/ssd_storage` and `/data` (statfs only; nothing readable) and
   `/var/lib/construct-backup` (0700 magos; works because the image's `bun` is uid 1000).
   The retired `SATLINK_API_TOKEN` key stays in the vault, unreferenced.
+- `genzo` + `trestle-genzo` — the photo library (GENZO-8, repo `Einlanzerous/genzo`): port
+  4019, no host port, own database `genzo` (role `genzo_user`, PUBLIC revoked) on the
+  shared Postgres, an `internal`-only router with `cf-access-jwt`, and the app verifies the
+  Access assertion itself (GENZO-17). Its bytes live in `trestle-genzo`, a second, PRIVATE
+  Trestle (`TRESTLE_PUBLIC_SERVE=false`, its own token list `TRESTLE_GENZO_TOKENS`) with no
+  port, no router and one network, `genzo_blob_net` — internal, isolated gateway,
+  plimsoll_ai's shape — whose only other member is `genzo`. All library data sits under
+  ONE host path, `${GENZO_DATA_DIR_HOST:-/srv/genzo}` (`trestle/` the originals, `inbox/`
+  the read-only drop folder), bind-mounted with `create_host_path: false` so the library
+  can move to a bigger drive by changing one variable. **The originals are not backed up
+  off-box** (owner-deferred; `docs/backups.md`). `TRESTLE_TAG` now covers both Trestles.
 - `ansible/` — host-level ops (`ops/` playbooks, roles). Not container config.
   Includes `roles/delivery_prober`, the systemd timer that feeds the dev column
   of Switchyard's delivery matrix (SERV-111 — see Invariants).
@@ -479,10 +490,11 @@ anything deploys or gets versioned.
   pulls and recreates only the services behind the pins that actually moved, `--no-deps`.
   **Every other deploy still pulls the whole stack**, deliberately: that is where the patch
   float is supposed to land. Three things this does *not* bound, and do not write that it
-  does: five of the thirteen pins cover more than one service and recreate together —
+  does: six pins cover more than one service and recreate together —
   `SWITCHYARD_TAG` covers **three** (backend, frontend and `switchyard-mcp`, SERV-99),
   while `APERTURE_TAG`, `CENTRIFUGE_TAG` and `INTERLOCK_TAG` (web + worker) and
-  `CATENARY_TAG` (`catenary` + the one-shot `catenary-media-init`, SERV-244) cover two
+  `CATENARY_TAG` (`catenary` + the one-shot `catenary-media-init`, SERV-244) and
+  `TRESTLE_TAG` (the public `trestle` + the private `trestle-genzo`, GENZO-8) cover two
   each; the pin is still major.minor, so rolling back to `0.13` gets
   the newest `0.13` patch and **not necessarily the image prod ran the last time it was on
   `0.13`**; and a version bump merged inside a larger PR is not a pure pin change, so it

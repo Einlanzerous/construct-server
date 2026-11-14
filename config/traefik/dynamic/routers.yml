@@ -604,6 +604,19 @@ http:
       middlewares:
         - cf-access-jwt
 
+    # Genzo (GENZO-8): the photo library, one tunneled host, gated like satlink. `internal`
+    # ONLY — no `-direct` router on `public` (phones come later, as their own decision). The
+    # app re-verifies the Access assertion at its own origin (GENZO-17). Its AUD-map entry
+    # on cf-access-guard is a placeholder until the Access application exists; see the
+    # genzo service in docker-compose.yml.
+    genzo:
+      entryPoints:
+        - internal
+      rule: "Host(`genzo.zerogravity.industries`)"
+      service: genzo
+      middlewares:
+        - cf-access-jwt
+
     # Estate wiki (SERV-101): generated static site, tunneled + Cloudflare Access.
     # `internal` only, like switchyard and lyceum — the wiki assembles the whole
     # stack's topology, host exposure and environment-variable names onto one
@@ -876,6 +889,17 @@ http:
         # variables; it must equal PORT on the satlink service.
         servers:
           - url: "http://satlink:4018"
+
+    # GENZO (GENZO-8): the backend for the `genzo` router above. Never trestle-genzo:
+    # the private blob store has no router, no host and no Access application, and is
+    # not on any network Traefik can reach (genzo_blob_net). Every byte a browser sees
+    # is streamed by genzo itself (genzo invariant 4).
+    genzo:
+      loadBalancer:
+        # Literal because the file provider does not expand compose variables; it must
+        # equal GENZO_PORT on the genzo service.
+        servers:
+          - url: "http://genzo:4019"
 
     # Never actually reached — deny-all returns 403 first. Present only because a
     # Traefik router requires a service reference.
