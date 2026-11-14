@@ -108,7 +108,6 @@ on:
           - cook_book
           - drydock
           - eidolon
-          - genzo
           - interlock
           - lyceum
           - placard
