@@ -673,6 +673,13 @@ if MCP_SVC in (compose_doc.get("services") or {}):
 #      that service is served on. MCP-only means it is in no web list; Chronicle
 #      also refuses that at boot, and this says so before the deploy.
 # No service reading it is today's state, and prints nothing.
+#
+# THE GATEWAY ITSELF IS NOT A READER, and must not name its own audience with
+# this suffix. It verifies callers against its OWN Access application, so that
+# tag is its own audience: name it like every other service's own (a name ending
+# in CF_ACCESS_AUD), which check 4's per-host sweep then compares against the
+# gateway's own host. Named with this suffix, (c) would fail it, correctly by
+# the rule and wrongly in intent (SERV-268, take note).
 GATEWAY_KEY = re.compile(r"^[A-Z0-9_]*CF_ACCESS_GATEWAY_AUD$")
 OWN_AUD_KEY = re.compile(r"^[A-Z0-9_]*CF_ACCESS_[A-Z0-9_]*AUD$")   # web, MCP, ... -- never _MAP
 gw_readers = []
@@ -701,7 +708,11 @@ if gw_readers:
         print("        what another forwards fails every gateway session at its exchange,")
         print("        silently, with nothing else here red.")
     elif values == [""]:
-        print(f"  ok    the gateway audience is declared but off on every reader ({len(seen)})")
+        # Only the tracked readers are known to be off. A passthrough beside them
+        # may be set, which would be the blank-beside-set disagreement of (a),
+        # so the NOTE above is the whole of what can be said about it.
+        scope = "every reader" if not unseen else "every reader whose value is tracked"
+        print(f"  ok    the gateway audience is declared but off on {scope} ({len(seen)})")
     elif values:
         gw = values[0]
         gw_ok = True

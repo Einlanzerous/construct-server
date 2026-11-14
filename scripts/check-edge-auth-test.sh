@@ -397,6 +397,12 @@ readers "CF_ACCESS_GATEWAY_AUD=" "CF_ACCESS_GATEWAY_AUD=" "CHRONICLE_CF_ACCESS_G
 run_planted "declared blank on every reader -> green, said to be off" 0 \
   "ok    the gateway audience is declared but off on every reader (3)"
 
+world; planted
+readers "CF_ACCESS_GATEWAY_AUD=" "CF_ACCESS_GATEWAY_AUD=" "CHRONICLE_CF_ACCESS_GATEWAY_AUD"
+run_planted "blank readers beside a passthrough -> NOTE, and 'off' claimed only for the tracked ones" 0 \
+  "NOTE  gateway audience reader(s) whose value is not in the tracked compose: chronicle.CHRONICLE_CF_ACCESS_GATEWAY_AUD" \
+  "ok    the gateway audience is declared but off on every reader whose value is tracked (2)"
+
 world; planted; gateway_app
 readers "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CHRONICLE_CF_ACCESS_GATEWAY_AUD"
 run_planted "one reader passed through from the env file -> NOTE, the rest still checked" 0 \
