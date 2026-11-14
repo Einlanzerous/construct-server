@@ -33,6 +33,7 @@ CENTRIFUGE_DB_PASSWORD
 CHRONICLE_DB_PASSWORD
 CHRONICLE_TIER1_DB_PASSWORD
 COOK_BOOK_DB_PASSWORD
+GENZO_DB_PASSWORD
 INTERLOCK_DB_PASSWORD
 LYCEUM_DB_PASSWORD
 PLACARD_DB_PASSWORD
@@ -163,3 +164,17 @@ SATLINK_ACCESS_ALLOWED_EMAILS
 SATLINK_SWITCHYARD_TOKEN
 SATLINK_PG_MONITOR_URL
 SATLINK_PRACTICES_GH_TOKEN
+
+# --- genzo and trestle-genzo (GENZO-8) ---
+# Vault first (see the ORDER OF OPERATIONS above): until `signet sync` has run and
+# `make assert-env-keys vault=1` passes, merging this blocks every prod deploy.
+# GENZO_TRESTLE_TOKEN is genzo's plaintext bearer for the private store and
+# TRESTLE_GENZO_TOKENS its `genzo=<sha256>` line, both from one `trestle token mint
+# --name genzo` (.env.example). Either one blank refuses that container's boot.
+# GENZO_OWNER_EMAILS is the owner allowlist GENZO-17 reads; from that release genzo
+# refuses to boot without it. An email address, so it lives in the vault, never here.
+# GENZO_DATA_DIR_HOST is NOT listed while the default (/srv/genzo) is the value; it joins
+# here when the library moves to its own drive (see the GENZO header in the compose file).
+GENZO_TRESTLE_TOKEN
+TRESTLE_GENZO_TOKENS
+GENZO_OWNER_EMAILS
