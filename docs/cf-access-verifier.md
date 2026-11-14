@@ -240,3 +240,16 @@ Two consequences that are easy to miss and are wired up:
   directory alone, a module-only change would leave the revision unchanged, and a
   scoped deploy (SERV-109) would prove the running guard "current" while it ran
   the old verifier — the exact staleness that label exists to make impossible.
+
+## Build context for cf-access-guard (moved from `CLAUDE.md`, SERV-317)
+
+cosmetic choice. **cf-access-guard is the one exception**, tracking HEAD through
+a path `replace`, which is also what keeps its build hermetic; it therefore
+reaches the guard's Docker build as a **named build context**, never by widening
+the context to the deploy root — that root holds the rendered `.env`.
+Switchyard stays on `jose` deliberately: replacing a maintained library with
+estate code is the wrong direction, and the cross-language check is
+`pkg/cfaccess/testdata/vectors.json`, shared vectors that **both** suites run.
+A `class: protocol` vector must hold in any conforming verifier; `keypolicy`
+ones are estate hardening a general JWT library need not enforce, and a
+legitimate difference is recorded in `expectBy` rather than skipped.

@@ -487,3 +487,46 @@ and the AUDs.
 55433) predating this work. It was left alone deliberately: it holds a real
 `lyceum_dev` database, 11 tables and 8 MB. `lyceum-dev` in this project supersedes
 it, but migrating or discarding that data is a decision for whoever created it.
+
+## Dev isolation: rationale moved from `CLAUDE.md` (SERV-317)
+
+dev network, the workflow owns steady state, the same split as prod. Never copy the prod `.env` into dev: purser
+provisions real accounts across four services, so a dev purser with prod
+credentials does not fail safely — it succeeds, against production. **Nothing
+is on both networks**, which is what makes "dev cannot reach prod" true rather
+than merely intended.
+
+**Dev has its own edge, and that is why the sentence above still has no
+exceptions** (SERV-93). `traefik-dev`, `cf-access-guard-dev` and `cloudflared-dev`
+live in the dev project on `construct_dev_edge_net` (172.31.241.0/24), with a
+second Cloudflare tunnel and dev's own Access applications. The cheaper option —
+attaching prod's Traefik to `construct_dev_net` — was by then no longer dangerous:
+`internal` binds a single address on `construct_edge_net` that only cloudflared
+shares (SERV-107), every router on it validates the Access JWT at the origin
+(SERV-106), and a dev hostname absent from `CF_ACCESS_AUD_MAP` fails closed. It was
+rejected anyway, because it needs a **carve-out** in "nothing outside the dev
+project is attached to `construct_dev_net`" — and that check exists precisely
+because the exception was made once before. Trading a property that holds
+structurally for one that holds while a middleware stays correctly attached is the
+wrong direction. **If a change starts needing a container on both networks, that is
+the rejected design arriving by the back door.**
+
+**The edge is gated on its own credential, not on a flag.** The three services carry
+`profiles: [edge]` and the Makefile enables that profile exactly when
+`DEV_CLOUDFLARE_TUNNEL_TOKEN` is non-empty in the deployed dev `.env`. Half of
+SERV-93 is a Zero Trust dashboard change no file here can make (a second tunnel, one
+Access application per hostname, its AUD into `CF_ACCESS_AUD_MAP` on
+`cf-access-guard-dev`), and an empty `TUNNEL_TOKEN` does not disable cloudflared —
+it crash-loops it. The runbook is in `docs/dev-environment.md`; do not re-derive it.
+**The credential is an on switch; compose does not make it an off switch.**
+`up -d` with a profile off does NOT stop the containers that profile created — they
+stay `Up` and are not orphans. So removing the token leaves a live edge serving while
+every intent-based check calls it "not deployed", which takes the auth assertion
+silent over a running origin. `make dev-up` reconciles (see `dev-edge-down`), and
+`make dev-edge-auth-check` keys off what is **running** rather than off the token:
+if something is serving, it gets probed. Do not re-gate that check on the token.
+Isolation is asserted by `make dev-verify-isolation` — which now probes
+**reachability** from the dev network with a positive control, not just attachment,
+because attachment is a proxy and proxies are what let SERV-25's deferral hide for
+six weeks. Dev origin auth is `make dev-edge-auth-check`; dev-vs-prod config drift is
+`make dev-parity`.

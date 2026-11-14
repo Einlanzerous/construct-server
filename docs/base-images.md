@@ -161,3 +161,19 @@ repository to `PRODUCT_MAP` in the script, keyed as written in the Dockerfile wi
 `docker.io/library/` stripped, valued with the endoflife.date product slug
 (`https://endoflife.date/api/v1/products/<slug>`). Do not add an exemption instead: an
 image the policy cannot evaluate is the case the guard exists to make loud.
+
+## Traps (moved from `CLAUDE.md`, SERV-317)
+
+**A base image names a supported cycle, to cycle precision, in every first-party
+Dockerfile** (SERV-170). `alpine:3.23`, `node:24-alpine`, `golang:1.26-bookworm`;
+never `alpine:3`, `nginx:alpine` or `latest`. On 2026-09-05 four repos were on an
+Alpine five months past EOL, two on a Node four months past, and three nginx runtimes
+fifteen months past — including this repo's wiki — and nothing surfaced any of it,
+because an EOL base builds, deploys and reports healthy. `base-images.yml` sweeps every
+repo's default branch each Monday against endoflife.date and goes red; it is
+deliberately **not a deploy gate**. It reads `FROM` lines only: the wiki's nginx is a
+compose `image:` and **its pin stays manual until SERV-179**. Two traps. A new Dockerfile written by copying an
+old one inherits its base, which is how catenary got `alpine:3.20` in 2026-09 (CANT-78).
+And `cf-access-guard` is built **here**, so its `golang:` pin is this repo's to keep
+current — a toolchain bump there is validated by the `--target test` build, the same
+one CI runs. `docs/base-images.md` is the rule and the decision of record.

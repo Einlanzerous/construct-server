@@ -486,3 +486,41 @@ then is a better index, not a stateful wiki.
 - **VitePress over MkDocs Material.** MkDocs is the obvious pick from outside and
   is Python, which PRINCIPLES §1 pushes back on. VitePress is TypeScript and
   Vue-flavoured, matching the estate frontend default.
+
+## Generator rules: rationale moved from `CLAUDE.md` (SERV-317)
+
+**The wiki is generated, and its generator must never read a resolved
+environment** (SERV-101). `wiki/docs/` is wiped and rewritten on every run, so a
+hand-written page there is deleted without warning — anything a person wants to
+write belongs in the relevant repo's `CLAUDE.md`, or in tier 2 (IDEA-21). Since
+SERV-189 the corpus is a **deployed artefact** as well as a build input:
+`wiki.yml` publishes it to `$DEPLOY_ROOT/wiki/docs` beside the site, and
+`chronicle` mounts it read-only to serve tier 1 beside tier 2 (CHRN-100). The
+generator parses the **raw** `docker-compose.yml` and never `docker compose
+config`, never a `.env`: the resolved view interpolates every variable, so
+reading it would publish the contents of `PROD_ENV_FILE` onto a Markdown page.
+The tracked compose file holds no secret by construction, which is the entire
+safety argument — env tables therefore show variable *names*, and values only
+where the tracked file spells one out. It also parses raw in order to keep
+**comments**, which are the best documentation in that file and which
+`docker compose config` discards. Build it in a container (`make wiki-build`), not
+against host node.
+**A repo's system map is the one thing on a wiki page that a person authors, and
+it is authored in that repo** (SERV-159). A repo that commits
+`docs/architecture.archify.json` gets an interactive map on its page, rendered at
+build time by the vendored archify in `wiki/vendor/archify` — pinned per SERV-91,
+and vendored because it is `private: true`, is not on npm, and its repository root
+has no `package.json`. That does not bend the rule above: the IR is a source file
+in the repo it describes, the same category as that repo's `CLAUDE.md`, and the
+render is the generator's job. Nothing hand-made reaches `wiki/docs/`.
+Two consequences. **The build container is `node:22` and not `node:22-alpine`**,
+because archify verifies each component's `SRC` links against the pinned commit
+with `git cat-file` before it will render — alpine ships no git, and `apk add git`
+is unavailable to a container deliberately running `--user $(id -u)`, besides
+being the floating install SERV-91 exists to stop. Note that the Debian image
+*carries* git rather than pinning it: `node:22` is a moving tag, so the git behind
+it changes with no edit here — the same trap as `traefik:v3.3`. And **a map can never fail the
+build**: every failure becomes a warning block on that repo's page carrying
+archify's own diagnostic, and is named in the build log. The IRs are written in
+other repos, so the alternative is the estate wiki ceasing to publish because
+somebody moved a node in switchyard. Design of record: `docs/estate-wiki.md`.
