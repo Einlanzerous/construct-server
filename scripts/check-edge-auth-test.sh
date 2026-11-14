@@ -327,5 +327,88 @@ run_planted_live "gated-path probe gets Traefik's unrouted 404 instead of the 30
   "FAIL  edge: $CB_HOST/auth/sso answered 404 instead of the Access 302"
 
 echo
+echo "=== check-edge-auth.sh the estate MCP gateway's audience (SERV-266) ==="
+
+# Nothing in the real compose reads a gateway audience yet (SERV-268 adds the gateway),
+# so every case plants one: a gated router + map entry for a stand-in gateway host, and
+# CF_ACCESS_GATEWAY_AUD / CHRONICLE_CF_ACCESS_GATEWAY_AUD on the readers this ticket
+# taught to accept it. Synthetic tags only, never a real one.
+GW_HOST="estate-mcp.zerogravity.industries"
+GW_AUD="$(printf 'e%.0s' $(seq 64))"
+OTHER_AUD="$(printf 'f%.0s' $(seq 64))"
+gateway_app() {
+  subst $ROUTERS_REL $'\n  routers:\n' $'\n  routers:\n    estate-mcp:\n      entryPoints:\n        - internal\n      rule: "Host(`'"$GW_HOST"$'`)"\n      service: estate-mcp\n      middlewares:\n        - cf-access-jwt\n\n'
+  subst $ROUTERS_REL $'\n  services:\n' $'\n  services:\n    estate-mcp:\n      loadBalancer:\n        servers:\n          - url: "http://estate-mcp:4080"\n\n'
+  subst docker-compose.yml "CF_ACCESS_AUD_MAP=" "CF_ACCESS_AUD_MAP=$GW_HOST=$GW_AUD,"
+}
+# reader <anchor line prefix> <line to insert above it>
+reader() { subst docker-compose.yml "$1" "$2"$'\n'"$1"; }
+readers() { # <switchyard> <switchyard-mcp> <chronicle> -- each a full "KEY=VALUE" or bare "KEY"
+  reader "      - CF_ACCESS_MCP_AUD=" "      - $1"
+  reader "      - MCP_CF_ACCESS_AUD=" "      - $2"
+  reader "      - CHRONICLE_CF_ACCESS_TEAM_DOMAIN=" "      - $3"
+}
+
+world; planted
+run_planted "no service reads a gateway audience (today) -> green, and nothing said about it" 0 \
+  "Edge auth (SERV-106)"
+if printf '%s' "$OUT" | grep -qi "gateway audience"; then
+  bad "no reader, yet the output mentions a gateway audience"
+fi
+
+world; planted; gateway_app
+readers "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CHRONICLE_CF_ACCESS_GATEWAY_AUD=$GW_AUD"
+run_planted "three readers agree on a mapped gateway audience -> green" 0 \
+  "ok    3 reader(s) agree on the gateway audience"
+
+world; planted; gateway_app
+readers "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CHRONICLE_CF_ACCESS_GATEWAY_AUD=$OTHER_AUD"
+run_planted "chronicle carries a different gateway audience -> red, every reader shown" 1 \
+  "FAIL  the services reading the gateway audience disagree about it" \
+  "chronicle.CHRONICLE_CF_ACCESS_GATEWAY_AUD: $OTHER_AUD" "switchyard.CF_ACCESS_GATEWAY_AUD: $GW_AUD"
+
+world; planted; gateway_app
+readers "CF_ACCESS_GATEWAY_AUD=" "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CHRONICLE_CF_ACCESS_GATEWAY_AUD=$GW_AUD"
+run_planted "switchyard-mcp forwards what switchyard leaves blank -> red" 1 \
+  "FAIL  the services reading the gateway audience disagree about it" \
+  "switchyard.CF_ACCESS_GATEWAY_AUD: (blank: gateway audience off here)"
+
+world; planted
+readers "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CHRONICLE_CF_ACCESS_GATEWAY_AUD=$GW_AUD"
+run_planted "the readers agree on an audience no mapped host issues -> red" 1 \
+  "FAIL  the gateway audience is in no CF_ACCESS_AUD_MAP entry"
+
+world; planted; gateway_app
+readers "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CHRONICLE_CF_ACCESS_GATEWAY_AUD=$GW_AUD"
+subst docker-compose.yml "      - CHRONICLE_CF_ACCESS_AUD=" "      - CHRONICLE_CF_ACCESS_AUD=$GW_AUD,"
+run_planted "the gateway audience also in chronicle's web list -> red, naming it" 1 \
+  "FAIL  chronicle reads the gateway audience as one of its own web/MCP audiences" \
+  "also in chronicle.CHRONICLE_CF_ACCESS_AUD"
+
+world; planted
+CHR_AUD="$(sed -n 's/^ *- CHRONICLE_CF_ACCESS_AUD=\([0-9a-f]*\)$/\1/p' "$TMP/planted/docker-compose.yml")"
+readers "CF_ACCESS_GATEWAY_AUD=$CHR_AUD" "CF_ACCESS_GATEWAY_AUD=$CHR_AUD" "CHRONICLE_CF_ACCESS_GATEWAY_AUD=$CHR_AUD"
+run_planted "the readers agree on chronicle's own web AUD as the gateway's -> red" 1 \
+  "FAIL  chronicle reads the gateway audience as one of its own web/MCP audiences" \
+  "also the map entry for chronicle.zerogravity.industries"
+
+world; planted
+readers "CF_ACCESS_GATEWAY_AUD=" "CF_ACCESS_GATEWAY_AUD=" "CHRONICLE_CF_ACCESS_GATEWAY_AUD="
+run_planted "declared blank on every reader -> green, said to be off" 0 \
+  "ok    the gateway audience is declared but off on every reader (3)"
+
+world; planted
+readers "CF_ACCESS_GATEWAY_AUD=" "CF_ACCESS_GATEWAY_AUD=" "CHRONICLE_CF_ACCESS_GATEWAY_AUD"
+run_planted "blank readers beside a passthrough -> NOTE, and 'off' claimed only for the tracked ones" 0 \
+  "NOTE  gateway audience reader(s) whose value is not in the tracked compose: chronicle.CHRONICLE_CF_ACCESS_GATEWAY_AUD" \
+  "ok    the gateway audience is declared but off on every reader whose value is tracked (2)"
+
+world; planted; gateway_app
+readers "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CHRONICLE_CF_ACCESS_GATEWAY_AUD"
+run_planted "one reader passed through from the env file -> NOTE, the rest still checked" 0 \
+  "NOTE  gateway audience reader(s) whose value is not in the tracked compose: chronicle.CHRONICLE_CF_ACCESS_GATEWAY_AUD" \
+  "ok    2 reader(s) agree on the gateway audience"
+
+echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

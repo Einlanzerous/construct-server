@@ -48,6 +48,10 @@
 #      the MCP forwards it to POST /v1/auth/sso/cloudflare. It is here because it
 #      is the only Access misconfiguration in this estate that fails silently and
 #      green — see the block itself for what that looked like.
+#   5b. Every service reading the estate MCP gateway's audience (a variable ending
+#      in CF_ACCESS_GATEWAY_AUD) carries the same tag; that tag is a mapped AUD; and
+#      it is never one of a reader's own web/MCP audiences (SERV-266). The same
+#      silent-and-green failure as 5, with more than two readers.
 #   6. traefik.yml's `internal` address matches Traefik's ipv4_address in the
 #      compose file — if they disagree, Traefik binds an address it does not hold
 #      and every tunneled app goes dark.
@@ -642,6 +646,100 @@ if MCP_SVC in (compose_doc.get("services") or {}):
         print("        SSO exchange, with nothing else red.")
     else:
         print(f"  ok    {API_SVC} accepts {MCP_SVC}'s Access audience (CF_ACCESS_MCP_AUD)")
+
+# THE ESTATE MCP GATEWAY'S AUDIENCE: EVERY READER AGREES, AND IT IS NEVER A WEB
+# AUDIENCE (SERV-266; criterion 5 of SERV-257's plan).
+#
+# The gateway (ruling 4) verifies a caller's assertion against its OWN Access
+# application and forwards it unchanged to each backend MCP, which exchanges it
+# at its own API. So one audience is read in several places: switchyard-mcp
+# and switchyard (CF_ACCESS_GATEWAY_AUD), chronicle-mcp and chronicle
+# (CHRONICLE_CF_ACCESS_GATEWAY_AUD), and every service that joins later. They
+# are found by the one suffix the convention gives them, `CF_ACCESS_GATEWAY_AUD`,
+# which deliberately does NOT end in CF_ACCESS_AUD: the per-host sweep above
+# would compare a reader's gateway tag against the reader's OWN host and fail it
+# confidently and wrongly, the reason the SERV-161 pair is named rather than swept.
+#
+# This is the SERV-161 failure again, multiplied: a reader that disagrees fails
+# silently and green -- the gateway's sessions 401 at one backend's exchange
+# while every other check here passes. So, config-only, like that block:
+#   a. every literal value is the same tag. A reader left blank beside one that
+#      is set is a disagreement too: the set one forwards what the blank one
+#      refuses.
+#   b. the tag is a CF_ACCESS_AUD_MAP entry: an audience no gated host on this
+#      edge issues is a typo, or the gateway's Access app is not mapped.
+#   c. it is never a reader's own web or MCP audience -- not in any other
+#      *CF_ACCESS*AUD variable of that service, and not the map entry of any host
+#      that service is served on. MCP-only means it is in no web list; Chronicle
+#      also refuses that at boot, and this says so before the deploy.
+# No service reading it is today's state, and prints nothing.
+#
+# THE GATEWAY ITSELF IS NOT A READER, and must not name its own audience with
+# this suffix. It verifies callers against its OWN Access application, so that
+# tag is its own audience: name it like every other service's own (a name ending
+# in CF_ACCESS_AUD), which check 4's per-host sweep then compares against the
+# gateway's own host. Named with this suffix, (c) would fail it, correctly by
+# the rule and wrongly in intent (SERV-268, take note).
+GATEWAY_KEY = re.compile(r"^[A-Z0-9_]*CF_ACCESS_GATEWAY_AUD$")
+OWN_AUD_KEY = re.compile(r"^[A-Z0-9_]*CF_ACCESS_[A-Z0-9_]*AUD$")   # web, MCP, ... -- never _MAP
+gw_readers = []
+for _svc in (compose_doc.get("services") or {}):
+    for _k, _v in service_env(_svc).items():
+        if GATEWAY_KEY.match(_k):
+            gw_readers.append((_svc, _k, _v))
+if gw_readers:
+    unseen = [(s, k) for s, k, v in gw_readers if v is None or "$" in v]
+    seen = [(s, k, v.strip()) for s, k, v in gw_readers if v is not None and "$" not in v]
+    if unseen:
+        # Passed through from the env file, or interpolated: the value is not in
+        # the tracked file, so it cannot be compared here. Say so rather than
+        # pass it as agreeing.
+        print(f"  NOTE  gateway audience reader(s) whose value is not in the tracked compose: "
+              f"{', '.join(f'{s}.{k}' for s, k in unseen)}")
+        print("        They cannot be cross-checked here. Confirm they match the others by hand.")
+    values = sorted({v for _, _, v in seen})
+    if len(values) > 1:
+        bad("the services reading the gateway audience disagree about it")
+        # In full, for the reason the SERV-161 block gives: public identifiers
+        # tracked in git, and a prefix would hide a tail difference.
+        for s, k, v in seen:
+            print(f"        {s}.{k}: {v or '(blank: gateway audience off here)'}")
+        print("        Every reader must carry the same tag, or none may. A reader that refuses")
+        print("        what another forwards fails every gateway session at its exchange,")
+        print("        silently, with nothing else here red.")
+    elif values == [""]:
+        # Only the tracked readers are known to be off. A passthrough beside them
+        # may be set, which would be the blank-beside-set disagreement of (a),
+        # so the NOTE above is the whole of what can be said about it.
+        scope = "every reader" if not unseen else "every reader whose value is tracked"
+        print(f"  ok    the gateway audience is declared but off on {scope} ({len(seen)})")
+    elif values:
+        gw = values[0]
+        gw_ok = True
+        if gw not in set(aud_map.values()):
+            gw_ok = False
+            bad("the gateway audience is in no CF_ACCESS_AUD_MAP entry")
+            print(f"        readers: {', '.join(f'{s}.{k}' for s, k, _ in seen)}")
+            print("        The gateway's own Access application must be a mapped gated host; an")
+            print("        audience nothing on this edge issues is a typo or a missing map entry.")
+        for s in sorted({s for s, _, _ in seen}):
+            own_keys = sorted(k for k, v in service_env(s).items()
+                              if OWN_AUD_KEY.match(k) and not GATEWAY_KEY.match(k)
+                              and v is not None and gw in [a.strip() for a in v.split(",")])
+            own_hosts = sorted(h for h in container_hosts.get(s, set()) if aud_map.get(h) == gw)
+            if own_keys or own_hosts:
+                gw_ok = False
+                bad(f"{s} reads the gateway audience as one of its own web/MCP audiences")
+                for k in own_keys:
+                    print(f"        also in {s}.{k}")
+                for h in own_hosts:
+                    print(f"        also the map entry for {h}, a host {s} is served on")
+                print("        The gateway's tag is an MCP-only audience. In a web list it would be")
+                print("        handed a browser's session (Chronicle refuses to boot on it); as the")
+                print("        service's own tag it means two Access applications share one audience.")
+        if gw_ok:
+            print(f"  ok    {len(seen)} reader(s) agree on the gateway audience; it is mapped and is")
+            print("        no reader's own web/MCP audience (SERV-266)")
 
 # The address Traefik binds `internal` to must be an address Traefik holds.
 static = yaml.safe_load(open(static_file)) or {}
