@@ -1,5 +1,25 @@
 # Changelog
 
+## [4.43.0](https://github.com/Einlanzerous/construct-server/compare/v4.42.0...v4.43.0) (2026-11-14)
+
+
+### Features
+
+* **cook_book:** Access env for COOK-23 contributor identity (SERV-262) ([#272](https://github.com/Einlanzerous/construct-server/issues/272)) ([f3c08cb](https://github.com/Einlanzerous/construct-server/commit/f3c08cb8d03033b46e6c516851795e48d3f1210f))
+* **edge-auth:** every reader of the MCP gateway's audience agrees, and it is never a web audience (SERV-266) ([#282](https://github.com/Einlanzerous/construct-server/issues/282)) ([e62913f](https://github.com/Einlanzerous/construct-server/commit/e62913f4ff50515c24358f4bc376d8959bef4b06))
+* **edge:** check-edge-auth supports mixed hosts (SERV-270, COOK-41) ([#275](https://github.com/Einlanzerous/construct-server/issues/275)) ([56997a8](https://github.com/Einlanzerous/construct-server/commit/56997a8f2f800235894e7c85235b6ab283de911e))
+* **edge:** onboard Commonplace at commonplace.zerogravity.industries (SERV-259) ([#271](https://github.com/Einlanzerous/construct-server/issues/271)) ([99918da](https://github.com/Einlanzerous/construct-server/commit/99918da1a9749d415fb5ac299bfe228c2c9e39cd))
+* **edge:** split cook_book into cook-login and cook-public (SERV-272, COOK-41) - DO NOT DEPLOY before cook_book 2.2.0 ([#276](https://github.com/Einlanzerous/construct-server/issues/276)) ([9cdffc7](https://github.com/Einlanzerous/construct-server/commit/9cdffc72bedafa7393d311a89456c4919821cfef))
+* **mcp:** measure every MCP's tools/list, with a committed baseline and a CI job (SERV-263) ([#273](https://github.com/Einlanzerous/construct-server/issues/273)) ([8896412](https://github.com/Einlanzerous/construct-server/commit/8896412955b6f3f517e9f86f933142b7e510f7e8))
+* **satlink:** Access-gated router, pin 0.2.0, Docker-state mount (SATL-58) ([#281](https://github.com/Einlanzerous/construct-server/issues/281)) ([b2f4381](https://github.com/Einlanzerous/construct-server/commit/b2f4381c52642cc0b7e291cfa5ee50dd102fedb7))
+* **satlink:** onboard Satlink: compose block, internal backend, env keys, DB (SERV-295) ([#280](https://github.com/Einlanzerous/construct-server/issues/280)) ([b103600](https://github.com/Einlanzerous/construct-server/commit/b103600abcdb13c3d8f4a7e93fce4dbcbb249226))
+* SERV-279 — arcus service, tunneled host behind Access, 0.1 pin ([#277](https://github.com/Einlanzerous/construct-server/issues/277)) ([36ccfea](https://github.com/Einlanzerous/construct-server/commit/36ccfeab3175ac2b9282605408fcfc83981700a7))
+
+
+### Bug Fixes
+
+* SERV-279 — arcus healthcheck probes with bun; the slim image has no wget ([#278](https://github.com/Einlanzerous/construct-server/issues/278)) ([bdef7bc](https://github.com/Einlanzerous/construct-server/commit/bdef7bc3298e0ee5318b1099ed4833061e53ca83))
+
 ## [4.42.0](https://github.com/Einlanzerous/construct-server/compare/v4.41.0...v4.42.0) (2026-11-07)
 
 
