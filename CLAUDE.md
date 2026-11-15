@@ -49,8 +49,9 @@ is in `docs/stack-service-notes.md`. Safety rules for them:
 
 ## Conventions
 
-- Commits, branches, release-please and LF line endings follow `PRINCIPLES.md` §3. Scope
-  is the service or subsystem; the Switchyard key goes in the subject.
+- Commits, branches and release-please follow `PRINCIPLES.md` §3; text files are LF via
+  `.gitattributes` (SERV-52). Scope is the service or subsystem; the Switchyard key goes
+  in the subject.
 - Deploys are GitHub Actions on the self-hosted `imperial-construct` runner. `deploy.yml`
   fires on push to `main` touching stack paths; service repos fire `repository_dispatch`.
 - **Change a service's version with `promote.yml`** (Actions > Promote / Rollback), not by
