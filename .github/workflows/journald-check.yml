@@ -1,0 +1,29 @@
+name: Journald check
+
+# SATL-25: the read-only journald status script and its mock-bin test. Narrow path filter;
+# nothing here touches a host. The compose anchor itself is covered by `docker compose config`
+# on the deploy path.
+
+on:
+  push:
+    paths:
+      - 'scripts/check-journald-logging.sh'
+      - 'scripts/test/test-check-journald-logging.sh'
+      - '.github/workflows/journald-check.yml'
+  pull_request:
+    paths:
+      - 'scripts/check-journald-logging.sh'
+      - 'scripts/test/test-check-journald-logging.sh'
+      - '.github/workflows/journald-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The check reports drivers and counts, never a log line
+        run: ./scripts/test/test-check-journald-logging.sh

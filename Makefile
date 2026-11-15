@@ -6,7 +6,7 @@
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
         comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight \
         backup-test backup-status \
-        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test plimsoll-llm-isolation plimsoll-llm-canary mcp-tools
+        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test plimsoll-llm-isolation plimsoll-llm-canary mcp-tools journald-check journald-check-test
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -897,3 +897,17 @@ plimsoll-llm-canary:
 # Usage: make mcp-tools [update=1]
 mcp-tools:
 	@./scripts/measure-mcp-tools.py $(if $(update),--update,--check)
+
+# Read-only status of container journald logging (SATL-25): the log driver per service
+# (satlink on journald; plimsoll-llm and plimsoll must stay json-file), journal line counts
+# per CONTAINER_NAME, journal disk usage and the 24 h rate-limit drop count. Counts only,
+# never a log line. Needs no sudo. Exits 1 on a wrong driver. Docs: docs/journald-logging.md.
+# Usage: make journald-check
+journald-check:
+	@./scripts/check-journald-logging.sh
+
+# Prove that check against fake docker and journalctl binaries: driver per service, red on a
+# wrong or missing driver, and no log line ever reaches stdout. Touches nothing on the host.
+# Usage: make journald-check-test
+journald-check-test:
+	@./scripts/test/test-check-journald-logging.sh

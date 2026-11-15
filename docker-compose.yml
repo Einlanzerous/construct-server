@@ -54,6 +54,26 @@
 # values in the tracked `versions.env`, deliberately floating at major.minor so patch
 # releases still land. See that file and the guard in `deploy.yml`.
 
+# JOURNALD CONTAINER LOGGING (SATL-25)
+#
+# Container stdout survives a recreate only if it is NOT stored in the container: the
+# daemon's default json-file driver keeps it in the container's own directory and deletes
+# it with the container, which is exactly when an incident reader needs it. The journald
+# driver writes to the host journal instead, keyed by CONTAINER_NAME, so
+# `journalctl CONTAINER_NAME=<name>` returns the lines of every past container of that name.
+#
+# Adopt with `logging: *journald-logging`, one service per wave (docs/journald-logging.md).
+# Every adopter is recreated by the deploy that merges it, so the wave size is the number
+# of simultaneous restarts. NOT for plimsoll or plimsoll-llm: scripts/check-plimsoll-llm-
+# canary.sh requires them to log through json-file (PLIM-14), so do not generalise this.
+# max-size/max-file are json-file options and are invalid here. The host drop-ins (size cap,
+# docker.service rate limit) are installed by the owner BEFORE any service adopts this.
+x-journald-logging: &journald-logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+    labels: "com.docker.compose.service"
+
 services:
   # --- AI & LLM STACK ---
   ollama:
@@ -2853,12 +2873,9 @@ services:
     # 2xx. It probes /healthz, never /readyz, so a database blip does not restart it.
     # Migrations run in-process before it listens, so give a shutdown room to finish one.
     stop_grace_period: 30s
-    # Explicit, as on sextant: the daemon's json-file driver has no size cap on this box.
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    # SATL-25 canary: journald, so its lines (the boot-race ones included) outlive a
+    # recreate. Replaces the json-file 10m x 3 cap, which journald's SystemMaxUse supersedes.
+    logging: *journald-logging
 
   # --- EIDOLON (thin-client Agent OS portal for the wall tablet) — EIDO-28 ---
   # The Go middleware that serves the SPA and the /ws front door. Reached ONLY

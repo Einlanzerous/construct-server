@@ -82,6 +82,50 @@
     group: "{{ user_name }}"
     mode: "0755"
 
+# --- JOURNALD DROP-INS FOR CONTAINER LOGS (SATL-25) ---
+# Written, applied only by `ansible-playbook ansible/site.yml --tags journald` (never the
+# whole site.yml: its "Start Docker Stack" task would apply compose changes). These MUST be
+# in place BEFORE a service adopts the `x-journald-logging` anchor; see docs/journald-logging.md.
+# Neither handler touches Docker or any container: journald restarts alone, and docker.service
+# only has its unit settings reloaded (daemon-reload; dockerd is NOT restarted).
+- name: Create journald drop-in directory
+  file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [journald]
+
+- name: Create docker.service drop-in directory
+  file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [journald]
+
+- name: Install journald size cap drop-in
+  copy:
+    src: journald/50-construct-containers.conf
+    dest: /etc/systemd/journald.conf.d/50-construct-containers.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald
+  tags: [journald]
+
+- name: Install docker.service log rate limit drop-in
+  copy:
+    src: journald/50-log-rate.conf
+    dest: /etc/systemd/system/docker.service.d/50-log-rate.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd units
+  tags: [journald]
+
 # --- 3. DEPLOYMENT (Clone the Repo) ---
 # Everything below targets {{ deploy_root }}, never ~/construct-server (SERV-76).
 # The home checkout no longer backs the `construct-server` compose project — it is a
