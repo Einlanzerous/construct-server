@@ -6,8 +6,8 @@ package main
 //
 // The verification itself — the alg:none / HMAC-replay / expired / unknown-kid
 // bypass table, the JWKS cache, the fail-closed key handling — moved to
-// pkg/cfaccess and is tested there, against shared vectors that Switchyard's
-// TypeScript suite runs too. Restating any of it here would recreate in the test
+// pkg/cfaccess and is tested there, against shared vectors, which that module's
+// Go tests run. Restating any of it here would recreate in the test
 // suite exactly the duplication the ticket removed from the source.
 //
 // The one thing that MUST be tested here and cannot be tested there: that a
@@ -57,13 +57,28 @@ func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func signToken(t *testing.T, aud string) string {
 	t.Helper()
+	return signTokenWith(t, aud, nil)
+}
+
+// signTokenWith signs the standard claims with `over` applied on top; a nil value
+// deletes the claim.
+func signTokenWith(t *testing.T, aud string, over map[string]any) string {
+	t.Helper()
 	now := time.Now()
 	h, _ := json.Marshal(map[string]any{"alg": "RS256", "kid": testKid, "typ": "JWT"})
-	c, err := json.Marshal(map[string]any{
+	claims := map[string]any{
 		"iss": testIssuer, "aud": []string{aud},
 		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nbf": now.Unix(),
 		"sub": "abc123", "email": "operator@example.com",
-	})
+	}
+	for k, v := range over {
+		if v == nil {
+			delete(claims, k)
+		} else {
+			claims[k] = v
+		}
+	}
+	c, err := json.Marshal(claims)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,10 +140,9 @@ func testGuard(t *testing.T, m mode, withKeys bool) *guard {
 	// withKeys=false gives a certs endpoint that always fails: the verifier holds
 	// no keys, which is the state a guard is in before its first successful
 	// refresh and the one it must fail closed from.
-	v, err := cfaccess.New(cfaccess.Config{
-		TeamDomain: testTeam,
-		HTTPClient: certsClient(t, withKeys),
-	})
+	vc := verifierConfig(g.cfg, g.log)
+	vc.HTTPClient = certsClient(t, withKeys)
+	v, err := cfaccess.New(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +178,27 @@ func TestATokenIsOnlyGoodForItsOwnHost(t *testing.T) {
 	}
 	if _, err := g.validate(ctx, wikiHost, signToken(t, switchyardAud)); err == nil {
 		t.Fatal("a Switchyard token opened the wiki")
+	}
+}
+
+// SERV-293: pkg/cfaccess gained an opt-in principal mode that refuses an assertion
+// carrying both email and common_name, or neither. The guard does NOT enable it —
+// it only decides pass/fail, and a service token (common_name, no email) is a
+// legitimate caller it must keep letting through. This pins that: a future change
+// that flips the mode on here fails this test rather than silently refusing every
+// service-token caller at the edge.
+func TestGuardVerdictIsIndifferentToThePrincipalClaims(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	ctx := context.Background()
+
+	for name, over := range map[string]map[string]any{
+		"both email and common_name": {"common_name": "svc.example.test"},
+		"neither claim":              {"email": nil},
+		"service token only":         {"email": nil, "common_name": "svc.example.test"},
+	} {
+		if _, err := g.validate(ctx, switchyardHost, signTokenWith(t, switchyardAud, over)); err != nil {
+			t.Errorf("%s: a genuine assertion for a mapped host was refused: %v", name, err)
+		}
 	}
 }
 
@@ -318,5 +353,82 @@ func TestLoadConfigNormalisesADashboardPaste(t *testing.T) {
 	}
 	if v.Issuer() != testIssuer {
 		t.Fatalf("issuer = %q, want %q", v.Issuer(), testIssuer)
+	}
+}
+
+func verifyRequest(host, token string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
+	req.Header.Set("X-Forwarded-Host", host)
+	if token != "" {
+		req.Header.Set("Cf-Access-Jwt-Assertion", token)
+	}
+	return req
+}
+
+// SATL-24: the opaque `sub` goes back to Traefik on a 2xx so the access log can
+// name an actor. The email must never take that route.
+func TestAcceptedRequestCarriesTheOpaqueSubjectAndNothingPersonal(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	rec := httptest.NewRecorder()
+	g.handleVerify(rec, verifyRequest(switchyardHost, signToken(t, switchyardAud)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get(subjectHeader); got != "abc123" {
+		t.Fatalf("%s = %q, want the token's sub", subjectHeader, got)
+	}
+	for name, vals := range rec.Header() {
+		for _, v := range vals {
+			if v == "operator@example.com" {
+				t.Fatalf("header %s carries the email", name)
+			}
+		}
+	}
+}
+
+// A 403 must assert no identity, whatever the client sent.
+func TestDeniedRequestCarriesNoSubject(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	for name, req := range map[string]*http.Request{
+		"no assertion":   verifyRequest(switchyardHost, ""),
+		"wrong audience": verifyRequest(switchyardHost, signToken(t, wikiAud)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			req.Header.Set(subjectHeader, "forged")
+			rec := httptest.NewRecorder()
+			g.handleVerify(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			if got := rec.Header().Get(subjectHeader); got != "" {
+				t.Fatalf("%s = %q on a 403", subjectHeader, got)
+			}
+		})
+	}
+}
+
+// The subject is never taken from the request: a client-supplied copy is not
+// echoed, and audit mode's allow-on-rejection asserts no identity either.
+func TestSubjectComesFromTheVerifiedTokenOnly(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	req := verifyRequest(switchyardHost, signToken(t, switchyardAud))
+	req.Header.Set(subjectHeader, "forged")
+	rec := httptest.NewRecorder()
+	g.handleVerify(rec, req)
+	if got := rec.Header().Get(subjectHeader); got != "abc123" {
+		t.Fatalf("%s = %q, want the token's sub, not the client's", subjectHeader, got)
+	}
+
+	audit := testGuard(t, modeAudit, true)
+	req = verifyRequest(switchyardHost, "")
+	req.Header.Set(subjectHeader, "forged")
+	rec = httptest.NewRecorder()
+	audit.handleVerify(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get(subjectHeader); got != "" {
+		t.Fatalf("audit-allowed unverified request got %s = %q", subjectHeader, got)
 	}
 }

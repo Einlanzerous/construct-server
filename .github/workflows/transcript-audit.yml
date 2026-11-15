@@ -1,0 +1,44 @@
+name: transcript-audit tests
+
+# tools/transcript-audit is the SERV-320 usage and compliance measure, kept so the
+# baseline can be re-run later. Nothing else in tools/ is built or tested by CI;
+# this runs only for this module. Stdlib-only, no network, no transcripts: the
+# tests write their own synthetic fixtures.
+
+on:
+  push:
+    paths:
+      - 'tools/transcript-audit/**'
+      - '.github/workflows/transcript-audit.yml'
+  pull_request:
+    paths:
+      - 'tools/transcript-audit/**'
+      - '.github/workflows/transcript-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # GitHub-hosted: needs nothing from the box.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/transcript-audit
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/transcript-audit/go.mod
+          cache: false
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...

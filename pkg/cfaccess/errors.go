@@ -55,6 +55,15 @@ var (
 	// identity need it; the guard, which only decides pass/fail, does not.
 	ErrNoEmail = errors.New("cfaccess: assertion carries no email claim")
 
+	// ErrAmbiguousPrincipal is an assertion carrying BOTH email and common_name,
+	// returned only in principal mode (Config.RequirePrincipal). Which claim names
+	// the caller is not something a verifier may guess.
+	ErrAmbiguousPrincipal = errors.New("cfaccess: assertion carries both email and common_name, so the principal is ambiguous")
+
+	// ErrNoPrincipal is an assertion carrying neither email nor common_name,
+	// returned only in principal mode (Config.RequirePrincipal).
+	ErrNoPrincipal = errors.New("cfaccess: assertion carries neither email nor common_name, so it names no principal")
+
 	// ErrNoAudienceConfigured is a programming error surfaced as a verification
 	// failure: Verify was called on a Verifier built with no audience, or
 	// VerifyAudience was called with none. It fails CLOSED — "no audience

@@ -9,8 +9,10 @@ drift history: `docs/cf-access-verifier.md`.
 - `services/cf-access-guard` is the exception: it tracks HEAD through a path `replace` and
   receives the module as a named Docker build context, never by widening the context to
   the deploy root (that root holds the rendered `.env`).
-- Switchyard stays on `jose`. The cross-language check is `testdata/vectors.json`, run by
-  both suites: `class: protocol` vectors must hold in any verifier, `keypolicy` ones are
+- Switchyard stays on `jose`. The cross-language check is `testdata/vectors.json`
+  (spec `cfaccess-vectors/2`). Only this module's Go tests run it today; Switchyard,
+  heitan and Chronicle are expected to vendor a pinned copy and run it (SERV-308/309/310).
+  `class: protocol` vectors must hold in any verifier, `keypolicy` ones are
   estate hardening, and a legitimate difference goes in `expectBy`, not a skip.
 - Tests: `go test ./...` here; regenerate vectors with `-run TestUpdateVectors -update`.
   The guard's `--target test` Docker build runs both Go modules (see root `CLAUDE.md`).

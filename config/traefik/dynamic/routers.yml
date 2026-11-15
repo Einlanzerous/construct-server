@@ -34,6 +34,11 @@ http:
           X-Forwarded-Groups: ""
           X-Forwarded-Email: ""
           X-Forwarded-Preferred-Username: ""
+          # SATL-24: set only by cf-access-guard (authResponseHeaders on cf-access-jwt)
+          # for the access log. Entrypoint middlewares run before router ones, so a
+          # client-supplied copy is deleted here and the guard's value is what is left.
+          # Logging only; no backend may trust it.
+          X-Access-Subject: ""
 
     # Public edge only: Cloudflare Access is NOT in front of the direct Argosy path,
     # so a client must not be able to inject Cf-Access-* trust headers. On the
@@ -161,6 +166,13 @@ http:
         # headers never reach it. It has no use for them and should not hold them.
         authRequestHeaders:
           - "Cf-Access-Jwt-Assertion"
+        # SATL-24: the guard's opaque Access `sub` on a 2xx, copied onto the request
+        # so the access log (accessLog.fields.headers, traefik.yml) can name an actor.
+        # Traefik overwrites or deletes this header on the request, and the strip
+        # entry in strip-identity-headers removes any client-supplied copy first.
+        # Logging only; no backend may trust it.
+        authResponseHeaders:
+          - "X-Access-Subject"
 
     # CrowdSec bouncer (SERV-27): rejects IPs with an active CrowdSec decision
     # before anything else runs. `live` mode = one LAPI round-trip per new client

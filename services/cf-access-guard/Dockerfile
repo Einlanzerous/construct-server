@@ -46,7 +46,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cf-access-guard .
 # deployed binary. Nothing downstream depends on this stage, so an ordinary build (and
 # therefore every deploy) skips it.
 # Tests cover BOTH modules: the guard's own, and the shared verifier's — including
-# the vectors Switchyard's TypeScript suite runs against jose. Running them here
+# the shared vectors, which only the Go tests run today. Running them here
 # rather than only in the module's own job is what stops a guard change and a
 # module change from being green separately and broken together.
 FROM build AS test

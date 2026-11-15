@@ -149,6 +149,7 @@ the live edge and the live edge is still enforcing the old config. They are in
 sync today only because none has been edited since its container was created;
 `traefik.yml`'s last edit landed only because the same PR also changed
 traefik's compose `environment`. Coincidence, not a mechanism.
+**For those six single-file binds, apply an edit with `make force-recreate svc=<svc>`, not `make recreate`:** `recreate` is `up -d --no-deps`, a no-op on an unchanged spec (it exited 0 and kept the old traefik container in the SATL-24 window, 2026-11-15).
 **Scope a single-service recreate with `--no-deps`.** Compose follows
 `depends_on`, and every service with a database depends on `postgres` — so an
 action aimed at one container reaches the shared database and bounces every

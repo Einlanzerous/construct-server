@@ -146,12 +146,76 @@ exemptions at all — and is documented in `docs/dev-environment.md`. The two sh
 |------|---------|
 | `config/traefik/traefik.yml` | Static config: entrypoints, providers, ACME resolver |
 | `config/traefik/dynamic/routers.yml` | Routers, services, header-strip + deny-all + `cf-access-jwt` middlewares |
+| `ansible/roles/server/templates/traefik-access.j2` | Host logrotate drop-in for the Traefik access log (SATL-24); rendered to `/etc/logrotate.d/traefik-access` by the server role (tag `logrotate`), see below |
 | `config/traefik-dev/` | The **dev** edge's static + dynamic config (SERV-93) |
 | `services/cf-access-guard/` | Origin-side Access JWT validation (SERV-106); the only stack image built on the box, and built for both projects |
 | `scripts/check-edge-auth.sh` | Asserts the origin rejects a spoofed Host, and that Cloudflare's edge redirects each gated host to its Access login with the mapped audience (SERV-171) — config *and* live probes. `--dev` for the dev edge |
 | `docker-compose.yml` | `traefik`, `cf-access-guard`, `cloudflared`, `switchyard-mcp`, `authentik-server`, `authentik-worker`, `authentik-redis` |
 | `db/init-db.sh` | Provisions the `authentik` DB/user on the shared postgres |
 | `.env.example` | New vars (`CF_DNS_API_TOKEN`, `AUTHENTIK_*`) |
+
+## Access log: fields and rotation (SATL-24)
+
+`config/traefik/traefik.yml` logs JSON to `/var/log/traefik/access.log` (volume
+`construct-server_traefik_access_logs`, read-only by crowdsec and satlink as a
+**directory**). Header fields: `defaultMode: drop`, keeping only `User-Agent`,
+`Upgrade` and `X-Access-Subject`, logged as `request_<Header>` (confirmed on 3.3.7).
+`X-Access-Subject` is the opaque Access `sub`, returned by `cf-access-guard` on a 2xx and
+copied onto the request by `authResponseHeaders` on `cf-access-jwt`; `strip-identity-headers`
+deletes any client-supplied copy. It is absent on public-entrypoint routers (no forwardAuth
+there) and on denied requests. The Access email and JWT are never logged (`drop`).
+It is for logging only: no backend may trust it.
+
+Rotation is `ansible/roles/server/templates/traefik-access.j2` (rendered by the server role, which keeps `/etc/logrotate.d/traefik-access` in step with the repo; edit the template, never the installed copy): daily, `rotate 14`, `maxsize 200M`, `compress`,
+`delaycompress`, `sharedscripts`, rename rotation (never `copytruncate`), postrotate
+`docker kill -s USR1 traefik` (Traefik reopens its log on USR1; a signal, not a restart).
+
+### Rollout (owner-attended; order matters)
+
+1. Merge the guard PR (already merged in #296) (`routers.yml` hot-reloads; the guard recreate gives a few seconds
+   of 500s on tunneled hosts). Inert until step 4.
+2. Install the drop-in (the role validates it with `logrotate -d` before writing):
+   ```bash
+   ansible-playbook ansible/site.yml --tags logrotate    # ... plus your usual inventory/become flags
+   ```
+   Never run the whole `site.yml` for this: its "Start Docker Stack" task would apply compose
+   changes. By-hand equivalent, which renders the same bytes because the template has no
+   variables (the role takes over from the next run; copy the template, not a stale file):
+   ```bash
+   sudo install -m 0644 -o root -g root ansible/roles/server/templates/traefik-access.j2 /etc/logrotate.d/traefik-access
+   sudo logrotate -d /etc/logrotate.d/traefik-access     # debug, changes nothing
+   ```
+   After this the role owns the file: a repo edit reaches the host with the same
+   `--tags logrotate` run, and a rebuilt host gets it from the server role.
+3. Merging a `config/**` change runs the **whole-stack** prod deploy (SERV-109): pull every
+   first-party pin that moved, recreate what drifted. Compare running digests with the
+   registry first, or accept and list what moves. **Merging does not apply `traefik.yml`**
+   (single-file bind, startup-only reader, SERV-164): the deploy goes green and the edge keeps
+   the old config.
+4. In the window, with the owner watching: `make force-recreate svc=traefik` (`--no-deps`). The
+   public Argosy path and every tunneled host are down while the container starts.
+   Measured on a scratch pair (same image digest, prod `traefik.yml` + `routers.yml` with the
+   crowdsec-bouncer plugin loading, no ACME material): `docker run` to first HTTP response
+   about 0.8 s; `docker stop` of the old container about 0.4 s; a minimal config about 0.2 s.
+   The real recreate on prod (2026-11-15) took the edge down for 12.1 s (first healthy response), about
+   15 times the scratch figure: compose's recreate overhead and the real ACME load. Plan on that, not on 0.8 s.
+   Then verify: new `request_*` keys in the live log, crowdsec lines-read advancing, satlink
+   collector lag back to steady state, `make edge-auth-check`.
+5. First real rotation (next timer tick after the install, or `sudo logrotate -f`): expect
+   `access.log.1`, crowdsec still counting, a `rotated file read` line from the collector.
+
+Window question for the owner: a quiet period you choose, attended. Nothing here needs more
+than a minute of edge downtime (12.1 s measured on prod).
+
+Rollback: delete the drop-in and revert the role task (or the next `--tags logrotate` run
+reinstalls it; rotated files stay and are harmless); revert `traefik.yml` and
+`make force-recreate svc=traefik` again (fields are additive, so leaving them is harmless); revert
+`routers.yml` (hot reload) then the guard. If Traefik fails to start, restore the old
+`traefik.yml` on `/opt/construct-server` and recreate.
+
+Verified on a scratch Traefik + crowdsec pair (SATL-24): after `logrotate -f` Traefik writes
+to the new `access.log`, crowdsec acquisition keeps counting, and the satlink collector follows
+one and two rotations (including a `.2.gz`) with counts equal to an independent tally.
 
 ## Bring-up runbook (do NOT run unattended — reviewed deploy)
 

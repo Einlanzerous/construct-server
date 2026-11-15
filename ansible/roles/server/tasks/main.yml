@@ -543,3 +543,20 @@
   loop: "{{ ollama_list.stdout_lines[1:] | map('split') | map('first') | list }}"
   when: item not in ollama_models
   changed_when: true
+
+# --- TRAEFIK ACCESS-LOG ROTATION (SATL-24) ---
+# Own block at the end of the file so it never touches the journald block (SATL-25, #297)
+# and a rebase between the two is trivial. Applied only by
+# `ansible-playbook ansible/site.yml --tags logrotate` (never the whole site.yml: its
+# "Start Docker Stack" task would apply compose changes). logrotate re-reads the drop-in on
+# every timer run, so there is no handler. `logrotate -d` parses the candidate file and
+# changes nothing; it exits non-zero on a fatal parse error (not on an unknown directive).
+- name: Install Traefik access-log logrotate drop-in
+  template:
+    src: traefik-access.j2
+    dest: /etc/logrotate.d/traefik-access
+    owner: root
+    group: root
+    mode: "0644"
+    validate: logrotate -d %s
+  tags: [logrotate]
