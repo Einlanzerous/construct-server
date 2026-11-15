@@ -67,7 +67,9 @@ case "$*" in
 esac'
 # make: journald-check prints the check script'"'"'s lines; force-recreate svc=satlink rotates id/StartedAt and keeps the old journal lines.
 mk make 'case "$*" in
-  *journald-check*) echo "ok    satlink: journald"; echo "Suppressed notices for docker.service: $(cat "$FAKE/suppressed")"; exit "$(cat "$FAKE/check_rc" 2>/dev/null || echo 0)" ;;
+  *journald-check*) [ "$(cat "$FAKE/check_rc" 2>/dev/null || echo 0)" = 7 ] && { echo "ERROR: journalctl not found" >&2; exit 2; }
+    echo "== rate-limit drops, last 24 h (expect 0) =="; echo "Suppressed notices for docker.service: $(cat "$FAKE/suppressed")"
+    [ "$(cat "$FAKE/check_rc" 2>/dev/null || echo 0)" = 0 ] || exit 2; exit 0 ;;   # make reports the check'"'"'s exit 1 as 2
   *"force-recreate svc=satlink"*)
     [ -e "$FAKE/recreate_noop" ] && exit 0
     old="$(cat "$FAKE/jid")"; n="$(cat "$FAKE/count")"
@@ -159,7 +161,9 @@ expect "dropins present and identical pass preflight" '[ "$(rc_of go preflight)"
 reset_fake; echo "[Journal]" >"$T/etc/jd/$JDF"
 expect "a dropin present but NOT byte-identical FAILS preflight" '[ "$(rc_of go preflight)" = 1 ] && grep -q "FAIL.*byte-identical" "$T/rec.md"'
 reset_fake; echo 7 >"$F/check_rc"
-expect "journald-check exit other than 0/1 FAILS preflight" '[ "$(rc_of go preflight)" = 1 ]'
+expect "journald-check that did not run (missing dependency) FAILS preflight" '[ "$(rc_of go preflight)" = 1 ]'
+reset_fake; echo 1 >"$F/check_rc"
+expect "a RED journald-check that ran (satlink still json-file) is only a baseline: preflight passes" '[ "$(rc_of go preflight)" = 0 ] && grep -q "^pf_check_rc=2" "$T/state/state.kv"'
 reset_fake; echo sha256:zzz >"$F/x"; sed -i 's/aaa/zzz/' "$F/registry.txt"
 expect "digest drift is listed, dry-run does not wait" '[ "$(rc_of go preflight)" = 0 ] && grep -q "PENDING:.*lyceum(digest)" "$T/rec.md"'
 expect "--apply with no terminal PAUSES on drift (exit 3)" '[ "$(rc_of go preflight --apply)" = 3 ] && grep -q "PAUSED" "$T/rec.md"'

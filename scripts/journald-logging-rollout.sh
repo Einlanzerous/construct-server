@@ -11,7 +11,7 @@
 #                journal entry (so we can prove nothing is vacuumed); the two drop-ins absent, or present and
 #                byte-identical to ansible/roles/server/files/journald/; LogRateLimitBurst as PID 1 sees it;
 #                containers per log driver; satlink's driver, container id and StartedAt; `make journald-check`
-#                (exit 1 is expected before the merge: satlink is still json-file); whether PR #297 is merged;
+#                (non-zero is expected before the merge: satlink is still json-file); whether PR #297 is merged;
 #                first-party image drift (a compose merge takes the whole-stack deploy path and recreates every
 #                drifted service: pending ones are listed and the run PAUSES).
 #   dropin       (--apply, sudo -v up front) `sudo install -d` the two dirs, `sudo install -m 0644` the two repo
@@ -282,9 +282,10 @@ pf_check() {
   local s
   run make -C "$REPO" journald-check
   s="$(sed -n 's/^Suppressed notices for docker.service: \([0-9][0-9]*\).*/\1/p' <<<"$OUT" | head -1)"
-  rec "  - make journald-check exit $RC (1 is expected before the merge: $SVC is still json-file); Suppressed notices (24h): ${s:-n/a}"
+  rec "  - make journald-check exit $RC (make reports the check's exit 1 as 2; a non-zero exit is expected before the merge: $SVC is still json-file); Suppressed notices (24h): ${s:-n/a}"
   st_set pf_check_rc "$RC"; st_set pf_suppressed "${s:-0}"
-  [ "$RC" -eq 0 ] || [ "$RC" -eq 1 ]
+  # it must have RUN (its last section printed), whatever it concluded about the drivers
+  [ "$RC" -eq 0 ] || grep -q '^== rate-limit drops' <<<"$OUT"
 }
 
 pf_pr_state() {
@@ -347,7 +348,7 @@ phase_preflight() {
   soft "LogRateLimitBurst for docker.service as PID 1 sees it recorded" pf_burst
   soft "containers counted per log driver" pf_drivers
   soft "$SVC driver, container id and StartedAt recorded" pf_satlink
-  soft "make journald-check baseline ran (exit 0 or 1)" pf_check
+  soft "make journald-check baseline ran (a red result is expected before the merge)" pf_check
   soft "#$PR state read (merged or not; recorded)" pf_pr_state
   soft "first-party image digests resolved against the registry for origin/main's pins" pf_digest_drift
   soft "deployed copy $DEPLOY_ROOT compared with origin/main versions.env" pf_versions_deployed
