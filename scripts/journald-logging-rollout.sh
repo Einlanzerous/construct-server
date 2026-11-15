@@ -8,18 +8,23 @@
 #   journald-logging-rollout.sh [flags] <phase>
 #
 #   preflight    READ-ONLY, always executes, needs no sudo. Baselines: `journalctl --disk-usage`; the oldest
-#                journal entry (so we can prove nothing is vacuumed); the two drop-ins absent, or present and
-#                byte-identical to ansible/roles/server/files/journald/; LogRateLimitBurst as PID 1 sees it;
+#                journal entry (so we can prove nothing is vacuumed); the journald drop-in absent, or present and
+#                byte-identical to ansible/roles/server/files/journald/ (and whether the legacy docker.service
+#                rate-limit drop-in is still on the host); the effective global journald rate limit;
 #                containers per log driver; satlink's driver, container id and StartedAt; `make journald-check`
 #                (non-zero is expected before the merge: satlink is still json-file); whether PR #297 is merged;
 #                first-party image drift (a compose merge takes the whole-stack deploy path and recreates every
 #                drifted service: pending ones are listed and the run PAUSES).
-#   dropin       (--apply, sudo -v up front) `sudo install -d` the two dirs, `sudo install -m 0644` the two repo
-#                files, daemon-reload, restart systemd-journald. Asserts the installed files are byte-identical to
-#                the repo, journal disk usage not reduced and the oldest entry unchanged (nothing vacuumed), then
-#                LogRateLimitBurst 50000 in PID 1 AND in /run/systemd/units/log-rate-limit-burst:docker.service.
-#                A wrong/missing value there is a WAVE-C BLOCKER, not a canary blocker (docs): it is recorded as
-#                FAIL, the run continues and ends non-zero. Never restarts dockerd or a container. Idempotent.
+#   dropin       (--apply, sudo -v up front) `sudo install -d` the dir, `sudo install -m 0644` the repo journald
+#                drop-in (size cap + HOST-WIDE rate limit), removes the legacy docker.service rate-limit drop-in
+#                if the first canary left it (it was never honoured: journald reads per-unit limits from
+#                /run/systemd/units/, written only when docker.service starts, and we never restart dockerd),
+#                daemon-reload when that happened, restart systemd-journald. Asserts the installed file is
+#                byte-identical to the repo, journal usage not reduced and the oldest entry unchanged (nothing
+#                vacuumed), then the rate limit: journald has NO runtime readback of its limits, so the check is
+#                (1) `systemd-analyze cat-config systemd/journald.conf` shows RateLimitBurst=50000 and
+#                RateLimitIntervalSec=30s as the effective (last) values and (2) systemd-journald (re)started at
+#                or after the installed file's mtime. Never restarts dockerd or a container. Idempotent.
 #   merge-gate   (--apply) prints the sequence and PAUSES while YOU merge the PR; then verifies via gh that it
 #                merged and that the prod deploy run for the merge commit finished green (bounded poll), then that
 #                satlink reports LogConfig.Type=journald and plimsoll / plimsoll-llm still json-file. The merge
@@ -86,9 +91,9 @@ SRC_DIR="${DROPIN_SRC_DIR:-$REPO/ansible/roles/server/files/journald}"
 JD_DIR="${JOURNALD_DEST_DIR:-/etc/systemd/journald.conf.d}"
 DK_DIR="${DOCKER_DEST_DIR:-/etc/systemd/system/docker.service.d}"
 JD_FILE="50-construct-containers.conf"
-DK_FILE="50-log-rate.conf"
-RUN_UNITS_DIR="${RUN_UNITS_DIR:-/run/systemd/units}"
+DK_FILE="50-log-rate.conf"   # LEGACY (wave A): a docker.service drop-in journald never honoured; removed by dropin
 BURST_WANT=50000
+INTERVAL_WANT=30s
 SVC="satlink"
 SVCS_ARG="${JOURNALD_ROLLOUT_SVCS:-satlink}"
 SVCS=()
@@ -117,7 +122,6 @@ OUT=""
 RC=0
 SCRATCH=""
 PF_FAIL=0
-WAVEC_FAIL=0
 SUDO_OK=0
 PENDING=()
 
@@ -239,8 +243,11 @@ date_of() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$1"; }
 driver_of() { docker inspect -f '{{.HostConfig.LogConfig.Type}}' "$1" 2>/dev/null || true; }
 ctr_id_started() { docker inspect -f '{{.Id}}|{{.State.StartedAt}}' "$1" 2>/dev/null || true; }   # "fullid|started"
 ctr_health() { docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || true; }
-burst_pid1() { systemctl show docker.service -p LogRateLimitBurst --value 2>/dev/null || true; }
-burst_run_file() { cat "$RUN_UNITS_DIR/log-rate-limit-burst:docker.service" 2>/dev/null | tr -d '[:space:]' || true; }
+# The effective value of one [Journal] option: the LAST uncommented assignment across the main file and all drop-ins.
+jconf_opt() {   # jconf_opt KEY
+  { systemd-analyze cat-config systemd/journald.conf 2>/dev/null || true; } | awk -F= -v k="$1" '$1 == k { v = $2 } END { if (v != "") print v }' | tr -d '[:space:]'
+}
+journald_started_epoch() { systemctl show --timestamp=unix systemd-journald -p ActiveEnterTimestamp --value 2>/dev/null | tr -d '@[:space:]' || true; }
 make_deployed() { make -C "$DEPLOY_ROOT" "$@"; }
 image_digests() { docker image inspect -f '{{join .RepoDigests " "}}' "$1" 2>/dev/null || true; }
 
@@ -271,18 +278,20 @@ pf_disk() {
 
 pf_dropins() {
   local a b
-  a="$(dropin_state "$SRC_DIR/$JD_FILE" "$JD_DIR/$JD_FILE")"; b="$(dropin_state "$SRC_DIR/$DK_FILE" "$DK_DIR/$DK_FILE")"
-  [ -f "$SRC_DIR/$JD_FILE" ] && [ -f "$SRC_DIR/$DK_FILE" ] || { rec "  - repo drop-ins missing under $SRC_DIR"; return 1; }
-  rec "  - $JD_DIR/$JD_FILE: $a; $DK_DIR/$DK_FILE: $b"
+  a="$(dropin_state "$SRC_DIR/$JD_FILE" "$JD_DIR/$JD_FILE")"
+  [ -f "$SRC_DIR/$JD_FILE" ] || { rec "  - repo drop-in missing under $SRC_DIR"; return 1; }
+  if [ -e "$DK_DIR/$DK_FILE" ]; then b=present; else b=absent; fi
+  rec "  - $JD_DIR/$JD_FILE: $a; legacy $DK_DIR/$DK_FILE: $b (the dropin phase removes it)"
   st_set pf_dropin_journald "$a"; st_set pf_dropin_docker "$b"
-  [ "$a" != differs ] && [ "$b" != differs ]
+  [ "$a" != differs ]
 }
 
 pf_burst() {
-  local v; v="$(burst_pid1)"
-  rec "  - LogRateLimitBurst as PID 1 sees it for docker.service: ${v:-unreadable} (the host default is 10000 until the drop-in is loaded)"
-  [[ "$v" =~ ^[0-9]+$ ]] || return 1
-  st_set pf_burst "$v"
+  local v i
+  v="$(jconf_opt RateLimitBurst)"; i="$(jconf_opt RateLimitIntervalSec)"
+  rec "  - effective journald rate limit (systemd-analyze cat-config): RateLimitBurst ${v:-default 10000}, RateLimitIntervalSec ${i:-default 30s}"
+  systemd-analyze cat-config systemd/journald.conf >/dev/null 2>&1 || return 1
+  st_set pf_burst "${v:-default}"
 }
 
 pf_drivers() {
@@ -394,59 +403,62 @@ phase_preflight() {
 
 # ── phase: dropin ────────────────────────────────────────────────────────────────
 
-dropins_identical() {
-  cmp -s "$SRC_DIR/$JD_FILE" "$JD_DIR/$JD_FILE" && cmp -s "$SRC_DIR/$DK_FILE" "$DK_DIR/$DK_FILE"
-}
-
 phase_dropin() {
   say "## dropin"
   if [ "$APPLY" -eq 0 ]; then
     say "- $(ts) DRY-RUN: would, in order (sudo -v first; you type the password):"
     say "  1. record the journal disk usage and the oldest entry date"
-    say "  2. \`sudo install -d $JD_DIR $DK_DIR\`"
-    say "  3. \`sudo install -m 0644 $SRC_DIR/$JD_FILE $JD_DIR/\` and \`... $SRC_DIR/$DK_FILE $DK_DIR/\` (skipped when already identical)"
-    say "  4. \`sudo systemctl daemon-reload\` (re-reads units; does NOT restart dockerd) and \`sudo systemctl restart systemd-journald\`"
-    say "  5. assert both installed files equal the repo copies byte for byte"
-    say "  6. assert nothing was vacuumed: disk usage not reduced, oldest entry date unchanged"
-    say "  7. \`systemctl show docker.service -p LogRateLimitBurst\` and $RUN_UNITS_DIR/log-rate-limit-burst:docker.service both $BURST_WANT"
-    say "     (a missing/wrong /run file is a WAVE-C blocker, not a canary blocker: decide the global RateLimitBurst fallback before wave C)"
+    say "  2. \`sudo install -d $JD_DIR\`"
+    say "  3. \`sudo install -m 0644 $SRC_DIR/$JD_FILE $JD_DIR/\` (skipped when already identical)"
+    say "  4. if the legacy docker.service drop-in $DK_DIR/$DK_FILE exists: \`sudo rm -f\` it and \`sudo systemctl daemon-reload\` (re-reads units; does NOT restart dockerd)"
+    say "  5. \`sudo systemctl restart systemd-journald\`"
+    say "  6. assert the installed file equals the repo copy byte for byte"
+    say "  7. assert nothing was vacuumed: disk usage not reduced, oldest entry date unchanged"
+    say "  8. assert the HOST-WIDE rate limit: \`systemd-analyze cat-config systemd/journald.conf\` gives RateLimitBurst=$BURST_WANT and"
+    say "     RateLimitIntervalSec=$INTERVAL_WANT, and systemd-journald started at or after the installed file's mtime. journald exposes no"
+    say "     runtime readback of its limits, so file content + restart-after-file is the strongest check available."
     say "  dockerd and every container are left running: nothing here restarts them."
     return 0
   fi
-  need sudo install cmp systemctl journalctl
-  [ -f "$SRC_DIR/$JD_FILE" ] && [ -f "$SRC_DIR/$DK_FILE" ] || die "no drop-ins under $SRC_DIR (run this from a checkout that has them)"
+  need sudo install cmp systemctl journalctl systemd-analyze
+  [ -f "$SRC_DIR/$JD_FILE" ] || die "no drop-in under $SRC_DIR (run this from a checkout that has it)"
   ensure_sudo
   local b0 o0
   b0="$(disk_bytes)"; o0="$(oldest_epoch)"
   [[ "$b0" =~ ^[0-9]+$ ]] && [[ "$o0" =~ ^[0-9]+$ ]] || die "cannot read the journal disk usage / oldest entry before installing"
   rec "- before: journal $b0 bytes, oldest entry $(date_of "$o0")"
   st_set dropin_disk_before "$b0"; st_set dropin_oldest_before "$o0"
-  run_must sudo install -d "$JD_DIR" "$DK_DIR"
-  if dropins_identical 2>/dev/null; then
-    note "both drop-ins already identical to the repo copies: install skipped"
+  run_must sudo install -d "$JD_DIR"
+  if cmp -s "$SRC_DIR/$JD_FILE" "$JD_DIR/$JD_FILE" 2>/dev/null; then
+    note "$JD_FILE already identical to the repo copy: install skipped"
   else
     run_must sudo install -m 0644 "$SRC_DIR/$JD_FILE" "$JD_DIR/$JD_FILE"
-    run_must sudo install -m 0644 "$SRC_DIR/$DK_FILE" "$DK_DIR/$DK_FILE"
   fi
-  run_must sudo systemctl daemon-reload
+  if [ -e "$DK_DIR/$DK_FILE" ]; then
+    run_must sudo rm -f "$DK_DIR/$DK_FILE"
+    run_must sudo systemctl daemon-reload
+    note "removed the legacy docker.service rate-limit drop-in (never honoured by journald); daemon-reload only re-reads units"
+  fi
   run_must sudo systemctl restart systemd-journald
   note "dockerd and the containers were NOT restarted"
   check "installed $JD_FILE equals the repo copy byte for byte" cmp -s "$SRC_DIR/$JD_FILE" "$JD_DIR/$JD_FILE"
-  check "installed $DK_FILE equals the repo copy byte for byte" cmp -s "$SRC_DIR/$DK_FILE" "$DK_DIR/$DK_FILE"
   check "nothing vacuumed: journal usage not reduced and the oldest entry unchanged" not_vacuumed "$b0" "$o0"
   st_set dropin_ok 1
-  local v1 v2
-  v1="$(burst_pid1)"; v2="$(burst_run_file)"
-  rec "  - LogRateLimitBurst: PID 1 ${v1:-unreadable}; $RUN_UNITS_DIR/log-rate-limit-burst:docker.service ${v2:-missing}"
-  st_set dropin_burst_pid1 "${v1:-unreadable}"; st_set dropin_burst_run "${v2:-missing}"
-  if [ "$v1" = "$BURST_WANT" ] && [ "$v2" = "$BURST_WANT" ]; then
-    pass "LogRateLimitBurst $BURST_WANT in PID 1 and in the /run file journald reads"
-    st_set wavec_blocker 0
-  else
-    WAVEC_FAIL=1; st_set wavec_blocker 1
-    say "- $(ts) **FAIL** (WAVE-C BLOCKER, NOT a canary blocker): LogRateLimitBurst is not $BURST_WANT where journald reads it (PID 1: ${v1:-unreadable}; /run file: ${v2:-missing}). Decide the global RateLimitBurst fallback (the journald drop-in) BEFORE wave C (switchyard). Satlink alone will not approach 10000 lines per 30 s, so the canary may proceed."
-    note "the /run file is written when PID 1 starts docker.service; this phase deliberately does not restart dockerd, so it can stay missing until the next docker restart"
-  fi
+  check "the HOST-WIDE rate limit is $BURST_WANT per $INTERVAL_WANT in the effective config and journald restarted after the file" ratelimit_effective
+  st_set ratelimit_ok 1
+}
+
+# journald has no runtime readback of RateLimit*: assert the effective configuration and that journald has
+# (re)started since the file was written (it reads the limits once, at start).
+ratelimit_effective() {
+  local v i m j
+  v="$(jconf_opt RateLimitBurst)"; i="$(jconf_opt RateLimitIntervalSec)"
+  m="$(stat -c %Y "$JD_DIR/$JD_FILE" 2>/dev/null || true)"; j="$(journald_started_epoch)"
+  rec "  - effective (systemd-analyze cat-config): RateLimitBurst ${v:-unset}, RateLimitIntervalSec ${i:-unset}; $JD_FILE mtime $(date_of "${m:-0}"), systemd-journald active since $(date_of "${j:-0}")"
+  st_set dropin_burst "${v:-unset}"; st_set dropin_interval "${i:-unset}"
+  [ "$v" = "$BURST_WANT" ] && [ "$i" = "$INTERVAL_WANT" ] || { rec "  - effective limit is not $BURST_WANT per $INTERVAL_WANT"; return 1; }
+  [[ "$m" =~ ^[0-9]+$ ]] && [[ "$j" =~ ^[0-9]+$ ]] || { rec "  - file mtime / journald start time unreadable"; return 1; }
+  [ "$j" -ge "$m" ] || { rec "  - systemd-journald started BEFORE the file was written: it has not read the limit"; return 1; }
 }
 
 # ── phase: merge-gate ────────────────────────────────────────────────────────────
@@ -751,8 +763,8 @@ print_evidence() {
   cat <<EOF
 **SATL-25 / SATL-71 journald canary evidence** (counts only; no log line, no log value)
 
-- preflight: #$PR state $(st_or pf_pr_state); journal $(st_or pf_disk_bytes) bytes, oldest entry $(date_of "$(st_or pf_oldest_epoch)"); drop-ins before: $(st_or pf_dropin_journald) / $(st_or pf_dropin_docker); LogRateLimitBurst (PID 1) $(st_or pf_burst); containers by driver: journald $(st_or pf_ctr_journald), json-file $(st_or pf_ctr_jsonfile), other $(st_or pf_ctr_other) of $(st_or pf_ctr_total); $(ev_each "pf_%s_driver" "driver"), container ids $(ev_each "pf_%s_id" ""); journald-check exit $(st_or pf_check_rc); Suppressed (24h) $(st_or pf_suppressed); pending whole-stack drift items $(st_or pf_drift_n), versions.env keys differing $(st_or pf_versions_n)
-- dropin: $([ "$(st_get dropin_ok)" = 1 ] && echo "installed, byte-identical, nothing vacuumed (journal $(st_or dropin_disk_before) bytes before)" || echo "not recorded"); LogRateLimitBurst PID 1 $(st_or dropin_burst_pid1), /run file $(st_or dropin_burst_run); wave-C blocker: $([ "$(st_get wavec_blocker)" = 1 ] && echo "YES (decide the global RateLimitBurst fallback before wave C)" || echo no)
+- preflight: #$PR state $(st_or pf_pr_state); journal $(st_or pf_disk_bytes) bytes, oldest entry $(date_of "$(st_or pf_oldest_epoch)"); journald drop-in before: $(st_or pf_dropin_journald), legacy docker.service drop-in $(st_or pf_dropin_docker); effective RateLimitBurst before $(st_or pf_burst); containers by driver: journald $(st_or pf_ctr_journald), json-file $(st_or pf_ctr_jsonfile), other $(st_or pf_ctr_other) of $(st_or pf_ctr_total); $(ev_each "pf_%s_driver" "driver"), container ids $(ev_each "pf_%s_id" ""); journald-check exit $(st_or pf_check_rc); Suppressed (24h) $(st_or pf_suppressed); pending whole-stack drift items $(st_or pf_drift_n), versions.env keys differing $(st_or pf_versions_n)
+- dropin: $([ "$(st_get dropin_ok)" = 1 ] && echo "installed, byte-identical, nothing vacuumed (journal $(st_or dropin_disk_before) bytes before)" || echo "not recorded"); host-wide rate limit (effective config) RateLimitBurst $(st_or dropin_burst), RateLimitIntervalSec $(st_or dropin_interval), journald restarted after the file: $([ "$(st_get ratelimit_ok)" = 1 ] && echo yes || echo "not recorded") (journald has no runtime readback)
 - merge-gate: merge commit $(st_or merge_sha | cut -c1-9); deploy run conclusion $(st_or deploy_conclusion); drivers: $(ev_each "mg_%s_driver" ""), plimsoll $(st_or mg_plimsoll_driver), plimsoll-llm $(st_or mg_plimsoll_llm_driver)
 - canary: $(ev_canary)
 - verify: journald-check exit $(st_or v_check_rc), Suppressed (24h) $(st_or v_suppressed); journal now $(st_or last_disk_bytes) bytes, oldest entry $(date_of "$(st_or last_oldest_epoch)"); drivers: $(ev_each "v_%s_driver" ""), plimsoll $(st_or v_plimsoll_driver), plimsoll-llm $(st_or v_plimsoll_llm_driver); Dozzle (live tail + history): $(st_or dozzle); verify passed: $([ "$(st_get verify_ok)" = 1 ] && echo yes || echo no)
@@ -829,10 +841,6 @@ case "$PHASE" in
     done ;;
 esac
 rec ""
-if [ "$WAVEC_FAIL" -eq 1 ]; then
-  say "- $(ts) **FAIL**: $PHASE finished, but the WAVE-C-blocker check above failed (the canary itself is not blocked): decide the global RateLimitBurst fallback before wave C"
-  exit 1
-fi
 if [ "$APPLY" -eq 0 ]; then say "- $(ts) **DRY-RUN complete**: preflight/verify read for real; every other phase only printed its plan"
 else say "- $(ts) **DONE**: $PHASE, every automated step passed"; fi
 printf 'Record: %s\n' "$RECORD"
