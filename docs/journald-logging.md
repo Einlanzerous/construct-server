@@ -64,11 +64,13 @@ sudo needs a password, so none of this is run by an agent. Do not run the whole 
    sudo systemctl daemon-reload            # re-reads units; does NOT restart dockerd
    sudo systemctl restart systemd-journald # does not touch Docker or containers
    journalctl --disk-usage                  # unchanged: nothing vacuumed
-   systemctl show docker.service -p LogRateLimitBurst   # expect 50000
+   systemctl show docker.service -p LogRateLimitBurst   # expect 50000: only proves PID 1 loaded it
+   cat /run/systemd/units/log-rate-limit-burst:docker.service   # what journald reads; expect 50000
    ```
-   If journald does not honour the docker.service limit without a dockerd restart (check the
-   `Suppressed` count in step 4), fall back to the global `RateLimitBurst` in the journald drop-in
-   rather than restarting dockerd.
+   If the `/run/systemd/units/` file is missing or wrong, journald is not enforcing the raised
+   limit: decide the fallback (the global `RateLimitBurst` in the journald drop-in) BEFORE wave C
+   (switchyard). Satlink alone will not approach 10000 lines per 30 s, so the `Suppressed` count
+   cannot prove the limit during the canary; it is the check for wave C and later.
 2. **Check the deploy scope, then merge** the wave PR. Merging a `docker-compose.yml` change takes
    deploy.yml's whole-stack path (SERV-109 narrows only pure `versions.env` changes): it pulls
    every pin and runs an unscoped `up -d`, so first-party pins that published since the last
