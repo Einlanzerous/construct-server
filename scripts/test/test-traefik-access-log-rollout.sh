@@ -65,7 +65,8 @@ esac'
 mk make 'case "$*" in
   *edge-auth-check*) exit "$(cat "$FAKE/edge_rc" 2>/dev/null || echo 0)" ;;
   *"assert-env-keys vault=1"*) exit "$(cat "$FAKE/env_rc" 2>/dev/null || echo 0)" ;;
-  *"recreate svc=traefik"*) [ -e "$FAKE/recreate_changes_image" ] && echo "sha256:changed" >"$FAKE/traefik_img_now"; exit 0 ;;
+  *"force-recreate svc=traefik"*) [ -e "$FAKE/recreate_changes_image" ] && echo "sha256:changed" >"$FAKE/traefik_img_now"; [ -e "$FAKE/recreate_noop" ] || echo "2026-11-15T03:55:05.000000000Z" >"$FAKE/traefik_started"; exit 0 ;;
+  *"recreate svc=traefik"*) exit 0 ;;   # the plain target is a no-op when the spec is unchanged: it must never be what the script calls
 esac'
 mk curl 'case "$*" in *"-w"*) cat "$FAKE/probe_code" 2>/dev/null || echo 403 ;; esac'
 mk gh 'case "$*" in
@@ -80,7 +81,7 @@ mk docker 'case "$*" in
   *"inspect -f {{index .Config.Labels"*) id="${*: -1}"; grep "^$id|" "$FAKE/containers.txt" | cut -d"|" -f2- ;;
   *"buildx imagetools inspect"*) ref="$4"; grep "^$ref " "$FAKE/registry.txt" | cut -d" " -f2 ;;
   *"image inspect"*) id="${*: -1}"; grep "^$id " "$FAKE/imgdigests.txt" | cut -d" " -f2- || true ;;
-  *"State.StartedAt"*) echo "2026-11-14T01:00:00.000000000Z|$(cat "$FAKE/traefik_img_now")" ;;
+  *"State.StartedAt"*) echo "$(cat "$FAKE/traefik_started" 2>/dev/null || echo 2026-11-14T01:00:00.000000000Z)|$(cat "$FAKE/traefik_img_now")" ;;
   *"State.Running"*) [ -e "$FAKE/no_satlink" ] && exit 1; echo true ;;
   *"exec crowdsec cscli"*) n="$(cat "$FAKE/cs_reads")"; [ -e "$FAKE/cs_const" ] || echo $((n + 100)) >"$FAKE/cs_reads"
       echo "{\"acquisition\":{\"file:/var/log/traefik/access.log\":{\"reads\":$n}}}" ;;
@@ -200,9 +201,12 @@ reset_fake
 expect "recreate passes" '[ "$(rc_of go recreate --apply)" = 0 ]'
 expect "recreate: timed the first healthy response, same image, edge-auth-check, offset recorded" \
   'grep -q "first healthy edge response" "$T/rec.md" && grep -q "same image" "$T/rec.md" && grep -q "^recreate_offset=" "$T/state/state.kv" && grep -q "make -C $D edge-auth-check" "$CALLS"'
-expect "recreate ran make from the deployed copy, scoped to traefik" 'grep -q "^make -C $D recreate svc=traefik" "$CALLS"'
+expect "recreate ran make from the deployed copy, scoped to traefik" 'grep -q "^make -C $D force-recreate svc=traefik" "$CALLS"'
 reset_fake; touch "$F/recreate_changes_image"
 expect "a changed image id FAILS" '[ "$(rc_of go recreate --apply)" = 1 ] && grep -q "FAIL.*same image" "$T/rec.md"'
+reset_fake; touch "$F/recreate_noop"
+expect "a make that exits 0 but leaves the container running FAILS (the first live run's mistake)" '[ "$(rc_of go recreate --apply)" = 1 ] && grep -q "FAIL.*really restarted" "$T/rec.md"'
+expect "the script calls force-recreate, never the plain no-op target" '! grep -Eq "^make -C $D recreate svc=traefik" "$CALLS"'
 reset_fake; echo 000 >"$F/probe_code"
 expect "an edge that never answers FAILS after the bound" '[ "$(rc_of go recreate --apply)" = 1 ] && grep -q "no healthy edge response" "$T/rec.md"'
 reset_fake; echo 1 >"$F/edge_rc"
@@ -267,7 +271,7 @@ reset_fake
 expect "rollback with no terminal and no confirmation refuses" '[ "$(ROLLBACK_REF=HEAD~1 rc_of go rollback --apply)" = 1 ] && grep -q "needs a terminal" "$T/rec.md"'
 reset_fake
 expect "rollback restores the previous traefik.yml, recreates, removes the drop-in" \
-  '[ "$(ROLLBACK_REF=HEAD~1 rc_of go rollback --apply --confirm-rollback)" = 0 ] && ! grep -q X-Access-Subject "$D/config/traefik/traefik.yml" && grep -q "^make -C $D recreate svc=traefik" "$CALLS" && grep -q "^sudo rm -f $T/etc/traefik-access" "$CALLS"'
+  '[ "$(ROLLBACK_REF=HEAD~1 rc_of go rollback --apply --confirm-rollback)" = 0 ] && ! grep -q X-Access-Subject "$D/config/traefik/traefik.yml" && grep -q "^make -C $D force-recreate svc=traefik" "$CALLS" && grep -q "^sudo rm -f $T/etc/traefik-access" "$CALLS"'
 reset_fake
 expect "rollback with a ref that still has the new fields refuses" '[ "$(ROLLBACK_REF=HEAD rc_of go rollback --apply --confirm-rollback)" = 1 ] && grep -q X-Access-Subject "$D/config/traefik/traefik.yml"'
 reset_fake

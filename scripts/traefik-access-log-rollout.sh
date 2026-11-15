@@ -21,7 +21,7 @@
 #                then verifies via gh that it merged, that the prod deploy run for the merge commit
 #                finished green (bounded poll), and that the live traefik still runs the OLD config
 #                (SERV-164: the deploy goes green, the edge keeps the old traefik.yml).
-#   recreate     `make recreate svc=traefik` from the deployed copy; time to the first healthy edge
+#   recreate     `make force-recreate svc=traefik` from the deployed copy; time to the first healthy edge
 #                response (the check-edge-auth.sh probe: spoofed Host to the internal entrypoint -> 403);
 #                same image; `make edge-auth-check`. Records the log offset that `verify` counts from.
 #   verify       READ-ONLY, always executes. Counts over the lines written since `recreate`: User-Agent
@@ -502,9 +502,9 @@ phase_merge_gate() {
 phase_recreate() {
   say "## recreate"
   if [ "$APPLY" -eq 0 ]; then
-    say "- $(ts) DRY-RUN: would, in order: record the time and image; \`make -C $DEPLOY_ROOT recreate svc=traefik\`;"
+    say "- $(ts) DRY-RUN: would, in order: record the time and image; \`make -C $DEPLOY_ROOT force-recreate svc=traefik\`;"
     say "  poll the check-edge-auth probe (spoofed Host -> 403 on the internal entrypoint) and record seconds to the"
-    say "  first healthy response; assert the image id is unchanged; record the log offset; \`make edge-auth-check\`."
+    say "  first healthy response; assert the container really restarted (its StartedAt changed) on the same image id; record the log offset; \`make edge-auth-check\`."
     say "  The public Argosy path and every tunneled host are down while the container starts."
     return 0
   fi
@@ -512,14 +512,17 @@ phase_recreate() {
   local addr before after t0 t1 t2 code size
   addr="$(edge_addr)"; [ -n "$addr" ] || die "cannot read the internal entrypoint address from $DEPLOY_ROOT/config/traefik/traefik.yml"
   check "the deployed traefik.yml carries the new fields (the deploy landed)" grep -q 'X-Access-Subject' "$DEPLOY_ROOT/config/traefik/traefik.yml"
-  before="$(traefik_state)"; before="${before#*|}"
+  before="$(traefik_state)"; started_before="${before%%|*}"; before="${before#*|}"
   [ -n "$before" ] || die "traefik is not running; refusing"
   st_set recreate_ts "$(ts)"
   logcmd "recreate started at $(st_get recreate_ts), edge probe http://$addr/ (Host: $PROBE_HOST)"
   t0="$(now_s)"
-  run make_deployed recreate svc=traefik
+  # force-recreate, not recreate: `recreate` is `up -d --no-deps`, which does nothing when the compose spec is
+  # unchanged, and a changed single-file bind (traefik.yml) is not spec drift (SERV-164). It exited 0 and left the
+  # old container running on the first live run.
+  run make_deployed force-recreate svc=traefik
   t1="$(now_s)"
-  [ "$RC" -eq 0 ] || die "make recreate svc=traefik exited $RC"
+  [ "$RC" -eq 0 ] || die "make force-recreate svc=traefik exited $RC"
   code=""
   while :; do
     code="$(edge_probe_code "$addr")"
@@ -534,7 +537,8 @@ phase_recreate() {
   st_set recreate_make_s "$(elapsed "$t0" "$t1")"
   st_set recreate_healthy_s "$(elapsed "$t0" "$t2")"
   pass "first healthy edge response $(elapsed "$t0" "$t2")s after the recreate began (make returned at $(elapsed "$t0" "$t1")s)"
-  after="$(traefik_state)"; after="${after#*|}"
+  after="$(traefik_state)"; started_after="${after%%|*}"; after="${after#*|}"
+  check "traefik really restarted (StartedAt changed; a no-op make would leave it unchanged)" test -n "$started_after" -a "$started_before" != "$started_after"
   st_set recreate_digest_same "$([ "$before" = "$after" ] && echo yes || echo no)"
   check "traefik is on the same image id as before" test "$before" = "$after"
   run make_deployed edge-auth-check
@@ -668,10 +672,10 @@ phase_rollback() {
   say "## rollback"
   local ref="${ROLLBACK_REF:-$(st_get merge_sha)^}" tgt="$DEPLOY_ROOT/config/traefik/traefik.yml"
   say "Documented rollback (docs/zerogravity-edge.md): delete the drop-in (rotated files stay and are harmless);"
-  say "revert traefik.yml and \`make recreate svc=traefik\` (the fields are additive, leaving them is harmless);"
+  say "revert traefik.yml and \`make force-recreate svc=traefik\` (the fields are additive, leaving them is harmless);"
   say "revert routers.yml (hot reload) then the guard. This script does steps 1-3 below; 4 is yours."
   say "  1. restore the previous traefik.yml (git: ${ref}:config/traefik/traefik.yml) onto $tgt"
-  say "  2. make -C $DEPLOY_ROOT recreate svc=traefik, then the healthy probe and make edge-auth-check"
+  say "  2. make -C $DEPLOY_ROOT force-recreate svc=traefik, then the healthy probe and make edge-auth-check"
   say "  3. sudo rm -f $DROPIN_DEST   (the ansible server role reinstalls it on the next --tags logrotate run: revert its task too)"
   say "  4. (yours) git revert the traefik.yml change on main so the next deploy does not re-copy it, then routers.yml, then the guard"
   if [ "$APPLY" -eq 0 ]; then say "- $(ts) DRY-RUN: nothing done"; return 0; fi
@@ -685,7 +689,7 @@ phase_rollback() {
   pass "previous traefik.yml restored on the deployed copy"
   rb_step "Step 2: recreate traefik (edge down for a few seconds)?"
   local addr code t0; addr="$(edge_addr)"; t0="$(now_s)"
-  run make_deployed recreate svc=traefik; [ "$RC" -eq 0 ] || die "recreate exited $RC"
+  run make_deployed force-recreate svc=traefik; [ "$RC" -eq 0 ] || die "force-recreate exited $RC"
   while :; do
     code="$(edge_probe_code "$addr")"; [ "$code" = 403 ] && break
     [ "$(awk -v a="$t0" -v b="$(now_s)" -v m="$HEALTHY_MAX" 'BEGIN{print (b-a>m)?1:0}')" = 0 ] || die "no healthy edge response after the rollback recreate"
