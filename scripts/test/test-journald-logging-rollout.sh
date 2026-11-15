@@ -136,7 +136,7 @@ reset_fake() {
   echo "2026-11-14T01:00:00.000000000Z" >"$F/started"
   echo 40 >"$F/count"
   # wave B services (purser, cf-access-guard): same shape, files named <svc>.<what>
-  local w; for w in purser cf-access-guard; do
+  local w; for w in purser cf-access-guard traefik; do
     echo json-file >"$F/drv_$w"
     echo "old${w}container000000000000000000000000000000000000000000000000001" >"$F/$w.cid"; cut -c1-12 "$F/$w.cid" >"$F/$w.jid"
     echo "2026-11-14T01:00:00.000000000Z" >"$F/$w.started"; echo 3 >"$F/$w.count"
@@ -144,11 +144,16 @@ reset_fake() {
 }
 # the world as it is after the merge deploy: satlink on journald, the journald drop-in installed and effective
 post_merge() {
+  echo "2026-11-14T02:00:00.000000000Z" >"$F/started"   # the deploy recreated satlink after preflight
   echo journald >"$F/drv_satlink"; echo 50000 >"$F/eff_burst"; echo 30s >"$F/eff_interval"
   cp "$R/ansible/roles/server/files/journald/$JDF" "$T/etc/jd/$JDF"
 }
 # wave B world: purser and cf-access-guard on journald, the host drop-in installed and effective
-post_merge_b() { post_merge; echo journald >"$F/drv_purser"; echo journald >"$F/drv_cf-access-guard"; }
+post_merge_b() { post_merge; echo journald >"$F/drv_purser"; echo journald >"$F/drv_cf-access-guard"
+  echo "2026-11-14T02:00:00.000000000Z" >"$F/purser.started"; echo "2026-11-14T02:00:00.000000000Z" >"$F/cf-access-guard.started"; }
+# wave D world: traefik on journald (recreated by the deploy)
+post_merge_d() { post_merge; echo journald >"$F/drv_traefik"; echo "2026-11-14T02:00:00.000000000Z" >"$F/traefik.started"
+  echo "deploytraefikcontainer0000000000000000000000000000000000000000000001" >"$F/traefik.cid"; cut -c1-12 "$F/traefik.cid" >"$F/traefik.jid"; }
 # the world once the journald drop-in is effective (what dropin --apply needs the host to look like after the restart)
 effective() { echo 50000 >"$F/eff_burst"; echo 30s >"$F/eff_interval"; }
 # preflight state as the owner would have it (verify and evidence need the baseline)
@@ -292,6 +297,28 @@ reset_fake; baseline; post_merge_b; echo json-file >"$F/drv_cf-access-guard"
 expect "verify fails when a wave service is on json-file" '[ "$(rc_of go verify --svc $W)" = 1 ]'
 reset_fake; post_merge_b; touch "$F/rollback_flips"; echo '{"services":{"purser":{},"cf-access-guard":{}}}' >"$F/config.json"
 expect "wave rollback: each recreated, json-file, journal still queryable" '[ "$(rc_of go rollback --svc $W --apply --confirm-rollback)" = 0 ] && [ "$(tr "\n" " " <"$F/recreated")" = "purser cf-access-guard " ] && grep -q "^rb_purser_journal_lines=9" "$T/state/state.kv"'
+
+echo "wave D: --svc traefik (edge outage)"
+reset_fake; post_merge_d
+expect "dry-run canary for traefik names the 12 s edge outage and recreates nothing" '[ "$(rc_of go canary --svc traefik)" = 0 ] && grep -q "outage of the traefik recreate: the whole edge.*12 s" "$T/rec.md" && grep -q "12.1 s measured" "$T/rec.md" && ! grep -q force-recreate "$CALLS"'
+expect "the traefik canary ALWAYS pauses before the recreate (even with --yes); with no terminal it stops, recreating nothing" '[ "$(rc_of go canary --svc traefik --apply --yes)" = 3 ] && grep -q "PAUSE: next canary: force-recreate traefik, a SECOND edge outage" "$T/rec.md" && ! grep -q force-recreate "$CALLS"'
+expect "the traefik canary passes with --confirm-apply: force-recreate (never plain recreate), id and StartedAt changed" '[ "$(rc_of go canary --svc traefik --apply --confirm-apply)" = 0 ] && ! grep -q FAIL "$T/rec.md" && [ "$(tr "\n" " " <"$F/recreated")" = "traefik " ] && grep -q "^make -C $D force-recreate svc=traefik" "$CALLS" && ! grep -Eq "^make -C $D recreate|svc=(satlink|purser|cf-access-guard|switchyard|postgres)|restart docker" "$CALLS" && grep -q "^canary_traefik_ok=1" "$T/state/state.kv"'
+reset_fake; post_merge_d; echo 0 >"$F/traefik.count"
+expect "traefik with no stdout lines in the journal (BEFORE=0) is refused BEFORE the recreate: no second outage is taken" '[ "$(rc_of go canary --svc traefik --apply --confirm-apply)" = 1 ] && grep -q "nothing to prove" "$T/rec.md" && ! grep -q force-recreate "$CALLS"'
+reset_fake; post_merge_d; touch "$F/recreate_noop"
+expect "a no-op make for traefik FAILS (the SATL-24 lesson: exit 0, old container left running)" '[ "$(rc_of go canary --svc traefik --apply --confirm-apply)" = 1 ] && grep -q "FAIL.*traefik really restarted" "$T/rec.md"'
+reset_fake; go preflight --svc traefik >/dev/null || true; post_merge_d
+expect "merge-gate: the deploy recreated traefik (StartedAt changed), traefik journald, plimsoll json-file" '[ "$(rc_of go merge-gate --svc traefik --apply --confirm-apply)" = 0 ] && ! grep -q FAIL "$T/rec.md" && grep -q "^mg_traefik_recreated=1" "$T/state/state.kv" && grep -q "^mg_traefik_driver=journald" "$T/state/state.kv"'
+reset_fake; go preflight --svc traefik >/dev/null || true; post_merge_d; echo "2026-11-14T01:00:00.000000000Z" >"$F/traefik.started"
+expect "merge-gate FAILS when traefik StartedAt is unchanged since preflight (the old container id kept: the deploy did not recreate it)" '[ "$(rc_of go merge-gate --svc traefik --apply --confirm-apply)" = 1 ] && grep -q "FAIL.*recreated by the deploy" "$T/rec.md" && grep -q "NOT recreated by the deploy" "$T/rec.md"'
+reset_fake; post_merge_d
+expect "merge-gate with no preflight record notes it cannot assert recreation (and still checks the driver)" '[ "$(rc_of go merge-gate --svc traefik --apply --confirm-apply)" = 0 ] && grep -q "NOTE.*traefik: no preflight StartedAt" "$T/rec.md"'
+reset_fake; go preflight --svc traefik >/dev/null || true; post_merge_d; echo json-file >"$F/drv_traefik"
+expect "merge-gate fails when traefik is still json-file" '[ "$(rc_of go merge-gate --svc traefik --apply --confirm-apply)" = 1 ]'
+reset_fake; go preflight --svc traefik >/dev/null || true; post_merge_d
+expect "verify for traefik passes" '[ "$(rc_of go verify --svc traefik --confirm-dozzle)" = 0 ] && grep -q "^v_traefik_driver=journald" "$T/state/state.kv"'
+reset_fake; post_merge_d; touch "$F/rollback_flips"; echo '{"services":{"traefik":{}}}' >"$F/config.json"
+expect "traefik rollback: force-recreated, json-file, journal still queryable" '[ "$(rc_of go rollback --svc traefik --apply --confirm-rollback)" = 0 ] && [ "$(tr "\n" " " <"$F/recreated")" = "traefik " ] && grep -q "^rb_traefik_journal_lines=9" "$T/state/state.kv"'
 
 echo "verify"
 reset_fake; baseline; post_merge
