@@ -192,7 +192,7 @@ Rotation is `ansible/roles/server/templates/traefik-access.j2` (rendered by the 
    registry first, or accept and list what moves. **Merging does not apply `traefik.yml`**
    (single-file bind, startup-only reader, SERV-164): the deploy goes green and the edge keeps
    the old config.
-4. In the window, with the owner watching: `make recreate svc=traefik` (`--no-deps`). The
+4. In the window, with the owner watching: `make force-recreate svc=traefik` (`--no-deps`). The
    public Argosy path and every tunneled host are down while the container starts.
    Measured on a scratch pair (same image digest, prod `traefik.yml` + `routers.yml` with the
    crowdsec-bouncer plugin loading, no ACME material): `docker run` to first HTTP response
@@ -208,7 +208,7 @@ than a minute of edge downtime on the measured figures.
 
 Rollback: delete the drop-in and revert the role task (or the next `--tags logrotate` run
 reinstalls it; rotated files stay and are harmless); revert `traefik.yml` and
-`make recreate svc=traefik` again (fields are additive, so leaving them is harmless); revert
+`make force-recreate svc=traefik` again (fields are additive, so leaving them is harmless); revert
 `routers.yml` (hot reload) then the guard. If Traefik fails to start, restore the old
 `traefik.yml` on `/opt/construct-server` and recreate.
 
