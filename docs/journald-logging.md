@@ -51,6 +51,27 @@ The files live in `ansible/roles/server/files/journald/` and contain no secrets.
 sudo needs a password, so none of this is run by an agent. Do not run the whole `site.yml`: its
 "Start Docker Stack" task would apply the compose change.
 
+**Use the rollout script first.** `scripts/journald-logging-rollout.sh` is these steps as phases
+(modelled on `traefik-access-log-rollout.sh`): each phase runs alone, a dry run is the default and
+`--apply` really does it, every run writes a PASS / FAIL / PAUSE record under
+`~/.cache/journald-logging-rollout/` (counts only, never a log line) and `--print-evidence` prints
+the counts-only comment for SATL-25 / SATL-71. The manual commands below are the equivalent.
+`dropin` calls `sudo -v` up front (you type the password) and uses sudo only for the install,
+`daemon-reload` and the journald restart. It never restarts dockerd or a container.
+
+```sh
+scripts/journald-logging-rollout.sh preflight                 # read-only, no sudo: baselines + drift
+scripts/journald-logging-rollout.sh dropin --apply            # step 1 below
+scripts/journald-logging-rollout.sh merge-gate --apply        # step 2: pauses while YOU merge, then checks the deploy
+scripts/journald-logging-rollout.sh canary --apply            # step 3: the canary block, with force-recreate
+scripts/journald-logging-rollout.sh verify                    # read-only; Dozzle stays a PAUSE until you confirm
+scripts/journald-logging-rollout.sh --print-evidence          # step 4: paste the counts on SATL-25
+# or all in order (pauses before each phase): scripts/journald-logging-rollout.sh all --apply
+```
+
+Run a phase without `--apply` to read its plan first. `make journald-logging-rollout-test` proves
+the script against fake binaries.
+
 1. **Host drop-ins first, BEFORE the compose change is merged.** The cap and rate limit must exist
    when volume starts. No container is touched.
    ```sh
@@ -67,6 +88,12 @@ sudo needs a password, so none of this is run by an agent. Do not run the whole 
    systemctl show docker.service -p LogRateLimitBurst   # expect 50000: only proves PID 1 loaded it
    cat /run/systemd/units/log-rate-limit-burst:docker.service   # what journald reads; expect 50000
    ```
+   The script's `dropin` phase asserts exactly this (the installed files byte-identical to the repo,
+   disk usage not reduced, the oldest journal entry date unchanged, both burst values 50000). A
+   missing or wrong burst value is recorded as a **wave-C blocker, not a canary blocker**: it is
+   written when PID 1 starts docker.service, and nothing here restarts dockerd, so it can stay
+   missing until the next docker restart.
+
    If the `/run/systemd/units/` file is missing or wrong, journald is not enforcing the raised
    limit: decide the fallback (the global `RateLimitBurst` in the journald drop-in) BEFORE wave C
    (switchyard). Satlink alone will not approach 10000 lines per 30 s, so the `Suppressed` count
@@ -80,18 +107,24 @@ sudo needs a password, so none of this is run by an agent. Do not run the whole 
    ```
 3. **Canary test** (next section), once the deploy is green. The deploy itself already recreates
    satlink onto journald (its json-file lines are gone, as for any recreate), so the test block
-   takes BEFORE from that journald container and then does one more explicit `make recreate`
+   takes BEFORE from that journald container and then does one more explicit `make force-recreate`
    to prove the lines survive it.
 4. **Record counts** on SATL-25 and the PR: driver, the line counts, disk usage before and after,
    the `Suppressed` count, Dozzle yes/no. Counts only; never paste a log line.
 
 ## Canary test (satlink)
 
+`scripts/journald-logging-rollout.sh canary --apply` runs this block and asserts every line of
+it; the commands are the equivalent by hand. Use `force-recreate`, not `recreate`: `make recreate`
+is `up -d --no-deps` and does nothing on an unchanged compose spec (it exited 0 and left the old
+container running in the traefik window), so the script also fails unless the container id and
+`StartedAt` really changed.
+
 ```sh
 docker inspect --format '{{.HostConfig.LogConfig.Type}}' satlink          # journald
 BEFORE=$(journalctl CONTAINER_NAME=satlink --no-pager -q | wc -l)
 OLD_ID=$(docker inspect --format '{{.Id}}' satlink | cut -c1-12)
-make recreate svc=satlink
+make force-recreate svc=satlink
 AFTER=$(journalctl CONTAINER_NAME=satlink --no-pager -q | wc -l)
 OLDN=$(journalctl CONTAINER_ID=$OLD_ID --no-pager -q | wc -l)
 echo before=$BEFORE after=$AFTER old_container_lines=$OLDN   # AFTER >= BEFORE, OLDN > 0
@@ -126,10 +159,12 @@ tickets, PRs or chat; record counts.
 
 ## Rollback
 
-Per service, no data cost:
+`scripts/journald-logging-rollout.sh rollback --apply` walks these steps, each confirmed
+(`--revert-pr N` checks your revert merged; `--remove-dropins` is the only way it touches the host
+drop-ins). The manual path, per service, no data cost:
 
 1. Replace `logging: *journald-logging` with the previous block (or revert the PR) and merge.
-2. `make recreate svc=<name>`: the container returns to `json-file`, and `docker logs` works from
+2. `make force-recreate svc=<name>`: the container returns to `json-file`, and `docker logs` works from
    that point.
 3. Lines already in the journal are untouched and stay queryable with
    `journalctl CONTAINER_NAME=<name>` until the size cap ages them out.

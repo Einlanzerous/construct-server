@@ -6,7 +6,7 @@
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
         comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight \
         backup-test backup-status \
-        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test traefik-access-log-rollout-test plimsoll-llm-isolation plimsoll-llm-canary mcp-tools journald-check journald-check-test
+        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test traefik-access-log-rollout-test plimsoll-llm-isolation plimsoll-llm-canary mcp-tools journald-check journald-check-test journald-logging-rollout-test
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -919,3 +919,11 @@ journald-check:
 # Usage: make journald-check-test
 journald-check-test:
 	@./scripts/test/test-check-journald-logging.sh
+
+# Prove scripts/journald-logging-rollout.sh (SATL-25) against fake binaries: each phase's pass path and
+# fail paths (drop-in not identical, vacuum, StartedAt unchanged after force-recreate, lines missing,
+# Suppressed, plimsoll on journald), dry-run runs nothing, plain `recreate` is never called, and no log
+# value reaches a record, stdout or argv. Touches nothing on the host.
+# Usage: make journald-logging-rollout-test
+journald-logging-rollout-test:
+	@./scripts/test/test-journald-logging-rollout.sh
