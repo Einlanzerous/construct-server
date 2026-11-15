@@ -11,7 +11,7 @@
 #                registry tags for the pins on origin/main versions.env (a config/** merge runs the
 #                whole-stack deploy, which recreates whatever drifted: pending ones are listed and the
 #                run PAUSES), the deployed copy vs origin/main versions.env, `make assert-env-keys
-#                vault=1` from a scratch checkout of main, access.log size and no rotated sibling,
+#                vault=1` from a scratch checkout of main, access.log size and the rotated-generation count (information only),
 #                traefik uptime + image, crowdsec lines-read baseline, satlink collector baseline,
 #                `make edge-auth-check` baseline. Every check runs; the run fails if any failed.
 #   dropin       validate ansible/roles/server/templates/traefik-access.j2 with `sudo logrotate -d`, `sudo install` it to
@@ -28,9 +28,12 @@
 #                and X-Access-Subject keys present/absent, subject on 2xx internal lines, none on 403s,
 #                ZERO Cf-Access-Jwt-Assertion / Cf-Access-Authenticated-User-Email keys, crowdsec
 #                lines-read advanced, satlink collector running, `make edge-auth-check`.
-#   rotate       the real rotation of the live (~770 MB) log: `sudo logrotate -f`, then access.log.1 plain,
+#   rotate       with NO access.log.1: the real rotation of the live (~770 MB) log: `sudo logrotate -f`, then access.log.1 plain,
 #                traefik writing to the new access.log (and NOT to .1: missed-reopen detection),
 #                crowdsec still advancing, satlink collector followed. Extra confirmation required.
+#                With access.log.1 ALREADY there (the logrotate timer rotated it, the normal state on prod):
+#                never rotates over it; verifies that rotation read-only (live file is a different inode and
+#                growing, .1 not growing, crowdsec past the baseline, collector 'rotated file read', no late/lost/error).
 #   rollback     the documented rollback: restore the previous traefik.yml from git, recreate traefik,
 #                remove the drop-in. Each step confirmed.
 #   all          preflight, dropin, merge-gate, recreate, verify, rotate in order, pausing before each
@@ -197,10 +200,20 @@ log_names() {   # names in the volume directory (file names are not sensitive)
   if [ "$READER" = sudo ]; then sudo ls -1 "$LOG_DIR" 2>/dev/null || true
   else docker exec crowdsec ls -1 "$CTR_LOG_DIR" 2>/dev/null || true; fi
 }
-log_tail() {   # log_tail OFFSET — bytes from OFFSET (0-based) of access.log; feed only into a counter
+log_tail() {   # log_tail FILE OFFSET — bytes from OFFSET (0-based) of FILE; feed only into a counter
   pick_reader
-  if [ "$READER" = sudo ]; then sudo tail -c "+$(($1 + 1))" "$LOG_DIR/$LOG_NAME"
-  else docker exec crowdsec tail -c "+$(($1 + 1))" "$CTR_LOG_DIR/$LOG_NAME"; fi
+  if [ "$READER" = sudo ]; then sudo tail -c "+$(($2 + 1))" "$LOG_DIR/$1"
+  else docker exec crowdsec tail -c "+$(($2 + 1))" "$CTR_LOG_DIR/$1"; fi
+}
+log_inode() {   # log_inode FILE -> inode number, or empty when absent (the device is not compared: the two readers may see different device numbers)
+  pick_reader
+  if [ "$READER" = sudo ]; then sudo stat -c %i "$LOG_DIR/$1" 2>/dev/null || true
+  else docker exec crowdsec stat -c %i "$CTR_LOG_DIR/$1" 2>/dev/null || true; fi
+}
+log_mtime() {   # log_mtime FILE -> epoch seconds, or empty when absent
+  pick_reader
+  if [ "$READER" = sudo ]; then sudo stat -c %Y "$LOG_DIR/$1" 2>/dev/null || true
+  else docker exec crowdsec stat -c %Y "$CTR_LOG_DIR/$1" 2>/dev/null || true; fi
 }
 have_sibling() {   # have_sibling NAME
   log_names | grep -qx -- "$1"
@@ -228,7 +241,10 @@ def internal: ((.entryPointName // "") == "internal");
   "leak_email=\($l | map(select(hs("request_cf-access-authenticated-user-email"))) | length)"'
 
 count_log_from() {   # count_log_from OFFSET -> key=value lines, numbers only
-  log_tail "$1" 2>/dev/null | jq -Rrn "$JQ_COUNTS" 2>/dev/null
+  log_tail "$LOG_NAME" "$1" 2>/dev/null | jq -Rrn "$JQ_COUNTS" 2>/dev/null
+}
+count_log_rotated() {   # count_log_rotated OFFSET: OFFSET in access.log.1 (the recreate-time file), then all of access.log
+  { log_tail "$LOG_NAME.1" "$1"; log_tail "$LOG_NAME" 0; } 2>/dev/null | jq -Rrn "$JQ_COUNTS" 2>/dev/null
 }
 kv() { grep "^$2=" <<<"$1" | head -1 | cut -d= -f2; }   # kv "$counts" key
 
@@ -243,6 +259,9 @@ collector_rollups() {   # collector_rollups SINCE — traefik-rollup run lines s
 }
 collector_errors() {
   docker logs --since "$1" satlink 2>&1 | grep '\[traefik-rollup\]' | grep -ciE 'error|fail|panic' || true
+}
+collector_problems() {   # late / lost / error-looking collector lines since SINCE
+  docker logs --since "$1" satlink 2>&1 | grep '\[traefik-rollup\]' | grep -ciE '(^|[^a-z])(late|lost|error|fail|panic)' || true
 }
 collector_rotated_reads() {
   docker logs --since "$1" satlink 2>&1 | grep -c 'rotated file read' || true
@@ -328,7 +347,10 @@ pf_log_state() {
   n_sib="$(log_names | grep -cE "^${LOG_NAME//./\\.}\\.[0-9]+(\\.gz)?$" || true)"
   rec "  - $LOG_NAME: $size bytes; rotated siblings: $n_sib; reader: $READER"
   st_set pf_log_bytes "$size"; st_set pf_siblings "$n_sib"
-  [ "$n_sib" -eq 0 ]
+  # A rotated generation is information, not a failure: the hourly logrotate timer (maxsize) makes access.log.1
+  # permanent once the drop-in is installed, and the rotate phase treats it as "rotation already happened".
+  [ "$n_sib" -eq 0 ] || note "$n_sib rotated generation(s) of $LOG_NAME already exist: the rotate phase will verify that rotation read-only instead of rotating"
+  return 0
 }
 
 pf_traefik() {
@@ -534,6 +556,7 @@ phase_recreate() {
   t2="$(now_s)"
   size="$(log_size "$LOG_NAME")"; [[ "$size" =~ ^[0-9]+$ ]] || die "cannot read the log size after the recreate"
   st_set recreate_offset "$size"
+  st_set recreate_inode "$(log_inode "$LOG_NAME")"   # the offset belongs to THIS file: verify compares it
   st_set recreate_make_s "$(elapsed "$t0" "$t1")"
   st_set recreate_healthy_s "$(elapsed "$t0" "$t2")"
   pass "first healthy edge response $(elapsed "$t0" "$t2")s after the recreate began (make returned at $(elapsed "$t0" "$t1")s)"
@@ -557,13 +580,33 @@ phase_verify() {
   local off since c base now i
   off="$(st_get recreate_offset)"; since="$(st_get recreate_ts)"
   [[ "$off" =~ ^[0-9]+$ ]] && [ -n "$since" ] || die "no recorded recreate offset/timestamp: run the recreate phase first"
-  c="$(count_log_from "$off")" || true
+  local ino0 ino_now one_ino
+  ino0="$(st_get recreate_inode)"; ino_now="$(log_inode "$LOG_NAME")"
+  if [ -z "$ino0" ]; then
+    note "no inode was recorded at the recreate (older state): counting from offset $off of the live $LOG_NAME without a rotation check"
+    c="$(count_log_from "$off")" || true
+  elif [ "$ino0" = "$ino_now" ]; then
+    rec "- $LOG_NAME is the same file as at the recreate (inode $ino0): counting from offset $off"
+    c="$(count_log_from "$off")" || true
+  else
+    [ -n "$ino_now" ] || die "$LOG_NAME is gone: cannot count"
+    one_ino="$(log_inode "$LOG_NAME.1")"
+    if [ "$one_ino" = "$ino0" ]; then
+      [ "$(log_size "$LOG_NAME.1")" -ge "$off" ] 2>/dev/null || die "$LOG_NAME.1 is the recreate-time file but is shorter than the recorded offset $off: refusing to count"
+      note "$LOG_NAME was rotated once since the recreate (the recreate-time file is now $LOG_NAME.1, inode $ino0): counting from offset $off in $LOG_NAME.1, then the whole live $LOG_NAME"
+      c="$(count_log_rotated "$off")" || true
+    elif [ "$(log_inode "$LOG_NAME.2")" = "$ino0" ]; then
+      die "$LOG_NAME was rotated more than once since the recreate (the recreate-time file is now $LOG_NAME.2): lines would be missed, not counting. Re-run the recreate phase, or verify by hand"
+    else
+      die "$LOG_NAME is not the file the recreate recorded (inode $ino0, now $ino_now) and no $LOG_NAME.1 carries that inode: it was rotated away or replaced, so the offset $off means nothing here. Re-run the recreate phase, or verify by hand"
+    fi
+  fi
   [ -n "$c" ] || die "could not count the log (reader: $READER)"
   local k
   for k in total ua_with ua_without subj_with subj_without ok_internal ok_internal_subj s403 s403_subj leak_jwt leak_email; do
     st_set "v_$k" "$(kv "$c" "$k")"
   done
-  rec "- counts since offset $off (recreate at $since): $(tr '\n' ' ' <<<"$c")"
+  rec "- counts since offset $off of the recreate-time file (recreate at $since): $(tr '\n' ' ' <<<"$c")"
   [ "$(kv "$c" total)" -gt 0 ] || die "no log lines since the recreate"
   check "request_User-Agent present on new lines ($(kv "$c" ua_with) with, $(kv "$c" ua_without) without)" test "$(kv "$c" ua_with)" -gt 0
   check "request_X-Access-Subject present on 2xx internal-entrypoint lines ($(kv "$c" ok_internal_subj) of $(kv "$c" ok_internal); lines without it are exempt or public routers)" \
@@ -601,37 +644,11 @@ phase_verify() {
 rot_plain_one() { have_sibling "$LOG_NAME.1" && ! have_sibling "$LOG_NAME.1.gz"; }
 rot_one_stable() { [ "$(log_size "$LOG_NAME.1")" = "$1" ]; }
 
-phase_rotate() {
-  say "## rotate (the real log)"
-  if [ "$APPLY" -eq 0 ]; then
-    say "- $(ts) DRY-RUN: would require a typed confirmation, then \`sudo logrotate -f $DROPIN_DEST\` and assert:"
-    say "  access.log.1 appeared plain; traefik writes the NEW access.log (small, growing) and .1 does not grow"
-    say "  (a growing .1 = missed reopen); crowdsec lines-read still advancing; the satlink collector logged a rotated-file read."
-    return 0
-  fi
-  need sudo docker jq
-  [ "$(st_get verify_ok)" = 1 ] || die "verify has not passed (state): rotate is the last step; run verify first"
-  [ "$(st_get dropin_ok)" = 1 ] || die "the drop-in phase has not passed (state)"
-  run sudo -v; [ "$RC" -eq 0 ] || die "sudo not available"
-  READER=sudo
-  local size0 cs0 since now
-  size0="$(log_size "$LOG_NAME")"; [[ "$size0" =~ ^[0-9]+$ ]] || die "cannot read $LOG_NAME"
-  ! have_sibling "$LOG_NAME.1" || die "$LOG_NAME.1 already exists: not rotating over it"
-  cs0="$(crowdsec_reads)"; [[ "$cs0" =~ ^[0-9]+$ ]] || die "crowdsec lines-read unreadable"
-  st_set rotate_size_before "$size0"
-  if [ "$CONFIRM_ROTATE" -eq 0 ]; then
-    confirm_typed rotate "This rotates the REAL access log ($size0 bytes) with sudo logrotate -f. Traefik is signalled by logrotate's postrotate (USR1)."
-  fi
-  since="$(ts)"
-  run sudo logrotate -f "$DROPIN_DEST"
-  [ "$RC" -eq 0 ] || die "logrotate -f exited $RC"
-  check "$LOG_NAME.1 appeared and is plain (not .gz: delaycompress)" rot_plain_one
-  local one0 one1 new0 new1 w=0 grew=0
-  one0="$(log_size "$LOG_NAME.1")"
-  new0="$(log_size "$LOG_NAME")"
-  [[ "$new0" =~ ^[0-9]+$ ]] || die "no new $LOG_NAME after the rotation"
-  rec "  - after rotation: .1 $one0 bytes; new log $new0 bytes (was $size0)"
-  check "the new $LOG_NAME starts near zero ($new0 bytes, limit $ROTATE_MAX_FRESH)" test "$new0" -lt "$ROTATE_MAX_FRESH"
+# rot_after_checks SINCE CS0 ONE0 NEW0 — the read-only evidence that a rotation worked, whether this run did it
+# or the logrotate timer already did: .1 not growing, traefik writing to the live log, crowdsec advancing past
+# CS0, the collector logged a rotated-file read since SINCE (and no late/lost/error lines).
+rot_after_checks() {
+  local since="$1" cs0="$2" one0="$3" new0="$4" one1 new1 w=0 grew=0 i=0 cs1="" now=0 bad
   while :; do
     sleep "$SAMPLE_GAP"; w=$((w + SAMPLE_GAP))
     new1="$(log_size "$LOG_NAME")"; one1="$(log_size "$LOG_NAME.1")"
@@ -640,24 +657,81 @@ phase_rotate() {
     [ "$w" -lt "$ROTATE_WAIT" ] || break
   done
   st_set rotate_new_bytes "${new1:-n/a}"; st_set rotate_one_bytes "${one1:-n/a}"
-  rec "  - samples: .1 $one0 -> $one1 bytes; new log $new0 -> $new1 bytes after ${w}s"
+  rec "  - samples: .1 $one0 -> $one1 bytes; live log $new0 -> $new1 bytes after ${w}s"
   check "access.log.1 is not growing ($one0 -> $one1): traefik reopened" test "${one1:-x}" = "${one0:-y}"
-  check "traefik writes to the new $LOG_NAME ($new0 -> $new1 bytes)" test "$grew" -eq 1
-  local i=0 cs1=""
+  check "traefik writes to the live $LOG_NAME ($new0 -> $new1 bytes)" test "$grew" -eq 1
   while :; do
     cs1="$(crowdsec_reads)"; [[ "$cs1" =~ ^[0-9]+$ ]] && [ "$cs1" -gt "$cs0" ] && break
     i=$((i + POLL_GAP)); [ "$i" -le "$ROTATE_WAIT" ] || break; sleep "$POLL_GAP"
   done
   st_set rotate_crowdsec "$cs0 -> ${cs1:-n/a}"
-  check "crowdsec lines-read still advancing after the rotation ($cs0 -> ${cs1:-unreadable})" test "${cs1:-0}" -gt "$cs0"
-  i=0; now=0
+  check "crowdsec lines-read advanced past the baseline ($cs0 -> ${cs1:-unreadable})" test "${cs1:-0}" -gt "$cs0"
+  i=0
   while :; do
     now="$(collector_rotated_reads "$since")"; [ "${now:-0}" -ge 1 ] && break
     i=$((i + POLL_GAP)); [ "$i" -le "$COLLECTOR_WAIT" ] || break; sleep "$POLL_GAP"
   done
   st_set rotate_collector_rotated_reads "${now:-0}"
   check "satlink collector logged a rotated-file read ($now)" test "${now:-0}" -ge 1
+  bad="$(collector_problems "$since")"
+  check "no late/lost/error collector lines since the rotation ($bad)" test "${bad:-1}" -eq 0
   check "access.log.1 is still not growing after the collector read it" rot_one_stable "$one1"
+}
+
+# The timer already rotated: do not rotate over access.log.1, verify the rotation that happened. Read-only.
+rotate_verify_existing() {
+  local one0 new0 ino_one ino_new mt since cs0
+  note "$LOG_NAME.1 already exists: the logrotate timer rotated the log. Not rotating over it; verifying that rotation read-only."
+  rot_plain_one || die "$LOG_NAME.1 exists but so does $LOG_NAME.1.gz: unexpected layout, not judging it"
+  ino_one="$(log_inode "$LOG_NAME.1")"; ino_new="$(log_inode "$LOG_NAME")"
+  [ -n "$ino_new" ] || die "no live $LOG_NAME next to $LOG_NAME.1"
+  check "the live $LOG_NAME is a different file from $LOG_NAME.1 (inode $ino_new vs ${ino_one:-?})" test "$ino_new" != "$ino_one"
+  mt="$(log_mtime "$LOG_NAME.1")"
+  if [[ "$mt" =~ ^[0-9]+$ ]]; then since="$(date -u -d "@$((mt - 60))" +%Y-%m-%dT%H:%M:%SZ)"; else since="$(st_get recreate_ts)"; fi
+  rec "  - rotation time taken from the mtime of $LOG_NAME.1 (less 60s): $since"
+  cs0="$(st_get crowdsec_baseline)"; [[ "$cs0" =~ ^[0-9]+$ ]] || die "no crowdsec baseline recorded: run preflight first"
+  one0="$(log_size "$LOG_NAME.1")"; new0="$(log_size "$LOG_NAME")"
+  [[ "$one0" =~ ^[0-9]+$ && "$new0" =~ ^[0-9]+$ ]] || die "cannot read the sizes of $LOG_NAME / $LOG_NAME.1"
+  rec "  - $LOG_NAME.1 $one0 bytes; live log $new0 bytes"
+  st_set rotate_preexisting 1; st_set rotate_size_before "n/a (rotated by the timer)"
+  rot_after_checks "$since" "$cs0" "$one0" "$new0"
+  st_set rotate_ok 1
+}
+
+phase_rotate() {
+  say "## rotate (the real log)"
+  if [ "$APPLY" -eq 0 ]; then
+    say "- $(ts) DRY-RUN: with NO access.log.1: would require a typed confirmation, then \`sudo logrotate -f $DROPIN_DEST\` and assert:"
+    say "  access.log.1 appeared plain; traefik writes the NEW access.log (small, growing) and .1 does not grow"
+    say "  (a growing .1 = missed reopen); crowdsec lines-read still advancing; the satlink collector logged a rotated-file read."
+    say "  With access.log.1 ALREADY present (the logrotate timer rotated): does NOT rotate; verifies that rotation read-only with the same assertions."
+    return 0
+  fi
+  need docker jq
+  [ "$(st_get verify_ok)" = 1 ] || die "verify has not passed (state): rotate is the last step; run verify first"
+  [ "$(st_get dropin_ok)" = 1 ] || die "the drop-in phase has not passed (state)"
+  if have_sibling "$LOG_NAME.1"; then rotate_verify_existing; return 0; fi
+  need sudo
+  run sudo -v; [ "$RC" -eq 0 ] || die "sudo not available"
+  READER=sudo
+  local size0 cs0 since
+  size0="$(log_size "$LOG_NAME")"; [[ "$size0" =~ ^[0-9]+$ ]] || die "cannot read $LOG_NAME"
+  cs0="$(crowdsec_reads)"; [[ "$cs0" =~ ^[0-9]+$ ]] || die "crowdsec lines-read unreadable"
+  st_set rotate_size_before "$size0"; st_set rotate_preexisting 0
+  if [ "$CONFIRM_ROTATE" -eq 0 ]; then
+    confirm_typed rotate "This rotates the REAL access log ($size0 bytes) with sudo logrotate -f. Traefik is signalled by logrotate's postrotate (USR1)."
+  fi
+  since="$(ts)"
+  run sudo logrotate -f "$DROPIN_DEST"
+  [ "$RC" -eq 0 ] || die "logrotate -f exited $RC"
+  check "$LOG_NAME.1 appeared and is plain (not .gz: delaycompress)" rot_plain_one
+  local one0 new0
+  one0="$(log_size "$LOG_NAME.1")"
+  new0="$(log_size "$LOG_NAME")"
+  [[ "$new0" =~ ^[0-9]+$ ]] || die "no new $LOG_NAME after the rotation"
+  rec "  - after rotation: .1 $one0 bytes; new log $new0 bytes (was $size0)"
+  check "the new $LOG_NAME starts near zero ($new0 bytes, limit $ROTATE_MAX_FRESH)" test "$new0" -lt "$ROTATE_MAX_FRESH"
+  rot_after_checks "$since" "$cs0" "$one0" "$new0"
   st_set rotate_ok 1
 }
 
@@ -716,7 +790,7 @@ print_evidence() {
 - merge-gate: merge commit $(st_or merge_sha | cut -c1-9); deploy run conclusion $(st_or deploy_conclusion); old config still live after the green deploy: $(st_or old_config_live)
 - recreate: first healthy edge response $(st_or recreate_healthy_s)s after the recreate began (make returned at $(st_or recreate_make_s)s); same image: $(st_or recreate_digest_same)
 - verify (lines since the recreate): total $(st_or v_total); request_User-Agent with/without $(st_or v_ua_with)/$(st_or v_ua_without); request_X-Access-Subject with/without $(st_or v_subj_with)/$(st_or v_subj_without); on 2xx internal $(st_or v_ok_internal_subj) of $(st_or v_ok_internal); on 403 $(st_or v_s403_subj) of $(st_or v_s403); Cf-Access-Jwt-Assertion keys $(st_or v_leak_jwt); Cf-Access-Authenticated-User-Email keys $(st_or v_leak_email); crowdsec lines-read $(st_or crowdsec_baseline) -> $(st_or crowdsec_after_verify); satlink collector runs $(st_or v_collector_runs), error lines $(st_or v_collector_errors); verify passed: $([ "$(st_get verify_ok)" = 1 ] && echo yes || echo no)
-- rotate: log before $(st_or rotate_size_before) bytes; after: access.log.1 $(st_or rotate_one_bytes) bytes (not growing), new access.log $(st_or rotate_new_bytes) bytes (growing); crowdsec lines-read $(st_or rotate_crowdsec); satlink rotated-file reads $(st_or rotate_collector_rotated_reads); rotate passed: $([ "$(st_get rotate_ok)" = 1 ] && echo yes || echo no)
+- rotate: log before $(st_or rotate_size_before) bytes; after: access.log.1 $(st_or rotate_one_bytes) bytes (not growing), new access.log $(st_or rotate_new_bytes) bytes (growing); crowdsec lines-read $(st_or rotate_crowdsec); satlink rotated-file reads $(st_or rotate_collector_rotated_reads); rotate by the timer beforehand: $([ "$(st_get rotate_preexisting)" = 1 ] && echo yes || echo no); rotate passed: $([ "$(st_get rotate_ok)" = 1 ] && echo yes || echo no)
 EOF
 }
 

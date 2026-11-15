@@ -124,7 +124,7 @@ l_nous() { printf '{"entryPointName":"internal","DownstreamStatus":200,"ClientAd
 # state as if preflight + recreate had run: offset = size of the junk line already in the log
 set_state() {
   mkdir -p "$T/state"
-  printf 'recreate_offset=%s\nrecreate_ts=2026-11-14T02:00:00Z\ncrowdsec_baseline=1000\npf_guard_state=MERGED\n' "$(stat -c %s "$T/logs/access.log")" >"$T/state/state.kv"
+  printf 'recreate_offset=%s\nrecreate_inode=%s\nrecreate_ts=2026-11-14T02:00:00Z\ncrowdsec_baseline=1000\npf_guard_state=MERGED\n' "$(stat -c %s "$T/logs/access.log")" "$(stat -c %i "$T/logs/access.log")" >"$T/state/state.kv"
 }
 # run SCRIPT-args... : record to $T/rec.md, stdout to $T/out.txt; returns the exit code. No tty.
 go() { local rc=0; rm -f "$T/rec.md"; setsid -w bash "$S" --record "$T/rec.md" "$@" >"$T/out.txt" 2>&1 </dev/null || rc=$?; cat "$T/rec.md" "$T/out.txt" >>"$T/all.log" 2>/dev/null || true; return $rc; }
@@ -149,12 +149,14 @@ expect "preflight made no mutating call" '! grep -Eq "recreate|logrotate -f|inst
 echo "preflight: failure paths"
 reset_fake; echo OPEN >"$F/gh_296"
 expect "#296 not merged FAILS" '[ "$(rc_of go preflight)" = 1 ] && grep -q "FAIL.*#296" "$T/rec.md"'
-reset_fake; : >"$T/logs/access.log.1"
-expect "a rotated sibling FAILS" '[ "$(rc_of go preflight)" = 1 ] && grep -q "FAIL.*rotated sibling" "$T/rec.md"'
 reset_fake; echo 1 >"$F/env_rc"
 expect "assert-env-keys failure FAILS" '[ "$(rc_of go preflight)" = 1 ]'
 reset_fake; echo 1 >"$F/edge_rc"
 expect "edge-auth-check baseline failure FAILS" '[ "$(rc_of go preflight)" = 1 ]'
+
+echo "preflight: an existing rotated generation is information, not a failure"
+reset_fake; : >"$T/logs/access.log.1"
+expect "an existing access.log.1 is a NOTE and preflight stays green" '[ "$(rc_of go preflight)" = 0 ] && grep -q "NOTE.*rotated generation" "$T/rec.md" && ! grep -q "FAIL" "$T/rec.md" && grep -q "rotated siblings: 1" "$T/rec.md"'
 
 echo "preflight: digest drift PAUSES"
 reset_fake; echo sha256:zzz >"$F/registry.txt.new"; sed -i 's/aaa/zzz/' "$F/registry.txt"
@@ -220,6 +222,13 @@ reset_fake; set_state; good
 expect "verify passes on good lines" '[ "$(rc_of go verify)" = 0 ]'
 expect "verify counted: 5 lines, 2 subjects, 1 on a 403 line... none" 'grep -q "total=5" "$T/rec.md" && grep -q "s403_subj=0" "$T/rec.md" && grep -q "leak_jwt=0" "$T/rec.md"'
 expect "verify counted only lines after the offset (the junk line is excluded)" '! grep -q "total=6" "$T/rec.md"'
+expect "verify with an unchanged inode counts from the offset" 'grep -q "same file as at the recreate" "$T/rec.md"'
+reset_fake; set_state; good; mv "$T/logs/access.log" "$T/logs/access.log.1"; { l_ok; l_403; } >"$T/logs/access.log"
+expect "ONE rotation since the recreate: counts = .1 after the offset + the whole live file" '[ "$(rc_of go verify)" = 0 ] && grep -q "total=7 " "$T/rec.md" && grep -q "s403=2 " "$T/rec.md" && grep -q "rotated once since the recreate" "$T/rec.md"'
+reset_fake; set_state; good; mv "$T/logs/access.log" "$T/logs/access.log.1"; { l_ok; l_403; } >"$T/logs/access.log"; cp "$T/logs/access.log.1" "$T/logs/.new"; mv "$T/logs/.new" "$T/logs/access.log.1"
+expect "a .1 that is not the recorded inode FAILS clearly (not an empty count)" '[ "$(rc_of go verify)" = 1 ] && grep -q "FAIL.*not the file the recreate recorded" "$T/rec.md" && ! grep -q "no log lines since" "$T/rec.md"'
+reset_fake; set_state; good; mv "$T/logs/access.log" "$T/logs/access.log.2"; l_ok >"$T/logs/access.log.1"; l_ok >"$T/logs/access.log"
+expect "more than one rotation since the recreate FAILS clearly" '[ "$(rc_of go verify)" = 1 ] && grep -q "FAIL.*rotated more than once" "$T/rec.md"'
 reset_fake; set_state; good; l_jwt >>"$T/logs/access.log"
 expect "a leaked Cf-Access-Jwt-Assertion key FAILS verify" '[ "$(rc_of go verify)" = 1 ] && grep -q "FAIL.*Jwt-Assertion" "$T/rec.md"'
 reset_fake; set_state; good; l_mail >>"$T/logs/access.log"
@@ -261,8 +270,32 @@ kill "$(cat "$APPENDER_PID_FILE")" 2>/dev/null || true
 rot_ready; echo '[traefik-rollup] read 5 lines' >"$F/satlink.log"
 expect "no rotated-file read by the collector FAILS" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && grep -q "FAIL.*rotated-file read" "$T/rec.md"'
 kill "$(cat "$APPENDER_PID_FILE")" 2>/dev/null || true
-rot_ready; : >"$T/logs/access.log.1"
-expect "an existing access.log.1 refuses to rotate over it" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && ! grep -q "^logrotate -f" "$CALLS"'
+# the timer already rotated: .1 exists. The old log moved to .1, traefik writes the new live file.
+appender() { ( for i in $(seq 1 80); do echo "{\"entryPointName\":\"internal\"}" >>"$1"; sleep 0.1; done ) </dev/null >/dev/null 2>&1 & echo $! >"$APPENDER_PID_FILE"; }
+timer_rotated() { mv "$T/logs/access.log" "$T/logs/access.log.1"; echo '{"entryPointName":"internal"}' >"$T/logs/access.log"; }
+rot_ready; timer_rotated; appender "$T/logs/access.log"
+expect "an existing .1 plus a healthy state PASSES without rotating" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 0 ] && ! grep -q FAIL "$T/rec.md" && grep -q "already exists" "$T/rec.md" && ! grep -q "^logrotate -f" "$CALLS" && grep -q "^rotate_ok=1" "$T/state/state.kv"'
+expect "the existing-.1 pass recorded the checks (different inode, growing, crowdsec, collector)" 'grep -q "different file from" "$T/rec.md" && grep -q "crowdsec lines-read advanced" "$T/rec.md" && grep -q "rotated-file read" "$T/rec.md" && grep -q "rotate by the timer" <(bash "$S" --print-evidence)'
+kill "$(cat "$APPENDER_PID_FILE")" 2>/dev/null || true
+rot_ready; timer_rotated; appender "$T/logs/access.log.1"
+expect "an existing .1 that keeps growing FAILS as a missed reopen, nothing rotated" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && grep -q "FAIL.*not growing" "$T/rec.md" && ! grep -q "^logrotate -f" "$CALLS"'
+kill "$(cat "$APPENDER_PID_FILE")" 2>/dev/null || true
+rot_ready; timer_rotated; appender "$T/logs/access.log"; echo 1000 >"$F/cs_reads"; touch "$F/cs_const"   # stuck at the recorded baseline
+expect "an existing .1 with crowdsec not advancing FAILS" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && grep -q "FAIL.*crowdsec" "$T/rec.md" && ! grep -q "^logrotate -f" "$CALLS"'
+kill "$(cat "$APPENDER_PID_FILE")" 2>/dev/null || true
+rot_ready; timer_rotated; appender "$T/logs/access.log"; echo '[traefik-rollup] read 5 lines' >"$F/satlink.log"
+expect "an existing .1 with no rotated-file read FAILS" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && grep -q "FAIL.*rotated-file read" "$T/rec.md"'
+kill "$(cat "$APPENDER_PID_FILE")" 2>/dev/null || true
+rot_ready; timer_rotated; appender "$T/logs/access.log"; echo '[traefik-rollup] lost 3 lines after rotation' >>"$F/satlink.log"
+expect "an existing .1 with a lost-lines collector line FAILS" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && grep -q "FAIL.*late/lost/error" "$T/rec.md"'
+kill "$(cat "$APPENDER_PID_FILE")" 2>/dev/null || true
+rot_ready; timer_rotated; sed -i '/^dropin_ok/d' "$T/state/state.kv"
+expect "an existing .1 still requires the drop-in phase to have passed" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && grep -q "drop-in phase has not passed" "$T/rec.md"'
+rot_ready; timer_rotated; sed -i '/^verify_ok/d' "$T/state/state.kv"
+expect "an existing .1 still requires verify to have passed" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && grep -q "verify has not passed" "$T/rec.md"'
+rot_ready; rm -f "$T/logs/access.log.1"
+expect "with NO .1 the real rotation still runs (logrotate -f called)" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 0 ] && grep -q "^logrotate -f" "$CALLS" && ! grep -q "rotated by the timer" "$T/rec.md"'
+kill "$(cat "$APPENDER_PID_FILE")" 2>/dev/null || true
 rot_ready; sed -i '/^verify_ok/d' "$T/state/state.kv"
 expect "rotate refuses until verify has passed" '[ "$(rc_of go rotate --apply --confirm-rotate)" = 1 ] && ! grep -q "^logrotate -f" "$CALLS"'
 
