@@ -55,10 +55,15 @@ routers went fail-closed at once. It is not a steady state:
 
 ## What it deliberately does not do
 
-- **Adds no headers to requests it approves.** Switchyard and Lyceum validate the
-  same assertion themselves for SSO (SWY-161, LYCM-803). A guard-asserted identity
-  header would be a second, weaker path to the same trust decision — the spoofable
-  identity header shape that `strip-identity-headers` exists to prevent.
+- **Adds no identity header to requests it approves, except `X-Access-Subject`**
+  (SATL-24): the opaque Access `sub`, on a 2xx only, so Traefik's access log can say
+  who made a request without holding an email or the JWT. It is for logging, never an
+  auth input: Switchyard and Lyceum validate the assertion themselves for SSO
+  (SWY-161, LYCM-803), and a backend that trusted a guard-asserted header would have a
+  second, weaker path to the same trust decision. It is listed in `authResponseHeaders`
+  on `cf-access-jwt` and in `strip-identity-headers`, so a client-supplied copy is
+  deleted on ingress. Backends must not trust it. It is inert until `traefik.yml` logs
+  it via `accessLog.fields.headers`.
 - **Reads the header only, not the `CF_Authorization` cookie.** Cloudflare injects
   the header on every proxied request to an Access-protected app.
 - **Returns no reason to the caller.** Distinguishing "wrong audience" from
