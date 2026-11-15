@@ -63,7 +63,7 @@
 # `journalctl CONTAINER_NAME=<name>` returns the lines of every past container of that name.
 #
 # Adopt with `logging: *journald-logging`, one wave per PR (docs/journald-logging.md: A satlink, B purser +
-# cf-access-guard, then switchyard, traefik).
+# cf-access-guard, C switchyard, then traefik).
 # Every adopter is recreated by the deploy that merges it, so the wave size is the number
 # of simultaneous restarts. NOT for plimsoll or plimsoll-llm: scripts/check-plimsoll-llm-
 # canary.sh requires them to log through json-file (PLIM-14), so do not generalise this.
@@ -723,6 +723,10 @@ services:
     image: ghcr.io/einlanzerous/switchyard/backend:${SWITCHYARD_TAG:-latest}
     container_name: switchyard
     restart: unless-stopped
+    # SATL-25 wave C: journald, so the API's webhook, poller and plan/ledger error lines outlive the
+    # recreate every deploy gives it (docs/journald-logging.md). It is the busiest adopter: its volume
+    # is the real test of the host-wide journald rate limit.
+    logging: *journald-logging
     environment:
       - PORT=4002
       - DATABASE_URL=postgres://switchyard_user:${SWITCHYARD_DB_PASSWORD}@postgres:5432/switchyard?sslmode=disable
