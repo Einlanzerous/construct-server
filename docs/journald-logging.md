@@ -152,7 +152,7 @@ sudo needs a password, so none of this is run by an agent. Do not run the whole 
 **Use the rollout script first.** `scripts/journald-logging-rollout.sh` is these steps as phases
 (modelled on `traefik-access-log-rollout.sh`): each phase runs alone, a dry run is the default and
 `--apply` really does it, every run writes a PASS / FAIL / PAUSE record under
-`~/.cache/journald-logging-rollout/` (counts only, never a log line) and `--print-evidence` prints
+`~/.cache/journald-logging-rollout/` for wave A, or `~/.cache/journald-logging-rollout-<svc>-<svc>/` for a wave with another `--svc` list, so waves never share state (counts only, never a log line) and `--print-evidence` prints
 the counts-only comment for SATL-25 / SATL-71. The manual commands below are the equivalent.
 `dropin` calls `sudo -v` up front (you type the password) and uses sudo only for the install,
 `daemon-reload` and the journald restart. It never restarts dockerd or a container.

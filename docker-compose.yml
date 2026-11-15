@@ -62,7 +62,8 @@
 # driver writes to the host journal instead, keyed by CONTAINER_NAME, so
 # `journalctl CONTAINER_NAME=<name>` returns the lines of every past container of that name.
 #
-# Adopt with `logging: *journald-logging`, one service per wave (docs/journald-logging.md).
+# Adopt with `logging: *journald-logging`, one wave per PR (docs/journald-logging.md: A satlink, B purser +
+# cf-access-guard, then switchyard, traefik).
 # Every adopter is recreated by the deploy that merges it, so the wave size is the number
 # of simultaneous restarts. NOT for plimsoll or plimsoll-llm: scripts/check-plimsoll-llm-
 # canary.sh requires them to log through json-file (PLIM-14), so do not generalise this.

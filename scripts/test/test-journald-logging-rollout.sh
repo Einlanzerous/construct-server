@@ -332,6 +332,29 @@ expect "evidence block has canary counts, drivers, vacuum baseline and Dozzle" '
 rm -f "$T/state/state.kv"
 expect "evidence with no state says so and exits non-zero" '! bash "$S" --print-evidence >/dev/null 2>&1'
 
+echo "stale state"
+rm -rf "$T/state"; reset_fake; baseline; post_merge
+go verify --confirm-dozzle >/dev/null || true
+expect "verify passes first: the evidence says verify passed" 'bash "$S" --print-evidence >"$T/evidence.md" 2>&1; cat "$T/evidence.md" >>"$T/all.log"; grep -q "verify passed: yes" "$T/evidence.md" && grep -q "Dozzle.*confirmed" "$T/evidence.md"'
+echo 1 >"$F/check_rc"
+go verify >/dev/null || true
+expect "a later failing verify in the same state dir no longer reports passed or a stale Dozzle confirmation" 'bash "$S" --print-evidence >"$T/evidence.md" 2>&1; cat "$T/evidence.md" >>"$T/all.log"; grep -q "verify passed: no" "$T/evidence.md" && ! grep -q "verify passed: yes" "$T/evidence.md" && ! grep -q "^dozzle=confirmed" "$T/state/state.kv" && ! grep -q "^verify_ok" "$T/state/state.kv"'
+rm -rf "$T/state"; reset_fake; baseline; post_merge
+go merge-gate --apply --confirm-apply >/dev/null || true
+expect "merge-gate records merge_sha and deploy_conclusion" 'grep -q "^merge_sha=" "$T/state/state.kv" && grep -q "^deploy_conclusion=success" "$T/state/state.kv"'
+printf 'merge_gate_ok=1\nmerge_sha=oldsha\ndeploy_conclusion=failure\n' >>"$T/state/state.kv"
+go merge-gate --apply >/dev/null 2>&1 || true
+expect "a stale merge_sha, deploy_conclusion and merge_gate_ok are cleared when merge-gate starts (before it pauses)" '! grep -q "^merge_sha=oldsha" "$T/state/state.kv" && ! grep -q "^deploy_conclusion=failure" "$T/state/state.kv" && ! grep -q "^merge_gate_ok" "$T/state/state.kv"'
+
+echo "per-wave state directories"
+rm -rf "$T/home/.cache"; reset_fake; post_merge_b
+( unset JOURNALD_ROLLOUT_DIR; go preflight >/dev/null || true; go preflight --svc $W >/dev/null || true; go verify --confirm-dozzle >/dev/null || true; go verify --svc $W --confirm-dozzle >/dev/null || true )
+D_A="$T/home/.cache/journald-logging-rollout"; D_B="$T/home/.cache/journald-logging-rollout-purser-cf-access-guard"
+expect "satlink-only keeps the original state path; another wave gets its own" '[ -s "$D_A/state.kv" ] && [ -s "$D_B/state.kv" ]'
+expect "wave A state has no wave B keys and wave B has no wave A keys" '! grep -q "^v_purser_driver" "$D_A/state.kv" && grep -q "^v_purser_driver" "$D_B/state.kv" && grep -q "^v_satlink_driver" "$D_A/state.kv"'
+( unset JOURNALD_ROLLOUT_DIR; rm -f "$D_B/state.kv"; bash "$S" --print-evidence --svc $W >"$T/evidence.md" 2>&1 ) && fail "wave B evidence read wave A's state" || ok "wave B evidence with no wave B state does not fall back to wave A's"
+cat "$T/evidence.md" >>"$T/all.log"
+
 echo "no log value anywhere"
 expect "no canary in any record, stdout or evidence" '! grep -qF -f "$T/canaries" "$T/all.log"'
 expect "no canary in any argv" '! grep -qF -f "$T/canaries" "$CALLS"'

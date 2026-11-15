@@ -27,22 +27,22 @@
 #                or after the installed file's mtime. Never restarts dockerd or a container. Idempotent.
 #   merge-gate   (--apply) prints the sequence and PAUSES while YOU merge the PR; then verifies via gh that it
 #                merged and that the prod deploy run for the merge commit finished green (bounded poll), then that
-#                satlink reports LogConfig.Type=journald and plimsoll / plimsoll-llm still json-file. The merge
-#                deploy itself recreates satlink onto journald.
+#                each wave service reports LogConfig.Type=journald and plimsoll / plimsoll-llm still json-file. The merge
+#                deploy itself recreates each wave service onto journald.
 #   canary       (--apply) for EACH service of the wave (default satlink; `--svc purser,cf-access-guard` or
 #                JOURNALD_ROLLOUT_SVCS, in that order, one at a time): BEFORE counts from the journal
 #                (CONTAINER_NAME=<svc> lines, the CONTAINER_ID of the
 #                running container), `make -C <deploy root> force-recreate svc=<svc>` (NEVER plain `recreate`:
 #                that is `up -d --no-deps`, a no-op on an unchanged spec; it exited 0 and left the old traefik
 #                container running), asserts the container id AND StartedAt changed, then AFTER counts: AFTER >=
-#                BEFORE, lines for the OLD container id > 0, `docker logs satlink` works, satlink healthy, zero
+#                BEFORE, lines for the OLD container id > 0, `docker logs <svc>` works, <svc> healthy, zero
 #                'Suppressed ... docker.service' notices in the window. Counts only.
 #   verify       READ-ONLY, always executes. `make journald-check`, disk usage not vacuumed, oldest entry
 #                unchanged, driver per service, the Suppressed count against the preflight baseline, and the
 #                Dozzle check that only YOU can do (recorded as PAUSE until you confirm; never an auto-PASS).
 #   rollback     (--apply, each step confirmed) the documented revert: you merge the revert of the compose
-#                logging block; this script waits for it, force-recreates satlink if it is still on journald,
-#                asserts json-file and that the journal history is still queryable. Removing the two drop-ins
+#                logging block; this script waits for it, force-recreates each wave service still on journald,
+#                asserts json-file and that the journal history is still queryable. Removing the journald drop-in (and any legacy docker.service one)
 #                and restarting journald happens ONLY with --remove-dropins.
 #   all          preflight, dropin, merge-gate, canary, verify in order, pausing before each
 #
@@ -75,8 +75,9 @@
 #
 # WHAT THE RECORD HOLDS. Counts, container ids, service names, exit codes, byte sizes, dates. Never a log line:
 # every journal read is a pipeline whose only output is a number, and the reader's output is never echoed. No
-# `set -x`. Nothing here merges, pushes or commits, and nothing here restarts dockerd or any other container
-# than satlink (canary / rollback only).
+# `set -x`. Nothing here merges, pushes or commits, and nothing here restarts dockerd, and the only containers it
+# recreates are the wave's own --svc services (canary / rollback only; recreating cf-access-guard 500s every
+# tunneled host for its restart window, see the per-service outage line the canary prints).
 
 set -euo pipefail
 set +a +x +v
@@ -100,8 +101,8 @@ SVCS=()
 ALLOWED_SVCS=(satlink purser cf-access-guard switchyard traefik)
 JSONFILE_SVCS=(plimsoll plimsoll-llm)
 DEPLOY_WORKFLOW="deploy.yml"
-STATE_DIR="${JOURNALD_ROLLOUT_DIR:-$HOME/.cache/journald-logging-rollout}"
-STATE="$STATE_DIR/state.kv"
+# STATE_DIR and STATE are set after the arguments are parsed: each wave (its --svc list) has its own state
+# directory, see "per-wave state" below.
 DEPLOY_POLL_MAX="${JOURNALD_ROLLOUT_DEPLOY_POLL_MAX:-1800}"   # seconds to wait for the deploy run
 DEPLOY_POLL_GAP="${JOURNALD_ROLLOUT_DEPLOY_POLL_GAP:-15}"
 MERGE_POLL_MAX="${JOURNALD_ROLLOUT_MERGE_POLL_MAX:-300}"
@@ -197,6 +198,10 @@ ensure_sudo() {   # the owner types the password once; everything privileged bel
 st_set() {   # st_set KEY VALUE
   mkdir -p "$STATE_DIR"; touch "$STATE"
   { grep -v "^$1=" "$STATE" 2>/dev/null || true; printf '%s=%s\n' "$1" "$2"; } >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+}
+st_clear() {   # st_clear ERE — drop every key matching ^ERE= so a phase never reports an earlier run's outcome
+  [ -f "$STATE" ] || return 0
+  { grep -Ev "^($1)=" "$STATE" 2>/dev/null || true; } >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 }
 st_get() { { grep "^$1=" "$STATE" 2>/dev/null || true; } | tail -1 | cut -d= -f2-; }
 st_or() { local v; v="$(st_get "$1")"; printf '%s' "${v:-n/a}"; }
@@ -380,12 +385,12 @@ pf_versions_deployed() {
 
 phase_preflight() {
   say "## preflight (read-only, no sudo)"
-  need gh docker jq make git awk journalctl systemctl
+  need gh docker jq make git awk journalctl systemctl systemd-analyze
   SCRATCH="$(mktemp -d)"
   PF_FAIL=0; PENDING=()
   soft "journal disk usage and the oldest entry recorded (the not-vacuumed baseline)" pf_disk
-  soft "the two drop-ins are absent, or present and byte-identical to the repo copies" pf_dropins
-  soft "LogRateLimitBurst for docker.service as PID 1 sees it recorded" pf_burst
+  soft "the journald drop-in is absent, or present and byte-identical to the repo copy (legacy docker.service drop-in recorded present/absent)" pf_dropins
+  soft "effective global RateLimitBurst/Interval from systemd-analyze cat-config recorded" pf_burst
   soft "containers counted per log driver" pf_drivers
   soft "${SVCS[*]}: driver, container id and StartedAt recorded" pf_satlink
   soft "make journald-check baseline ran (a red result is expected before the merge)" pf_check
@@ -527,6 +532,7 @@ phase_merge_gate() {
   print_merge_sequence
   if [ "$APPLY" -eq 0 ]; then say "- $(ts) DRY-RUN: would pause for the merge, then poll gh and assert the checks above"; return 0; fi
   need gh jq docker
+  st_clear 'merge_gate_ok|merge_sha|deploy_conclusion|mg_.*'
   pause "merge #$PR now (the host drop-in must already be installed). Press Enter once it is merged; the deploy then runs." force
   check "#$PR merged into main" mg_merged
   check "prod deploy run for ${MERGE_SHA:0:9} finished green" mg_deploy_green
@@ -569,6 +575,7 @@ phase_canary() {
 
 canary_one() {   # canary_one SVC — the wave A assertions, for one service
   local svc="$1" k; k="$(ckp "$svc")"
+  st_clear "${k}_(before|old_id|started_before|since|new_id|after|old_lines|docker_logs|docker_lines|suppressed|ok)"
   say "### $svc (outage during the recreate: $(outage_of "$svc"))"
   local d s0 id0 started0 jid before since after oldn s1 id1 started1 dl sup
   d="$(driver_of "$svc")"
@@ -657,6 +664,7 @@ phase_verify() {
     return 0
   fi
   need docker make journalctl jq
+  st_clear 'verify_ok|dozzle|v_.*'
   local b o
   b="$(st_get pf_disk_bytes)"; o="$(st_get pf_oldest_epoch)"
   [[ "$b" =~ ^[0-9]+$ ]] && [[ "$o" =~ ^[0-9]+$ ]] || die "no recorded preflight baseline (disk usage / oldest entry): run the preflight phase first"
@@ -710,7 +718,7 @@ phase_rollback() {
   say "     this script waits for it${REVERT_PR:+ (#$REVERT_PR)} and checks the deployed compose file gives each of ${SVCS[*]} json-file"
   say "  2. \`make -C $DEPLOY_ROOT force-recreate svc=<svc>\` for each one still on journald (the revert deploy normally recreates it already);"
   say "     assert json-file and that the journal lines are STILL queryable (\`journalctl CONTAINER_NAME=<svc>\`)"
-  say "  3. only with --remove-dropins: \`sudo rm -f\` the two drop-ins, daemon-reload, restart systemd-journald (touches no container)"
+  say "  3. only with --remove-dropins: \`sudo rm -f\` the journald drop-in (and the legacy docker.service one if present), daemon-reload, restart systemd-journald (touches no container)"
   if [ "$APPLY" -eq 0 ]; then say "- $(ts) DRY-RUN: nothing done"; return 0; fi
   need docker make jq journalctl
   [ "$REMOVE_DROPINS" -eq 0 ] || ensure_sudo
@@ -723,7 +731,7 @@ phase_rollback() {
   local w
   for w in "${SVCS[@]}"; do rollback_one "$w"; done
   if [ "$REMOVE_DROPINS" -eq 1 ]; then
-    rb_step "Step 3: remove the two host drop-ins and restart systemd-journald (no container is touched)?"
+    rb_step "Step 3: remove the journald drop-in (and any legacy docker.service one) and restart systemd-journald (no container is touched)?"
     run sudo rm -f "$JD_DIR/$JD_FILE" "$DK_DIR/$DK_FILE"; [ "$RC" -eq 0 ] || die "could not remove the drop-ins"
     run_must sudo systemctl daemon-reload
     run_must sudo systemctl restart systemd-journald
@@ -802,6 +810,17 @@ for _s in "${SVCS[@]}"; do
   case " ${ALLOWED_SVCS[*]} " in *" $_s "*) ;; *) echo "ERROR: '$_s' is not a journald wave service (allowed: ${ALLOWED_SVCS[*]}; plimsoll, plimsoll-llm and postgres are never in a wave here)" >&2; exit 2 ;; esac
 done
 SVC="${SVCS[0]}"
+# Per-wave state: wave A (satlink only) keeps the original directory so its recorded state is still read;
+# any other wave gets a sibling directory suffixed with its service list, so a later wave can never read
+# (or be shown) an earlier wave's verify_ok, merge_sha, deploy_conclusion or dozzle.
+if [ -n "${JOURNALD_ROLLOUT_DIR:-}" ]; then
+  STATE_DIR="$JOURNALD_ROLLOUT_DIR"
+elif [ "${SVCS[*]}" = satlink ]; then
+  STATE_DIR="$HOME/.cache/journald-logging-rollout"
+else
+  STATE_DIR="$HOME/.cache/journald-logging-rollout-$(IFS=-; echo "${SVCS[*]}")"
+fi
+STATE="$STATE_DIR/state.kv"
 if [ "$EVIDENCE" -eq 1 ]; then print_evidence; exit $?; fi
 [ -n "$PHASE" ] || { usage >&2; exit 2; }
 [[ "$PR" =~ ^[0-9]+$ ]] || { echo "ERROR: --pr must be a number" >&2; exit 2; }
