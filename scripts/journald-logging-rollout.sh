@@ -40,7 +40,7 @@
 #                Dozzle check that only YOU can do (recorded as PAUSE until you confirm; never an auto-PASS).
 #   rollback     (--apply, each step confirmed) the documented revert: you merge the revert of the compose
 #                logging block; this script waits for it, force-recreates satlink if it is still on journald,
-#                asserts json-file and that the journal history is still queryable. Removing the two drop-ins
+#                asserts json-file and that the journal history is still queryable. Removing the journald drop-in (and any legacy docker.service one)
 #                and restarting journald happens ONLY with --remove-dropins.
 #   all          preflight, dropin, merge-gate, canary, verify in order, pausing before each
 #
@@ -349,12 +349,12 @@ pf_versions_deployed() {
 
 phase_preflight() {
   say "## preflight (read-only, no sudo)"
-  need gh docker jq make git awk journalctl systemctl
+  need gh docker jq make git awk journalctl systemctl systemd-analyze
   SCRATCH="$(mktemp -d)"
   PF_FAIL=0; PENDING=()
   soft "journal disk usage and the oldest entry recorded (the not-vacuumed baseline)" pf_disk
-  soft "the two drop-ins are absent, or present and byte-identical to the repo copies" pf_dropins
-  soft "LogRateLimitBurst for docker.service as PID 1 sees it recorded" pf_burst
+  soft "the journald drop-in is absent, or present and byte-identical to the repo copy (legacy docker.service drop-in recorded present/absent)" pf_dropins
+  soft "effective global RateLimitBurst/Interval from systemd-analyze cat-config recorded" pf_burst
   soft "containers counted per log driver" pf_drivers
   soft "$SVC driver, container id and StartedAt recorded" pf_satlink
   soft "make journald-check baseline ran (a red result is expected before the merge)" pf_check
@@ -640,7 +640,7 @@ phase_rollback() {
   say "     this script waits for it${REVERT_PR:+ (#$REVERT_PR)} and checks the deployed compose file gives $SVC json-file"
   say "  2. \`make -C $DEPLOY_ROOT force-recreate svc=$SVC\` if it is still on journald (the revert deploy normally recreates it already);"
   say "     assert json-file and that the journal lines are STILL queryable (\`journalctl CONTAINER_NAME=$SVC\`)"
-  say "  3. only with --remove-dropins: \`sudo rm -f\` the two drop-ins, daemon-reload, restart systemd-journald (touches no container)"
+  say "  3. only with --remove-dropins: \`sudo rm -f\` the journald drop-in (and the legacy docker.service one if present), daemon-reload, restart systemd-journald (touches no container)"
   if [ "$APPLY" -eq 0 ]; then say "- $(ts) DRY-RUN: nothing done"; return 0; fi
   need docker make jq journalctl
   [ "$REMOVE_DROPINS" -eq 0 ] || ensure_sudo
@@ -671,7 +671,7 @@ phase_rollback() {
   st_set rb_journal_lines "$n"
   check "journal history stays queryable after the rollback ($n lines)" test "$n" -gt 0
   if [ "$REMOVE_DROPINS" -eq 1 ]; then
-    rb_step "Step 3: remove the two host drop-ins and restart systemd-journald (no container is touched)?"
+    rb_step "Step 3: remove the journald drop-in (and any legacy docker.service one) and restart systemd-journald (no container is touched)?"
     run sudo rm -f "$JD_DIR/$JD_FILE" "$DK_DIR/$DK_FILE"; [ "$RC" -eq 0 ] || die "could not remove the drop-ins"
     run_must sudo systemctl daemon-reload
     run_must sudo systemctl restart systemd-journald
