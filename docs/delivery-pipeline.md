@@ -836,3 +836,61 @@ not declared anywhere will encode the confusion rather than resolve it.
    deploys would be version-pinned?
 6. **Host-process dev loops** — containerize the argosy / switchyard dev servers, or
    accept host processes and just make them visible in the matrix?
+
+## Why `promote.yml` pushes with a PAT (moved from `CLAUDE.md`, SERV-317)
+
+It needs **two** things, and asserts both rather than failing obscurely: that
+environment must have a required reviewer, and `PROMOTE_PUSH_TOKEN` must exist.
+**The push to `main` needs a PAT and cannot use `GITHUB_TOKEN`.** `main` is
+protected by the `Protect Main` *ruleset* — not classic branch protection, which is
+why `branches/main/protection` returns 404 and it looks unprotected — and that
+ruleset's only bypass actor is the **admin** repository role. `GITHUB_TOKEN` acts as
+the `github-actions[bot]` app installation, holds no repository role, and its push
+is rejected with GH013. **Adding GitHub Actions to the bypass list is not possible
+here**: `Integration` bypass actors must belong to an organization and this repo is
+owned by a user, so the picker omits it and the API returns
+`422 … must be part of the ruleset source or owner organization`. A PAT
+authenticates as the admin user and bypasses via the existing entry, so no ruleset
+change is involved. One consequence: a PAT-authored push **does** fire `deploy.yml`
+on its own, where a `GITHUB_TOKEN` one would not — so `promote.yml` must never also
+dispatch `deploy.yml`, or every promote runs two concurrent deploys of the same
+commit.
+
+## A host daemon the reconciler can already reach is not a producer (SERV-128)
+
+Moved from `CLAUDE.md`, SERV-317. Complements "One cron, however many producers" above.
+
+**A host daemon the reconciler can already reach is NOT a producer, and signet
+is the case that settles it** (SERV-128). The obvious reading of the rule above
+is that anything on the host becomes another `ExecStart`; for signet that is
+wrong twice over. The prober posts under one `PROBE_ENVIRONMENT` for the whole
+unit, and signet is not dev — while `prod` is `probe_mode: internal`, so ingest
+**400s** an external probe result for it (`environment … is probed internally`).
+A third `ExecStart` could therefore only file signet under a tier it does not
+run in, or need a whole new environment column. Meanwhile signet binds
+`172.17.0.1` deliberately — its `Serve()` refuses to start if the docker-bridge
+bind fails, precisely so it cannot come up answering the host while refusing
+every container — so the in-process reconciler can simply probe it. It is
+registered as an ordinary first-party service on port 4010 and observed in the
+**prod** column, with `extra_hosts: signet:host-gateway` on the switchyard
+container making prod's `http://{service}:{port}` template resolve. No new cron,
+no new environment, and the one-cron rule is untouched because nothing was
+added to the host at all. The per-pair `host_override` column looks like the
+intended seam for this and is not usable: no API writes it, and its row does not
+exist until after the first probe has already been recorded at the wrong address.
+**Its token carries `deployments:observe` and never `deployments:write`.** A
+report is a claim, an observation corroborates it, and
+`claimed_not_confirmed` only means something if corroborating is the harder of
+the two — a prober that could report would confirm its own claims. Mint it with
+`scripts/mint-prober-token.sh`, which **asserts** the granted scopes: the server
+defaults to `admin` when `scopes` is omitted, so a typo in the field *name*
+mints a working admin token and nothing ever surfaces it.
+The prober script itself is **not vendored here** — it lives in switchyard's
+`server/scripts/` and is run out of the image the live switchyard container is
+already using, so prober and ingest are always the same build. That is also why
+`scripts/**` is a `deploy.yml` path trigger: the unit executes
+`$DEPLOY_ROOT/scripts/probe-delivery.sh`, so a wrapper fix that never deploys
+leaves the box running the old copy.
+**Adding a target requires the service to exist in Switchyard's inventory
+first.** A probe that got no usable answer deliberately does not auto-register
+one (SWY-284) — "down" and "misspelled" are indistinguishable from outside — so
