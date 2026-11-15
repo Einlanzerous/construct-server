@@ -80,7 +80,8 @@ right call, but it should be visible.
 
 **All repos follow Conventional Commits + release-please.** New repos go on this
 flow on day one — it is not optional. Release-please owns `CHANGELOG.md` and
-version bumps; don't hand-edit either.
+version bumps; don't hand-edit either. A new repo with PRs also needs the Switchyard
+webhook (`scripts/add-switchyard-webhook.sh`), or auto-attach never fires for them.
 
 Keep the type vocabulary small. In practice there are four:
 
@@ -115,7 +116,8 @@ Title the PR as a conventional commit with the ticket key in the subject —
 it is the service or subsystem. Do **not** prefix with the bare key (`SERV-62: …`):
 under squash that becomes the commit subject, release-please does not recognise it,
 and the release silently does not cut. Auto-attach finds the key anywhere in the
-title or branch, so the prefix buys nothing and costs a release.
+title or branch (in repos with the Switchyard webhook), so the prefix buys nothing
+and costs a release.
 
 Branches are `{type}/{slug}-{key}`.
 
@@ -393,7 +395,10 @@ that just rename a canonical one** ("Building" for "In Progress", "PR Open" for
 fragment the surface without adding signal.
 
 **PR state is tracked separately, not as a status.** Name the PR and branch per §3;
-auto-attach links the external ref; the poller then observes merge and fires
+auto-attach links the external ref when the title or branch carries the key and the
+repo has the Switchyard webhook; anything else, including commit-only work, is
+attached by hand with `attach_external_ref` (a 409 means it is already attached).
+The poller then observes merge and fires
 `ticket.external_ref_state_changed`, which the close-on-merge rule converts into a
 transition to `Closed` with `resolution: done`. **The ticket stays `In Progress` the
 whole time the PR is open** — there is no "PR Open" status and there shouldn't be.
