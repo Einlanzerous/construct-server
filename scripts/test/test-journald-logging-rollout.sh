@@ -5,7 +5,8 @@
 # is a few files under $T. The fake journal prints a CANARY line for every line it counts, so any path that
 # let a log line out would show in a record, stdout or an argv.
 # Proves, per phase, a pass path and the fail paths: drop-in not byte-identical, vacuum detected (usage and
-# oldest entry), burst wrong/missing (wave-C blocker, canary not blocked), StartedAt/id unchanged after
+# oldest entry), global rate limit not effective / journald not restarted after the file, legacy docker.service
+# drop-in removed without a dockerd restart, StartedAt/id unchanged after
 # force-recreate (the traefik no-op lesson), pre-recreate lines missing, old container id absent,
 # Suppressed > 0, plimsoll switched to journald, dry-run runs nothing, plain `make recreate` never called,
 # dockerd never restarted.
@@ -27,11 +28,10 @@ printf '%s\n' "$CANARY" >"$T/canaries"
 # ── a repo stand-in: the script, the two drop-ins, a Makefile target for journald-check ──
 R="$T/repo"; mkdir -p "$R/scripts" "$R/ansible/roles/server/files/journald"
 cp "$SRC" "$R/scripts/"
-printf '[Journal]\nSystemMaxUse=6G\n' >"$R/ansible/roles/server/files/journald/50-construct-containers.conf"
-printf '[Service]\nLogRateLimitIntervalSec=30s\nLogRateLimitBurst=50000\n' >"$R/ansible/roles/server/files/journald/50-log-rate.conf"
+printf '[Journal]\nSystemMaxUse=6G\nRateLimitIntervalSec=30s\nRateLimitBurst=50000\n' >"$R/ansible/roles/server/files/journald/50-construct-containers.conf"
 git -C "$R" init -q -b main; git -C "$R" add -A; git -C "$R" -c user.email=a@b -c user.name=a commit -q -m x
 S="$R/scripts/journald-logging-rollout.sh"
-JDF=50-construct-containers.conf; DKF=50-log-rate.conf
+JDF=50-construct-containers.conf; DKF=50-log-rate.conf   # DKF is the LEGACY docker.service drop-in
 
 D="$T/deploy"; mkdir -p "$D"; : >"$D/docker-compose.yml"; : >"$D/.env"
 printf 'LYCEUM_TAG=1.13\n' >"$D/versions.env"
@@ -51,10 +51,13 @@ if [ "$1" = install ]; then shift
 exec "$@"'
 # systemctl: restart journald optionally "vacuums" (shrinks usage / moves the oldest entry); restarting docker is recorded.
 mk systemctl 'case "$*" in
-  *"show docker.service"*) cat "$FAKE/burst" 2>/dev/null || echo 50000 ;;
+  *"show --timestamp=unix systemd-journald"*) echo "@$(cat "$FAKE/jstart")" ;;
   *"restart systemd-journald"*) [ -e "$FAKE/vacuum_usage" ] && echo "1.0G" >"$FAKE/disk"; [ -e "$FAKE/vacuum_oldest" ] && echo 1760000000 >"$FAKE/oldest"; exit 0 ;;
   *) exit 0 ;;
 esac'
+# systemd-analyze cat-config: the effective journald.conf; the repo drop-in contributes its lines once installed.
+mk systemd-analyze 'echo "[Journal]"; echo "# RateLimitBurst=1"; [ -n "$(cat "$FAKE/eff_burst" 2>/dev/null)" ] && echo "RateLimitBurst=$(cat "$FAKE/eff_burst")"
+[ -n "$(cat "$FAKE/eff_interval" 2>/dev/null)" ] && echo "RateLimitIntervalSec=$(cat "$FAKE/eff_interval")"; exit 0'
 # journalctl: counts come from files; every counted line is the CANARY.
 mk journalctl 'emit() { local n="$1" i; for ((i = 0; i < n; i++)); do echo "$CANARY secret reading $i"; done; }
 case "$*" in
@@ -112,7 +115,7 @@ export JOURNALD_ROLLOUT_HEALTHY_MAX=2
 reset_fake() {
   rm -rf "$F"/* "$T/etc/jd/"* "$T/etc/dk/"* "$T/run/"* "$T/state"; mkdir -p "$F"; : >"$CALLS"
   echo "2.7G" >"$F/disk"; echo 1750000000 >"$F/oldest"
-  echo 10000 >"$F/burst"
+  echo 4000000000 >"$F/jstart"; : >"$F/eff_burst"; : >"$F/eff_interval"
   echo 0 >"$F/suppressed"
   echo OPEN >"$F/gh_state"
   echo '{"state":"MERGED","baseRefName":"main","mergeCommit":{"oid":"abcdef0123456789abcdef0123456789abcdef01"}}' >"$F/gh_pr"
@@ -128,11 +131,13 @@ reset_fake() {
   echo "2026-11-14T01:00:00.000000000Z" >"$F/started"
   echo 40 >"$F/count"
 }
-# the world as it is after the merge deploy: satlink on journald, the host drop-ins installed and the /run file written
+# the world as it is after the merge deploy: satlink on journald, the journald drop-in installed and effective
 post_merge() {
-  echo journald >"$F/drv_satlink"; echo 50000 >"$F/burst"; echo 50000 >"$T/run/log-rate-limit-burst:docker.service"
-  cp "$R/ansible/roles/server/files/journald/$JDF" "$T/etc/jd/$JDF"; cp "$R/ansible/roles/server/files/journald/$DKF" "$T/etc/dk/$DKF"
+  echo journald >"$F/drv_satlink"; echo 50000 >"$F/eff_burst"; echo 30s >"$F/eff_interval"
+  cp "$R/ansible/roles/server/files/journald/$JDF" "$T/etc/jd/$JDF"
 }
+# the world once the journald drop-in is effective (what dropin --apply needs the host to look like after the restart)
+effective() { echo 50000 >"$F/eff_burst"; echo 30s >"$F/eff_interval"; }
 # preflight state as the owner would have it (verify and evidence need the baseline)
 baseline() { go preflight >/dev/null; }
 go() { local rc=0; rm -f "$T/rec.md"; setsid -w bash "$S" --record "$T/rec.md" "$@" >"$T/out.txt" 2>&1 </dev/null || rc=$?; cat "$T/rec.md" "$T/out.txt" >>"$T/all.log" 2>/dev/null || true; return $rc; }
@@ -157,7 +162,9 @@ expect "preflight recorded baseline, drivers, satlink and PR state" 'grep -q "^p
 expect "preflight dropins absent are recorded" 'grep -q "pf_dropin_journald=absent" "$T/state/state.kv"'
 expect "preflight needs no sudo and made no mutating call" '! grep -Eq "^sudo|recreate|install|restart" "$CALLS"'
 reset_fake; post_merge
-expect "dropins present and identical pass preflight" '[ "$(rc_of go preflight)" = 0 ] && grep -q "pf_dropin_docker=identical" "$T/state/state.kv"'
+expect "dropin present and identical passes preflight, legacy docker drop-in absent" '[ "$(rc_of go preflight)" = 0 ] && grep -q "pf_dropin_journald=identical" "$T/state/state.kv" && grep -q "pf_dropin_docker=absent" "$T/state/state.kv"'
+reset_fake; cp "$R/ansible/roles/server/files/journald/$JDF" "$T/etc/jd/$JDF"; printf '[Service]\n' >"$T/etc/dk/$DKF"
+expect "a leftover legacy docker.service drop-in is recorded, not a failure" '[ "$(rc_of go preflight)" = 0 ] && grep -q "pf_dropin_docker=present" "$T/state/state.kv"'
 reset_fake; echo "[Journal]" >"$T/etc/jd/$JDF"
 expect "a dropin present but NOT byte-identical FAILS preflight" '[ "$(rc_of go preflight)" = 1 ] && grep -q "FAIL.*byte-identical" "$T/rec.md"'
 reset_fake; echo 7 >"$F/check_rc"
@@ -170,28 +177,35 @@ expect "--apply with no terminal PAUSES on drift (exit 3)" '[ "$(rc_of go prefli
 expect "--confirm-apply proceeds past the drift pause" '[ "$(rc_of go preflight --apply --confirm-apply)" = 0 ]'
 
 echo "dropin"
-reset_fake; echo 50000 >"$F/burst"; echo 50000 >"$T/run/log-rate-limit-burst:docker.service"
+reset_fake; effective
 expect "dropin --apply passes" '[ "$(rc_of go dropin --apply)" = 0 ] && ! grep -q FAIL "$T/rec.md"'
-expect "dropin: both installed files equal the repo copies" 'cmp -s "$R/ansible/roles/server/files/journald/$JDF" "$T/etc/jd/$JDF" && cmp -s "$R/ansible/roles/server/files/journald/$DKF" "$T/etc/dk/$DKF"'
-expect "dropin: sudo -v first, then install -d, install x2, daemon-reload, restart journald" \
-  '[ "$(grep -n "" "$CALLS" | grep -E "sudo -v|sudo install -d|sudo install -m|systemctl daemon-reload|systemctl restart systemd-journald" | sed "s/^[0-9]*://" | head -1)" = "sudo -v" ] && [ "$(grep -c "^sudo install -m 0644" "$CALLS")" = 2 ] && grep -q "^sudo install -d" "$CALLS" && grep -q "^systemctl daemon-reload" "$CALLS" && grep -q "^systemctl restart systemd-journald" "$CALLS"'
+expect "dropin: the installed file equals the repo copy; no docker.service drop-in is installed" 'cmp -s "$R/ansible/roles/server/files/journald/$JDF" "$T/etc/jd/$JDF" && [ ! -e "$T/etc/dk/$DKF" ]'
+expect "dropin: sudo -v first, then install -d, one install, restart journald (no legacy file: no daemon-reload)" \
+  '[ "$(grep -n "" "$CALLS" | grep -E "sudo -v|sudo install -d|sudo install -m|systemctl daemon-reload|systemctl restart systemd-journald" | sed "s/^[0-9]*://" | head -1)" = "sudo -v" ] && [ "$(grep -c "^sudo install -m 0644" "$CALLS")" = 1 ] && grep -q "^sudo install -d" "$CALLS" && ! grep -q "^systemctl daemon-reload" "$CALLS" && grep -q "^systemctl restart systemd-journald" "$CALLS"'
+expect "dropin records the effective burst/interval and that journald restarted after the file" 'grep -q "^dropin_burst=50000" "$T/state/state.kv" && grep -q "^dropin_interval=30s" "$T/state/state.kv" && grep -q "^ratelimit_ok=1" "$T/state/state.kv" && grep -q "PASS.*HOST-WIDE rate limit" "$T/rec.md"'
 expect "dropin never restarts dockerd or a container" '! grep -Eq "restart docker|docker (restart|stop|kill)|compose (restart|up)|force-recreate" "$CALLS"'
 : >"$CALLS"
 expect "dropin rerun is idempotent (install skipped)" '[ "$(rc_of go dropin --apply)" = 0 ] && grep -q "install skipped" "$T/rec.md" && ! grep -q "^sudo install -m" "$CALLS"'
-reset_fake; echo 50000 >"$F/burst"; echo 50000 >"$T/run/log-rate-limit-burst:docker.service"; touch "$F/corrupt_install"
+reset_fake; effective; printf '[Service]\n' >"$T/etc/dk/$DKF"
+expect "the legacy docker.service drop-in is removed, with daemon-reload only; dockerd untouched" \
+  '[ "$(rc_of go dropin --apply)" = 0 ] && [ ! -e "$T/etc/dk/$DKF" ] && grep -q "^sudo rm -f .*$DKF" "$CALLS" && grep -q "^systemctl daemon-reload" "$CALLS" && ! grep -Eq "restart docker|docker (restart|stop|kill)" "$CALLS"'
+reset_fake; effective; touch "$F/corrupt_install"
 expect "an installed copy that differs FAILS byte-for-byte" '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "FAIL.*byte for byte" "$T/rec.md"'
-reset_fake; echo 50000 >"$F/burst"; echo 50000 >"$T/run/log-rate-limit-burst:docker.service"; touch "$F/vacuum_usage"
+reset_fake; effective; touch "$F/vacuum_usage"
 expect "usage shrinking after the restart (a vacuum) FAILS" '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "FAIL.*nothing vacuumed" "$T/rec.md"'
-reset_fake; echo 50000 >"$F/burst"; echo 50000 >"$T/run/log-rate-limit-burst:docker.service"; touch "$F/vacuum_oldest"
+reset_fake; effective; touch "$F/vacuum_oldest"
 expect "the oldest entry moving (a vacuum) FAILS" '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "oldest entry moved" "$T/rec.md"'
-reset_fake; echo 50000 >"$F/burst"
-expect "a missing /run file is a WAVE-C blocker: FAIL line, canary not blocked, exit 1, files still installed" \
-  '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "FAIL.*WAVE-C BLOCKER, NOT a canary blocker" "$T/rec.md" && grep -q "global RateLimitBurst fallback" "$T/rec.md" && grep -q "^wavec_blocker=1" "$T/state/state.kv" && grep -q "^dropin_ok=1" "$T/state/state.kv"'
-reset_fake; echo 50000 >"$T/run/log-rate-limit-burst:docker.service"; echo 10000 >"$F/burst"
-expect "PID 1 still on the default burst is a wave-C blocker too" '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "WAVE-C BLOCKER" "$T/rec.md"'
-reset_fake; echo 50000 >"$F/burst"; echo 10000 >"$T/run/log-rate-limit-burst:docker.service"
-expect "a wrong /run value is a wave-C blocker" '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "WAVE-C BLOCKER" "$T/rec.md"'
-reset_fake; echo 1 >"$F/sudo_rc"
+reset_fake
+expect "a global limit that is not in the effective config FAILS (hard, not a later blocker)" '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "FAIL.*HOST-WIDE rate limit" "$T/rec.md" && grep -q "effective limit is not 50000 per 30s" "$T/rec.md" && ! grep -q "^ratelimit_ok" "$T/state/state.kv"'
+reset_fake; echo 10000 >"$F/eff_burst"; echo 30s >"$F/eff_interval"
+expect "an effective burst of 10000 FAILS" '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "FAIL.*HOST-WIDE" "$T/rec.md"'
+reset_fake; echo 50000 >"$F/eff_burst"; echo 10s >"$F/eff_interval"
+expect "a wrong interval FAILS" '[ "$(rc_of go dropin --apply)" = 1 ]'
+reset_fake; effective; echo 1 >"$F/jstart"
+expect "journald started BEFORE the file was written (not restarted) FAILS" '[ "$(rc_of go dropin --apply)" = 1 ] && grep -q "started BEFORE the file was written" "$T/rec.md"'
+reset_fake; effective; echo >"$F/jstart"
+expect "an unreadable journald start time FAILS" '[ "$(rc_of go dropin --apply)" = 1 ]'
+reset_fake; effective; echo 1 >"$F/sudo_rc"
 expect "no sudo (wrong password) stops before anything is installed" '[ "$(rc_of go dropin --apply)" = 1 ] && [ -z "$(find "$T/etc" -type f)" ]'
 
 echo "merge-gate"
