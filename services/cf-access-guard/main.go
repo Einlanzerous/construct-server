@@ -31,11 +31,21 @@
 //
 // # Deliberate non-features
 //
-// It adds NO headers to the requests it approves. Switchyard and Lyceum already
-// validate the same assertion themselves for SSO sign-in (SWY-161, LYCM-803);
-// handing them a guard-asserted identity header would create a second, weaker
-// path to the same trust decision — exactly the spoofable-identity-header shape
-// that strip-identity-headers exists to prevent.
+// It adds NO identity header to the requests it approves, with one exception:
+// X-Access-Subject, the opaque Access `sub`, on a 2xx (SATL-24). The reason is
+// log identity, never an auth input. Traefik's access log can name WHO made a
+// request only if a header carries it, and the alternatives are worse: the
+// Cf-Access-Authenticated-User-Email header is a person's email and must not sit in
+// a log on disk, and the Cf-Access-Jwt-Assertion is a bearer-grade token. `sub` is
+// already opaque (a per-user, per-application UUID), so it is the one identity
+// value safe to log. Nothing may AUTHORISE on it: Switchyard and Lyceum already
+// validate the same assertion themselves for SSO (SWY-161, LYCM-803), and treating
+// a guard-asserted header as an auth input would create a second, weaker path to
+// the same trust decision — exactly the spoofable-identity-header shape that
+// strip-identity-headers exists to prevent. That is why X-Access-Subject is ALSO
+// listed in strip-identity-headers: a client-supplied copy is deleted on ingress,
+// and only this guard's value can reach the request (via authResponseHeaders).
+// The header is inert until traefik.yml logs it (accessLog.fields.headers).
 //
 // It reads the assertion from the Cf-Access-Jwt-Assertion header only, not from
 // the CF_Authorization cookie. Cloudflare injects the header on every proxied
@@ -68,6 +78,11 @@ import (
 
 	"github.com/Einlanzerous/construct-server/pkg/cfaccess"
 )
+
+// subjectHeader carries the opaque Access `sub` back to Traefik on a 2xx, for the
+// access log only (SATL-24). Must match authResponseHeaders on cf-access-jwt and
+// the strip entry in strip-identity-headers (config/traefik*/dynamic/routers.yml).
+const subjectHeader = "X-Access-Subject"
 
 type mode string
 
@@ -293,6 +308,12 @@ func (g *guard) handleVerify(w http.ResponseWriter, r *http.Request) {
 		g.log.Info("access assertion accepted", "host", host, "email", claims.Email)
 	}
 	w.Header().Set("X-Cf-Access-Guard", "allow")
+	// Only for a verified token. In audit mode a rejected request is allowed with
+	// no claims, so this is deliberately unreachable from there: no subject is
+	// asserted for a request that did not verify.
+	if claims != nil && claims.Subject != "" {
+		w.Header().Set(subjectHeader, claims.Subject)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 

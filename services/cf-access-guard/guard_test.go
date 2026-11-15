@@ -320,3 +320,80 @@ func TestLoadConfigNormalisesADashboardPaste(t *testing.T) {
 		t.Fatalf("issuer = %q, want %q", v.Issuer(), testIssuer)
 	}
 }
+
+func verifyRequest(host, token string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
+	req.Header.Set("X-Forwarded-Host", host)
+	if token != "" {
+		req.Header.Set("Cf-Access-Jwt-Assertion", token)
+	}
+	return req
+}
+
+// SATL-24: the opaque `sub` goes back to Traefik on a 2xx so the access log can
+// name an actor. The email must never take that route.
+func TestAcceptedRequestCarriesTheOpaqueSubjectAndNothingPersonal(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	rec := httptest.NewRecorder()
+	g.handleVerify(rec, verifyRequest(switchyardHost, signToken(t, switchyardAud)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get(subjectHeader); got != "abc123" {
+		t.Fatalf("%s = %q, want the token's sub", subjectHeader, got)
+	}
+	for name, vals := range rec.Header() {
+		for _, v := range vals {
+			if v == "operator@example.com" {
+				t.Fatalf("header %s carries the email", name)
+			}
+		}
+	}
+}
+
+// A 403 must assert no identity, whatever the client sent.
+func TestDeniedRequestCarriesNoSubject(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	for name, req := range map[string]*http.Request{
+		"no assertion":   verifyRequest(switchyardHost, ""),
+		"wrong audience": verifyRequest(switchyardHost, signToken(t, wikiAud)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			req.Header.Set(subjectHeader, "forged")
+			rec := httptest.NewRecorder()
+			g.handleVerify(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			if got := rec.Header().Get(subjectHeader); got != "" {
+				t.Fatalf("%s = %q on a 403", subjectHeader, got)
+			}
+		})
+	}
+}
+
+// The subject is never taken from the request: a client-supplied copy is not
+// echoed, and audit mode's allow-on-rejection asserts no identity either.
+func TestSubjectComesFromTheVerifiedTokenOnly(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	req := verifyRequest(switchyardHost, signToken(t, switchyardAud))
+	req.Header.Set(subjectHeader, "forged")
+	rec := httptest.NewRecorder()
+	g.handleVerify(rec, req)
+	if got := rec.Header().Get(subjectHeader); got != "abc123" {
+		t.Fatalf("%s = %q, want the token's sub, not the client's", subjectHeader, got)
+	}
+
+	audit := testGuard(t, modeAudit, true)
+	req = verifyRequest(switchyardHost, "")
+	req.Header.Set(subjectHeader, "forged")
+	rec = httptest.NewRecorder()
+	audit.handleVerify(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get(subjectHeader); got != "" {
+		t.Fatalf("audit-allowed unverified request got %s = %q", subjectHeader, got)
+	}
+}
