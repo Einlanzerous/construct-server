@@ -140,10 +140,9 @@ func testGuard(t *testing.T, m mode, withKeys bool) *guard {
 	// withKeys=false gives a certs endpoint that always fails: the verifier holds
 	// no keys, which is the state a guard is in before its first successful
 	// refresh and the one it must fail closed from.
-	v, err := cfaccess.New(cfaccess.Config{
-		TeamDomain: testTeam,
-		HTTPClient: certsClient(t, withKeys),
-	})
+	vc := verifierConfig(g.cfg, g.log)
+	vc.HTTPClient = certsClient(t, withKeys)
+	v, err := cfaccess.New(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
