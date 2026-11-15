@@ -41,8 +41,21 @@ log:
 # stdout, not a file. Prod writes to a shared volume because crowdsec tails it;
 # there is no crowdsec in dev, so `docker logs traefik-dev` is the whole story and
 # a volume nobody reads is just a disk that fills.
+#
+# SATL-24: header fields mirror prod's (config/traefik/traefik.yml). `drop` is the
+# default and is spelled out so no other header (cookies, Authorization, the
+# Cf-Access-* assertion and email) can ever land in the log. X-Access-Subject is the
+# opaque Access `sub` that cf-access-guard returns and cf-access-jwt copies onto the
+# request via authResponseHeaders.
 accessLog:
   format: json
+  fields:
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+        Upgrade: keep
+        X-Access-Subject: keep
 
 entryPoints:
   # The ONLY entrypoint. cloudflared-dev dials this at http://traefik-dev:9080.
