@@ -14,7 +14,7 @@
 #                vault=1` from a scratch checkout of main, access.log size and no rotated sibling,
 #                traefik uptime + image, crowdsec lines-read baseline, satlink collector baseline,
 #                `make edge-auth-check` baseline. Every check runs; the run fails if any failed.
-#   dropin       validate config/logrotate/traefik-access with `sudo logrotate -d`, `sudo install` it to
+#   dropin       validate ansible/roles/server/templates/traefik-access.j2 with `sudo logrotate -d`, `sudo install` it to
 #                /etc/logrotate.d/traefik-access, `logrotate -d` the installed file, assert it equals the
 #                repo copy byte for byte. Idempotent.
 #   merge-gate   prints the exact sequence and PAUSES while YOU merge #299 (retarget to main first);
@@ -69,7 +69,7 @@ GH_REPO="${TRAEFIK_ROLLOUT_GH_REPO:-Einlanzerous/construct-server}"
 DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/construct-server}"
 GUARD_PR=296
 PR="${TRAEFIK_ROLLOUT_PR:-299}"
-DROPIN_SRC="${DROPIN_SRC:-$REPO/config/logrotate/traefik-access}"
+DROPIN_SRC="${DROPIN_SRC:-$REPO/ansible/roles/server/templates/traefik-access.j2}"
 DROPIN_DEST="${DROPIN_DEST:-/etc/logrotate.d/traefik-access}"
 LOG_DIR="${TRAEFIK_LOG_DIR:-/var/lib/docker/volumes/construct-server_traefik_access_logs/_data}"
 CTR_LOG_DIR="/var/log/traefik"           # the same volume inside crowdsec / traefik
@@ -366,6 +366,7 @@ pf_edge_auth() {
 
 phase_preflight() {
   say "## preflight (read-only)"
+  pick_reader
   need gh docker jq make curl git awk
   SCRATCH="$(mktemp -d)"
   PF_FAIL=0; PENDING=()
@@ -412,7 +413,7 @@ phase_dropin() {
     return 0
   fi
   need sudo logrotate cmp install
-  [ -f "$DROPIN_SRC" ] || die "no drop-in at $DROPIN_SRC (run this from a checkout that has config/logrotate/traefik-access)"
+  [ -f "$DROPIN_SRC" ] || die "no drop-in at $DROPIN_SRC (run this from a checkout that has the template; it has no variables, so the role renders the same bytes)"
   run sudo -v; [ "$RC" -eq 0 ] || die "sudo not available"
   LRTMP="$(mktemp -d)"
   run_must sudo install -m 0644 -o root -g root "$DROPIN_SRC" "$LRTMP/traefik-access"
@@ -547,6 +548,7 @@ phase_recreate() {
 
 phase_verify() {
   say "## verify (read-only, counts only)"
+  pick_reader
   need docker jq make
   local off since c base now i
   off="$(st_get recreate_offset)"; since="$(st_get recreate_ts)"
@@ -670,7 +672,7 @@ phase_rollback() {
   say "revert routers.yml (hot reload) then the guard. This script does steps 1-3 below; 4 is yours."
   say "  1. restore the previous traefik.yml (git: ${ref}:config/traefik/traefik.yml) onto $tgt"
   say "  2. make -C $DEPLOY_ROOT recreate svc=traefik, then the healthy probe and make edge-auth-check"
-  say "  3. sudo rm -f $DROPIN_DEST"
+  say "  3. sudo rm -f $DROPIN_DEST   (the ansible server role reinstalls it on the next --tags logrotate run: revert its task too)"
   say "  4. (yours) git revert the traefik.yml change on main so the next deploy does not re-copy it, then routers.yml, then the guard"
   if [ "$APPLY" -eq 0 ]; then say "- $(ts) DRY-RUN: nothing done"; return 0; fi
   need git docker make curl

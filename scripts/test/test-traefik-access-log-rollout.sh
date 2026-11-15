@@ -29,9 +29,9 @@ UA='Canary-Agent/9.9'; SUBJ='canary-subject-0001'; MAIL='canary.person@example.t
 printf '%s\n' "$UA" "$SUBJ" "$MAIL" "$IP" >"$T/canaries"
 
 # ── a repo stand-in: the script copy, a drop-in, two commits of traefik.yml, an origin with main ──
-R="$T/repo"; mkdir -p "$R/scripts" "$R/config/logrotate" "$R/config/traefik"
+R="$T/repo"; mkdir -p "$R/scripts" "$R/ansible/roles/server/templates" "$R/config/traefik"
 cp "$SRC" "$R/scripts/"
-printf '# synthetic drop-in\n/x/access.log {\n  daily\n}\n' >"$R/config/logrotate/traefik-access"
+printf '# synthetic drop-in\n/x/access.log {\n  daily\n}\n' >"$R/ansible/roles/server/templates/traefik-access.j2"
 printf 'accessLog:\n  format: json\nentryPoints:\n  internal:\n    address: "172.31.240.10:9080"\n' >"$R/config/traefik/traefik.yml"
 git -C "$R" init -q -b main; git -C "$R" add -A; git -C "$R" -c user.email=a@b -c user.name=a commit -q -m old
 printf 'accessLog:\n  format: json\n  fields:\n    headers:\n      names:\n        X-Access-Subject: keep\nentryPoints:\n  internal:\n    address: "172.31.240.10:9080"\n' >"$R/config/traefik/traefik.yml"
@@ -168,7 +168,7 @@ expect "deployed versions.env differing from origin/main is pending" 'go preflig
 echo "dropin"
 reset_fake
 expect "dropin --apply passes" '[ "$(rc_of go dropin --apply)" = 0 ]'
-expect "dropin: installed file equals the repo copy" 'cmp -s "$R/config/logrotate/traefik-access" "$T/etc/traefik-access"'
+expect "dropin: installed file equals the repo copy" 'cmp -s "$R/ansible/roles/server/templates/traefik-access.j2" "$T/etc/traefik-access"'
 expect "dropin: validated twice and notes the ansible role" '[ "$(grep -c "^logrotate -d" "$CALLS")" = 2 ] && grep -q -- "--tags logrotate" "$T/rec.md"'
 : >"$CALLS"
 expect "dropin rerun is idempotent (install skipped)" '[ "$(rc_of go dropin --apply)" = 0 ] && grep -q "install skipped" "$T/rec.md" && [ "$(grep -c "^sudo install" "$CALLS")" = 1 ]'
@@ -241,7 +241,7 @@ go verify >/dev/null || true
 expect "a green verify marks the state" 'grep -q "^verify_ok=1" "$T/state/state.kv"'
 
 echo "rotate"
-rot_ready() { reset_fake; set_state; good; go verify >/dev/null; cp "$R/config/logrotate/traefik-access" "$T/etc/traefik-access"; printf 'dropin_ok=1\n' >>"$T/state/state.kv"
+rot_ready() { reset_fake; set_state; good; go verify >/dev/null; cp "$R/ansible/roles/server/templates/traefik-access.j2" "$T/etc/traefik-access"; printf 'dropin_ok=1\n' >>"$T/state/state.kv"
   printf '[traefik-rollup] read 5 lines\n[traefik-rollup] rotated file read: 5 lines\n' >"$F/satlink.log"; }
 rot_ready
 expect "rotate without a terminal or --confirm-rotate refuses" '[ "$(rc_of go rotate --apply)" = 1 ] && ! grep -q "^logrotate -f" "$CALLS" && [ ! -e "$T/logs/access.log.1" ]'
