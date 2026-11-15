@@ -58,7 +58,7 @@
 #
 # WAVES. --svc a,b names the wave's services (allowed: satlink purser cf-access-guard switchyard traefik; never
 # plimsoll, plimsoll-llm or postgres). It drives the preflight driver records, merge-gate, canary, verify and
-# rollback checks. Wave B: `--svc purser,cf-access-guard --pr <wave PR>`. Wave D: `--svc traefik --pr <wave PR>` (the canary is a SECOND ~12 s edge outage after the deploy's own). The default, satlink, behaves as before
+# rollback checks. Wave B: `--svc purser,cf-access-guard --pr <wave PR>`; wave C: `--svc switchyard --pr <wave PR>`; wave D: `--svc traefik --pr <wave PR>` (the canary is a SECOND ~12 s edge outage after the deploy's own). The default, satlink, behaves as before
 # and keeps its state keys; another service's canary keys are canary_<svc>_*. The dry-run plan of the canary
 # prints each service's outage.
 #
@@ -221,7 +221,7 @@ outage_of() {
     satlink) echo "the dashboard is down for a few seconds; its Docker-state exporter may read unavailable for up to 90 s" ;;
     purser) echo "purser's API on port 4006 is down for its start window (healthcheck start_period 10 s); it has no Traefik router and no dependents, deploy tooling just pauses" ;;
     cf-access-guard) echo "every tunneled host behind forwardAuth answers with 500s for a few seconds (Traefik retries per request; the compose notes say a few seconds); the public Argosy path is not gated by it" ;;
-    switchyard) echo "a few seconds of API/MCP errors; agents mid-request retry and GitHub retries webhook deliveries" ;;
+    switchyard) echo "the Switchyard API and the MCP server (switchyard-mcp forwards to it) are unavailable for its start window (healthcheck start_period 15 s); the GitHub webhook receiver also answers nothing, and GitHub does NOT redeliver on its own (the poller reconciles PR state); PR-review jobs report a ticket fetch failure as a caveat; interlock-worker does not use it" ;;
     traefik) echo "the whole edge (public Argosy path and every tunneled app, every public host) is down for about 12 s (12.1 s measured in the SATL-24 rollout, not the 0.8 s of a scratch run); quiet window, owner present" ;;
     *) echo "unknown" ;;
   esac

@@ -37,13 +37,14 @@ esac
 STUB
 chmod +x "$BIN/docker" "$BIN/journalctl"
 export CALLS_LOG="$CALLS" CANARY PATH="$BIN:$PATH"
-export DRV_satlink=journald DRV_purser=journald DRV_cf_access_guard=journald DRV_traefik=journald DRV_plimsoll_llm=json-file DRV_plimsoll=json-file
+export DRV_satlink=journald DRV_purser=journald DRV_cf_access_guard=journald DRV_switchyard=journald DRV_traefik=journald DRV_plimsoll_llm=json-file DRV_plimsoll=json-file
 
 echo "all expected"
 rc=0; bash "$SCRIPT" >"$T/out" 2>&1 || rc=$?
 expect "exits 0" '[ "$rc" = 0 ]'
 expect "driver per service printed" 'grep -q "ok    satlink: journald" "$T/out" && grep -q "ok    plimsoll-llm: json-file" "$T/out" && grep -q "ok    plimsoll: json-file" "$T/out"'
 expect "wave B services are expected on journald by default" 'grep -q "ok    purser: journald" "$T/out" && grep -q "ok    cf-access-guard: journald" "$T/out"'
+expect "wave C service is expected on journald by default" 'grep -q "ok    switchyard: journald" "$T/out"'
 expect "wave D traefik is expected on journald by default" 'grep -q "ok    traefik: journald" "$T/out"'
 expect "journal count printed (3 lines)" 'grep -q "satlink: 3 lines" "$T/out"'
 expect "disk usage printed" 'grep -q "take up 2.7G" "$T/out"'
@@ -59,6 +60,10 @@ expect "names the mismatch" 'grep -q "FAIL  satlink: json-file (expected journal
 echo "a wave B service still on json-file"
 rc=0; DRV_cf_access_guard=json-file bash "$SCRIPT" >"$T/out" 2>&1 || rc=$?
 expect "exits 1 and names it" '[ "$rc" = 1 ] && grep -q "FAIL  cf-access-guard: json-file (expected journald)" "$T/out"'
+
+echo "switchyard (wave C) still on json-file"
+rc=0; DRV_switchyard=json-file bash "$SCRIPT" >"$T/out" 2>&1 || rc=$?
+expect "exits 1 and names it" '[ "$rc" = 1 ] && grep -q "FAIL  switchyard: json-file (expected journald)" "$T/out"'
 
 echo "plimsoll on journald"
 rc=0; DRV_plimsoll=journald bash "$SCRIPT" >"$T/out" 2>&1 || rc=$?

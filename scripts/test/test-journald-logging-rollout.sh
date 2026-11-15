@@ -136,7 +136,7 @@ reset_fake() {
   echo "2026-11-14T01:00:00.000000000Z" >"$F/started"
   echo 40 >"$F/count"
   # wave B services (purser, cf-access-guard): same shape, files named <svc>.<what>
-  local w; for w in purser cf-access-guard traefik; do
+  local w; for w in purser cf-access-guard switchyard traefik; do
     echo json-file >"$F/drv_$w"
     echo "old${w}container000000000000000000000000000000000000000000000000001" >"$F/$w.cid"; cut -c1-12 "$F/$w.cid" >"$F/$w.jid"
     echo "2026-11-14T01:00:00.000000000Z" >"$F/$w.started"; echo 3 >"$F/$w.count"
@@ -148,6 +148,8 @@ post_merge() {
   echo journald >"$F/drv_satlink"; echo 50000 >"$F/eff_burst"; echo 30s >"$F/eff_interval"
   cp "$R/ansible/roles/server/files/journald/$JDF" "$T/etc/jd/$JDF"
 }
+# wave C world: switchyard on journald on top of the wave A host state
+post_merge_c() { post_merge; echo journald >"$F/drv_switchyard"; }
 # wave B world: purser and cf-access-guard on journald, the host drop-in installed and effective
 post_merge_b() { post_merge; echo journald >"$F/drv_purser"; echo journald >"$F/drv_cf-access-guard"
   echo "2026-11-14T02:00:00.000000000Z" >"$F/purser.started"; echo "2026-11-14T02:00:00.000000000Z" >"$F/cf-access-guard.started"; }
@@ -298,6 +300,20 @@ expect "verify fails when a wave service is on json-file" '[ "$(rc_of go verify 
 reset_fake; post_merge_b; touch "$F/rollback_flips"; echo '{"services":{"purser":{},"cf-access-guard":{}}}' >"$F/config.json"
 expect "wave rollback: each recreated, json-file, journal still queryable" '[ "$(rc_of go rollback --svc $W --apply --confirm-rollback)" = 0 ] && [ "$(tr "\n" " " <"$F/recreated")" = "purser cf-access-guard " ] && grep -q "^rb_purser_journal_lines=9" "$T/state/state.kv"'
 
+echo "wave C: --svc switchyard"
+WC=switchyard
+reset_fake; post_merge_c
+expect "dry-run canary names the switchyard outage (API, MCP, webhook) and recreates nothing" '[ "$(rc_of go canary --svc $WC)" = 0 ] && grep -q "outage of the switchyard recreate: the Switchyard API and the MCP server" "$T/rec.md" && ! grep -q force-recreate "$CALLS"'
+expect "the wave C canary passes: only switchyard force-recreated, from the deploy root" '[ "$(rc_of go canary --svc $WC --apply --yes)" = 0 ] && ! grep -q FAIL "$T/rec.md" && [ "$(tr "\n" " " <"$F/recreated")" = "switchyard " ] && grep -q "^make -C $D force-recreate svc=switchyard" "$CALLS" && ! grep -Eq "^make -C $D recreate|svc=(satlink|purser|cf-access-guard|interlock-worker|postgres|traefik|plimsoll)|restart docker" "$CALLS"'
+expect "switchyard canary keys recorded and the wave evidence names it" 'grep -q "^canary_switchyard_before=3" "$T/state/state.kv" && bash "$S" --print-evidence --svc $WC >"$T/evidence.md" 2>&1 && grep -q "switchyard: BEFORE 3 lines" "$T/evidence.md"; cat "$T/evidence.md" >>"$T/all.log"'
+reset_fake; post_merge_c; echo 0 >"$F/switchyard.count"
+expect "switchyard with no journal lines fails BEFORE it is recreated (BEFORE>0 precondition)" '[ "$(rc_of go canary --svc $WC --apply --yes)" = 1 ] && grep -q "nothing to prove" "$T/rec.md" && [ ! -s "$F/recreated" ]'
+reset_fake; post_merge_c; echo 3 >"$F/suppressed"
+expect "Suppressed > 0 FAILS the switchyard canary (the 24 h rate-limit check)" '[ "$(rc_of go canary --svc $WC --apply --yes)" = 1 ] && grep -q "FAIL.*Suppressed" "$T/rec.md"'
+reset_fake; baseline; post_merge_c; echo json-file >"$F/drv_switchyard"
+expect "merge-gate fails while switchyard is still json-file" '[ "$(rc_of go merge-gate --svc $WC --apply --confirm-apply)" = 1 ]'
+reset_fake; baseline; post_merge_c
+expect "verify for wave C passes" '[ "$(rc_of go verify --svc $WC --confirm-dozzle)" = 0 ] && grep -q "^v_switchyard_driver=journald" "$T/state/state.kv"'
 echo "wave D: --svc traefik (edge outage)"
 reset_fake; post_merge_d
 expect "dry-run canary for traefik names the 12 s edge outage and recreates nothing" '[ "$(rc_of go canary --svc traefik)" = 0 ] && grep -q "outage of the traefik recreate: the whole edge.*12 s" "$T/rec.md" && grep -q "12.1 s measured" "$T/rec.md" && ! grep -q force-recreate "$CALLS"'
