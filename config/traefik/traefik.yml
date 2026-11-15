@@ -28,6 +28,20 @@ accessLog:
   # container mounts this path read-only and parses it with the traefik
   # collection (SERV-27). Error/startup logs still go to stdout (`docker logs`).
   filePath: /var/log/traefik/access.log
+  # SATL-24: header fields. `drop` is the default and is spelled out so no other header
+  # (cookies, Authorization, the Cf-Access-* assertion and email) can land in the log.
+  # Logged as request_<Header>. X-Access-Subject is the opaque Access `sub` that
+  # cf-access-guard returns and cf-access-jwt copies onto the request (authResponseHeaders);
+  # logging only, absent on the public entrypoint. NOTE: this file is a single-file bind and
+  # a merge does NOT apply it; it needs `make recreate svc=traefik` (SERV-164). Rotation:
+  # config/logrotate/traefik-access.
+  fields:
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+        Upgrade: keep
+        X-Access-Subject: keep
 
 # CrowdSec bouncer middleware (SERV-27): checks each request's client IP against
 # the local CrowdSec LAPI and 403s banned IPs. Wired into the public Argosy

@@ -1,0 +1,36 @@
+# Traefik access log rotation (SATL-24). Install as /etc/logrotate.d/traefik-access
+# (owner step, sudo; see docs/zerogravity-edge.md). Run by the host's logrotate.timer
+# (hourly check; `daily` means at most one time-based rotation per day).
+#
+# The log lives in the named volume construct-server_traefik_access_logs (root-only
+# on the host). Both consumers (crowdsec, satlink) mount that volume as a DIRECTORY,
+# so a rename-rotation is visible to them; a single-file bind would pin the old inode.
+#
+#   * rename rotation, NOT copytruncate: copytruncate drops lines in the copy window
+#     and truncates the inode the collector tracks.
+#   * rotate 14 = 14 daily generations (owner ruling); the satlink collector looks for
+#     access.log.1 (plain) through .14 (.2.gz and onward compressed).
+#   * maxsize 200M: also rotate early on a runaway day (owner ruling: daily plus a size
+#     cap). A normal day is ~25 MB, so this only fires on abnormal volume; logrotate
+#     evaluates it at the timer's hourly run.
+#   * delaycompress keeps access.log.1 plain for one cycle so Traefik's reopen race and
+#     the collector/crowdsec can finish reading it.
+#   * sharedscripts + a single path: postrotate runs once.
+#   * postrotate signals, it does not restart: Traefik closes and reopens its log file
+#     on SIGUSR1. stderr is NOT discarded, so a failed signal reaches logrotate's
+#     output (journal); `|| true` only keeps a stopped container from failing the run.
+#     A missed reopen shows up as a growing access.log.1 (the collector reports it).
+/var/lib/docker/volumes/construct-server_traefik_access_logs/_data/access.log {
+    daily
+    rotate 14
+    maxsize 200M
+    compress
+    delaycompress
+    sharedscripts
+    missingok
+    notifempty
+    create 0644 root root
+    postrotate
+        docker kill -s USR1 traefik >/dev/null || true
+    endscript
+}
