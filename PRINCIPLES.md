@@ -267,7 +267,7 @@ table, resolution-required-on-close, epic-close).
 ### Show, don't describe
 
 A PR, ticket comment or README that changes something visible carries an image of
-it, hosted on Trestle (SERV-134). The upload recipe and limits are in the global
+it, hosted on Trestle (SERV-134). The upload recipe is in the global
 `~/.claude/CLAUDE.md`, section *Screenshots go on Trestle*. Two rules that file does
 not carry: allowed types are png, jpeg, webp, gif, svg (served as an attachment), mp4
 and webm, at 10 MiB per image, 100 MiB per video and 2 GiB per consumer token (anything
