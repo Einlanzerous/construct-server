@@ -17,7 +17,7 @@ every adopter in it, so the wave size is the number of simultaneous restarts.
 
 | Wave | Services | State |
 |---|---|---|
-| A (canary) | satlink | this change |
+| A (canary) | satlink | merged, canary passed |
 | B | purser, cf-access-guard | later PR |
 | C | switchyard (24 h rate-limit check) | later PR |
 | D | traefik (short edge outage) | later PR |
@@ -33,18 +33,56 @@ trestle-genzo, sextant (their own capped json-file), crowdsec, datadog, dozzle, 
 |---|---|---|
 | `/etc/systemd/journald.conf.d/50-construct-containers.conf` | `SystemMaxUse` | `6G` (Ubuntu default is 4G; about 2.7G used at planning) |
 | same file | `MaxRetentionSec` | **not set** (ruling 2): a 14-day retention would delete about 66 days of existing host journal on the next vacuum |
-| `/etc/systemd/system/docker.service.d/50-log-rate.conf` | `LogRateLimitIntervalSec` / `LogRateLimitBurst` | `30s` / `50000` |
+| same file | `RateLimitIntervalSec` / `RateLimitBurst` | `30s` / `50000` (**host-wide**, see below) |
+
+### The rate limit is host-wide, and why
 
 The rate limit is one bucket: with this driver the sender of every container line is dockerd, so
-all journald-logged containers share `docker.service`'s allowance (the host default is 10000
-messages per 30 s in total). The drop-in raises it for that unit only. Dropped lines show up as a
-`Suppressed N messages from docker.service` notice; `make journald-check` counts them.
+all journald-logged containers share `docker.service`'s allowance (the default is 10000 messages
+per 30 s in total). Dropped lines show up as a `Suppressed N messages from docker.service` notice;
+`make journald-check` counts them.
 
-`ForwardToSyslog` is **not** set here. Ubuntu forwards journal lines to rsyslog, so container
-lines will also land in `/var/log/syslog`. Whether to add `ForwardToSyslog=no` is an open
-question (PR description); decide it after measuring syslog growth during the canary.
+The first canary shipped a `docker.service`-scoped drop-in (`LogRateLimitBurst=50000`). It read
+50000 in PID 1 but did nothing: journald reads per-unit limits from
+`/run/systemd/units/log-rate-limit-burst:docker.service`, which PID 1 writes only when
+`docker.service` starts, and dockerd is deliberately never restarted (live-restore is off, so it
+would restart every container). The plan's fallback is therefore in force: the limit lives in the
+GLOBAL journald drop-in, which journald reads itself and needs only a journald restart.
 
-The files live in `ansible/roles/server/files/journald/` and contain no secrets.
+`RateLimitIntervalSec=30s` and `RateLimitBurst=50000` (journald.conf(5), systemd 255) apply to
+**every service's** journal bucket on this host, not just Docker's. That is acceptable: the limit
+is per sender, so it only matters to a sender that would exceed it, 50000 per 30 s (about 1666 per
+second) is a ceiling no service here approaches, and a higher ceiling means fewer silently dropped
+lines for everyone, at the cost of a runaway service being able to write more before it is cut
+off (the `SystemMaxUse=6G` cap still bounds the disk). journald also multiplies the burst by a
+factor derived from free journal disk space (a log2 scale, journald.conf(5)), so the real ceiling
+is somewhat higher. A per-unit `LogRateLimitBurst=` in a unit file overrides the global value
+(systemd.exec(5)), which is why the stale docker.service drop-in could only ever repeat it.
+
+Decision on the docker.service drop-in: **removed** from the repo. It is inert until dockerd
+restarts, and keeping it would leave two sources of truth for one number (and a per-unit value
+silently overriding the global one if someone later changes only the global). The ansible role
+removes the stale file from the host (`state: absent` plus a `daemon-reload`, which does not
+restart dockerd) and the rollout script's `dropin` phase does the same.
+
+journald has **no runtime readback** of its rate limit (the `/run/systemd/units/` files are only
+the per-unit overrides, and `systemctl show` reports PID 1's view, not journald's). So the
+`dropin` phase asserts the strongest thing that exists: `systemd-analyze cat-config
+systemd/journald.conf` shows `RateLimitBurst=50000` and `RateLimitIntervalSec=30s` as the
+effective values, and `systemd-journald` (re)started at or after the installed file's mtime
+(`systemctl show --timestamp=unix systemd-journald -p ActiveEnterTimestamp`). The behavioural
+proof is still the `Suppressed` count, which wave C (switchyard) checks over 24 h.
+
+The file lives in `ansible/roles/server/files/journald/` and contains no secrets.
+
+### Open questions, decided: ForwardToSyslog stays as is
+
+`ForwardToSyslog=no` is **not** set, by the owner's ruling. It is global: rsyslog on this host is
+fed by journald forwarding, so `no` would stop `/var/log/syslog`, `auth.log` and `kern.log`
+updating at all, and nothing in the estate reads them except humans. Container lines therefore
+also land in `/var/log/syslog` (it already carries the satlink lines). Revisit only if
+`/var/log/syslog` growth hurts, and then with an rsyslog drop rule for container lines only, not
+by turning forwarding off.
 
 ## Owner-only steps, in this ORDER
 
@@ -79,25 +117,21 @@ the script against fake binaries.
    # either: ansible, from the repo checkout
    ansible-playbook ansible/site.yml --tags journald --limit server --ask-become-pass
    # or by hand, the equivalent:
-   sudo install -d /etc/systemd/journald.conf.d /etc/systemd/system/docker.service.d
+   sudo install -d /etc/systemd/journald.conf.d
    sudo install -m 0644 ansible/roles/server/files/journald/50-construct-containers.conf /etc/systemd/journald.conf.d/
-   sudo install -m 0644 ansible/roles/server/files/journald/50-log-rate.conf /etc/systemd/system/docker.service.d/
-   sudo systemctl daemon-reload            # re-reads units; does NOT restart dockerd
-   sudo systemctl restart systemd-journald # does not touch Docker or containers
+   # only if the first canary left the legacy docker.service drop-in (the script removes it too):
+   sudo rm -f /etc/systemd/system/docker.service.d/50-log-rate.conf && sudo systemctl daemon-reload  # does NOT restart dockerd
+   sudo systemctl restart systemd-journald # does not touch Docker or containers; this is what applies the rate limit
    journalctl --disk-usage                  # unchanged: nothing vacuumed
-   systemctl show docker.service -p LogRateLimitBurst   # expect 50000: only proves PID 1 loaded it
-   cat /run/systemd/units/log-rate-limit-burst:docker.service   # what journald reads; expect 50000
+   systemd-analyze cat-config systemd/journald.conf | grep -E '^(RateLimit|SystemMaxUse)'   # expect 50000, 30s, 6G
+   systemctl show --timestamp=unix systemd-journald -p ActiveEnterTimestamp --value         # at or after the file's mtime
+   stat -c %Y /etc/systemd/journald.conf.d/50-construct-containers.conf
    ```
-   The script's `dropin` phase asserts exactly this (the installed files byte-identical to the repo,
-   disk usage not reduced, the oldest journal entry date unchanged, both burst values 50000). A
-   missing or wrong burst value is recorded as a **wave-C blocker, not a canary blocker**: it is
-   written when PID 1 starts docker.service, and nothing here restarts dockerd, so it can stay
-   missing until the next docker restart.
-
-   If the `/run/systemd/units/` file is missing or wrong, journald is not enforcing the raised
-   limit: decide the fallback (the global `RateLimitBurst` in the journald drop-in) BEFORE wave C
-   (switchyard). Satlink alone will not approach 10000 lines per 30 s, so the `Suppressed` count
-   cannot prove the limit during the canary; it is the check for wave C and later.
+   The script's `dropin` phase asserts exactly this (the installed file byte-identical to the repo,
+   disk usage not reduced, the oldest journal entry date unchanged, the effective global limit, and
+   journald restarted after the file). It is idempotent: re-running `dropin --apply` after this
+   change is how the host picks up the global limit. See "The rate limit is host-wide" above for why
+   this is the check (journald has no runtime readback of its limits).
 2. **Check the deploy scope, then merge** the wave PR. Merging a `docker-compose.yml` change takes
    deploy.yml's whole-stack path (SERV-109 narrows only pure `versions.env` changes): it pulls
    every pin and runs an unscoped `up -d`, so first-party pins that published since the last

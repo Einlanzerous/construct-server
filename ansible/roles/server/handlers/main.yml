@@ -22,8 +22,7 @@
     state: restarted
 
 # daemon-reload only re-reads unit files; it does NOT restart dockerd (no container impact).
-# The LogRate* limits are exported to journald under /run/systemd/units/; the docs check the
-# file there (not just `systemctl show`) because journald reads it, not PID 1's property.
+# Used after removing the legacy docker.service rate-limit drop-in.
 - name: Reload systemd units
   systemd:
     daemon_reload: true
