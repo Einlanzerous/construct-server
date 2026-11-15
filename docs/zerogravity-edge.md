@@ -197,14 +197,15 @@ Rotation is `ansible/roles/server/templates/traefik-access.j2` (rendered by the 
    Measured on a scratch pair (same image digest, prod `traefik.yml` + `routers.yml` with the
    crowdsec-bouncer plugin loading, no ACME material): `docker run` to first HTTP response
    about 0.8 s; `docker stop` of the old container about 0.4 s; a minimal config about 0.2 s.
-   Expect a few seconds in practice, plus compose's recreate overhead and the real ACME load.
+   The real recreate on prod (2026-11-15) took the edge down for 12.1 s (first healthy response), about
+   15 times the scratch figure: compose's recreate overhead and the real ACME load. Plan on that, not on 0.8 s.
    Then verify: new `request_*` keys in the live log, crowdsec lines-read advancing, satlink
    collector lag back to steady state, `make edge-auth-check`.
 5. First real rotation (next timer tick after the install, or `sudo logrotate -f`): expect
    `access.log.1`, crowdsec still counting, a `rotated file read` line from the collector.
 
 Window question for the owner: a quiet period you choose, attended. Nothing here needs more
-than a minute of edge downtime on the measured figures.
+than a minute of edge downtime (12.1 s measured on prod).
 
 Rollback: delete the drop-in and revert the role task (or the next `--tags logrotate` run
 reinstalls it; rotated files stay and are harmless); revert `traefik.yml` and
