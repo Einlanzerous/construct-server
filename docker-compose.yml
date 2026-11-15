@@ -63,7 +63,7 @@
 # `journalctl CONTAINER_NAME=<name>` returns the lines of every past container of that name.
 #
 # Adopt with `logging: *journald-logging`, one wave per PR (docs/journald-logging.md: A satlink, B purser +
-# cf-access-guard, C switchyard, then traefik).
+# cf-access-guard, C switchyard, D traefik).
 # Every adopter is recreated by the deploy that merges it, so the wave size is the number
 # of simultaneous restarts. NOT for plimsoll or plimsoll-llm: scripts/check-plimsoll-llm-
 # canary.sh requires them to log through json-file (PLIM-14), so do not generalise this.
@@ -3012,6 +3012,13 @@ services:
     # reach the Argosy router — never a tunneled app. `internal` additionally binds a single
     # address on construct_edge_net (SERV-107) and every router on it is now gated by
     # cf-access-guard below (SERV-106).
+    # SATL-25 wave D: journald, so Traefik's error, ACME and plugin lines outlive its recreate.
+    # Only stdout/stderr moves: the access log is written to a FILE by Traefik itself
+    # (traefik.yml accessLog.filePath on traefik_access_logs), not through the log driver, so
+    # crowdsec and satlink's rollup are unaffected. The deploy that merges this recreates
+    # Traefik (the logging block changes its spec): a short edge outage, 12.1 s measured in
+    # the SATL-24 rollout, every public host (docs/journald-logging.md "Wave D").
+    logging: *journald-logging
     ports:
       - "443:8443"   # WAN 443 -> host 443 -> public entrypoint (:8443)
     environment:

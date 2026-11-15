@@ -19,8 +19,8 @@ every adopter in it, so the wave size is the number of simultaneous restarts.
 |---|---|---|
 | A (canary) | satlink | merged, canary passed |
 | B | purser, cf-access-guard | merged (SATL-72); see "Wave B" |
-| C | switchyard (24 h rate-limit check) | this change (SATL-73); see "Wave C" |
-| D | traefik (short edge outage) | later PR |
+| C | switchyard (24 h rate-limit check) | merged (SATL-73); see "Wave C" |
+| D | traefik (short edge outage, about 12 s) | this change (SATL-74); see "Wave D" |
 | E | postgres | **DEFERRED** (ruling 3), see the cascade note |
 
 **Never** plimsoll or plimsoll-llm: `scripts/check-plimsoll-llm-canary.sh` requires them to log
@@ -72,7 +72,7 @@ scripts/journald-logging-rollout.sh $WAVE --print-evidence     # counts-only blo
 
 `--svc` (or `JOURNALD_ROLLOUT_SVCS`) takes the wave's services in recreate order; the default is
 `satlink`, so the wave A commands above are unchanged. Only satlink, purser, cf-access-guard,
-switchyard and traefik are accepted. A service that printed nothing since its recreate has BEFORE=0
+switchyard and traefik are accepted (wave D: `--svc traefik`). A service that printed nothing since its recreate has BEFORE=0
 and the canary refuses before recreating it ("nothing to prove"); purser and the guard both log at
 start. The Dozzle check applies to both services.
 
@@ -161,6 +161,74 @@ journald.
 `make force-recreate svc=switchyard`. It returns to `json-file` with no `logging:` block (the previous
 config); lines already in the journal stay queryable with `journalctl CONTAINER_NAME=switchyard`.
 The same outage applies.
+
+## Wave D: traefik (an edge outage)
+
+**Which service, and why.** Subtask SATL-74. Traefik's error, ACME, plugin and CrowdSec-bouncer lines
+go to stdout and were erased by every recreate. It is the only service in its wave because its
+recreate takes the edge down.
+
+**The outage, stated plainly.** Recreating Traefik takes down **every public host**: the public
+Argosy path (host 443) and every tunneled app behind cloudflared, until the new container answers.
+The SATL-24 rollout measured **12.1 s** to the first healthy response on prod (a scratch run said
+0.8 s; plan on 12 s, not 0.8 s; `docs/zerogravity-edge.md`). The ACME state is in a volume, so no
+certificate is reissued, and the CrowdSec bouncer plugin reloads. Requirements: a **quiet window you
+choose** (outside the Argosy streaming evening), the owner at the terminal, nothing else deploying.
+The merge itself takes the outage (below), so the quiet window is the MERGE time, not a later step.
+
+**Does the merge deploy recreate Traefik, or does it need `force-recreate`?** The merge recreates it.
+Adding `logging: *journald-logging` changes Traefik's compose service spec (its config hash), so
+`docker compose up -d` in the whole-stack deploy recreates it, like the other waves. This is NOT the
+SATL-24 `traefik.yml` situation: that is a single-file bind of an unchanged spec, which a merge never
+applies and which needs `make force-recreate svc=traefik` (a plain `make recreate` is `up -d
+--no-deps`, a no-op on an unchanged spec; it exited 0 and left the old container running). Here the
+spec changes, so no extra recreate is needed for the driver to change. The rollout script does not
+take that on trust: `merge-gate` asserts that Traefik's **StartedAt and container id changed since the
+`preflight` record**, and fails with the `force-recreate` fix if the deploy left it on the old spec.
+(It also still asserts the driver is journald.) Run `preflight --svc traefik` just BEFORE merging so
+that baseline exists; without it the gate prints a NOTE and can only check the driver.
+
+**Two outages, not one.** The merge deploy's recreate is outage 1 (about 12 s). `canary` then does an
+explicit `make force-recreate svc=traefik` to prove the lines survive a recreate: outage 2, another
+~12 s. The canary **always pauses before it, even with `--yes`**, and Ctrl-C at that pause skips it:
+`merge-gate` and `verify` already prove the driver and the recreate, and only the survives-a-second-
+recreate proof is lost.
+
+**Canary precondition, BEFORE > 0.** The canary needs journal lines for `CONTAINER_NAME=traefik`
+before it recreates, to have something to prove survives. Traefik logs at `INFO` (`traefik.yml`),
+and the merge deploy's recreate puts its startup lines (configuration loaded, providers, entrypoints,
+ACME) into the journal, so BEFORE is above zero after the deploy. If it is zero (nothing logged since
+the recreate) the script refuses **before** recreating, so the second outage is not taken for an
+empty proof. Only counts are recorded, never a line.
+
+**CrowdSec and the access log are unaffected (checked in the repo, not assumed).** The access log is
+written by Traefik itself to a file: `config/traefik/traefik.yml` has `accessLog.filePath:
+/var/log/traefik/access.log` on the `traefik_access_logs` volume, which is not the container's stdout
+and does not pass through the Docker log driver. CrowdSec reads only that file:
+`config/crowdsec/acquis.yaml` has `filenames: [/var/log/traefik/access.log]` and no `source: docker`
+entry, and the `crowdsec` service mounts `traefik_access_logs` read-only and the Docker socket not at
+all. satlink's rollup reads the same file (volume read-only). Only Traefik's error and startup output
+(`log.level: INFO`, stdout) moves to the journal. The access-log volume survives a recreate, and the
+log-rotation timer is unchanged.
+
+```sh
+WAVE="--svc traefik --pr <this wave's PR number>"
+scripts/journald-logging-rollout.sh $WAVE preflight           # just before merging: baseline StartedAt and drift
+scripts/journald-logging-rollout.sh $WAVE merge-gate --apply  # you merge in the quiet window; checks deploy green, StartedAt changed, journald
+scripts/journald-logging-rollout.sh $WAVE canary --apply      # pauses (forced); one more ~12 s outage; lines survive, docker logs, zero Suppressed
+scripts/journald-logging-rollout.sh $WAVE verify              # make journald-check, Dozzle stays a PAUSE
+scripts/journald-logging-rollout.sh $WAVE --print-evidence    # counts-only block for SATL-25 / SATL-74
+```
+
+After the recreate(s), confirm the edge consumers: new lines still appended to the access log,
+CrowdSec lines-read advancing (`docker exec crowdsec cscli metrics`, counts only), satlink's
+collector lag back to steady state, and `make edge-auth-check`. Counts only; no log line, IP or host
+goes into a ticket or PR.
+
+**Rollback.** Revert the one `logging: *journald-logging` line, merge (the deploy recreates Traefik
+back onto `json-file`: the same ~12 s outage), or `make force-recreate svc=traefik`. The journal
+lines already written stay queryable with `journalctl CONTAINER_NAME=traefik`. If Traefik fails to
+start, restore the old compose file on `/opt/construct-server` and recreate.
 
 ## Caps
 

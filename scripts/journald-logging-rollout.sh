@@ -27,9 +27,13 @@
 #                or after the installed file's mtime. Never restarts dockerd or a container. Idempotent.
 #   merge-gate   (--apply) prints the sequence and PAUSES while YOU merge the PR; then verifies via gh that it
 #                merged and that the prod deploy run for the merge commit finished green (bounded poll), then that
+#                each wave service was RECREATED by that deploy (StartedAt and container id differ from the
+#                preflight record: the compose spec changed so `up -d` recreates it, no force-recreate needed;
+#                this is the check that catches a deploy that left it on the old spec, as the traefik.yml
+#                single-file bind did in SATL-24), then that
 #                each wave service reports LogConfig.Type=journald and plimsoll / plimsoll-llm still json-file. The merge
 #                deploy itself recreates each wave service onto journald.
-#   canary       (--apply) for EACH service of the wave (default satlink; `--svc purser,cf-access-guard` or
+#   canary       (--apply; pauses before every recreate of a >1-service wave, and always before traefik's) for EACH service of the wave (default satlink; `--svc purser,cf-access-guard` or
 #                JOURNALD_ROLLOUT_SVCS, in that order, one at a time): BEFORE counts from the journal
 #                (CONTAINER_NAME=<svc> lines, the CONTAINER_ID of the
 #                running container), `make -C <deploy root> force-recreate svc=<svc>` (NEVER plain `recreate`:
@@ -54,7 +58,7 @@
 #
 # WAVES. --svc a,b names the wave's services (allowed: satlink purser cf-access-guard switchyard traefik; never
 # plimsoll, plimsoll-llm or postgres). It drives the preflight driver records, merge-gate, canary, verify and
-# rollback checks. Wave B: `--svc purser,cf-access-guard --pr <wave PR>`; wave C: `--svc switchyard --pr <wave PR>`. The default, satlink, behaves as before
+# rollback checks. Wave B: `--svc purser,cf-access-guard --pr <wave PR>`; wave C: `--svc switchyard --pr <wave PR>`; wave D: `--svc traefik --pr <wave PR>` (the canary is a SECOND ~12 s edge outage after the deploy's own). The default, satlink, behaves as before
 # and keeps its state keys; another service's canary keys are canary_<svc>_*. The dry-run plan of the canary
 # prints each service's outage.
 #
@@ -218,7 +222,7 @@ outage_of() {
     purser) echo "purser's API on port 4006 is down for its start window (healthcheck start_period 10 s); it has no Traefik router and no dependents, deploy tooling just pauses" ;;
     cf-access-guard) echo "every tunneled host behind forwardAuth answers with 500s for a few seconds (Traefik retries per request; the compose notes say a few seconds); the public Argosy path is not gated by it" ;;
     switchyard) echo "the Switchyard API and the MCP server (switchyard-mcp forwards to it) are unavailable for its start window (healthcheck start_period 15 s); the GitHub webhook receiver also answers nothing, and GitHub does NOT redeliver on its own (the poller reconciles PR state); PR-review jobs report a ticket fetch failure as a caveat; interlock-worker does not use it" ;;
-    traefik) echo "the whole edge (public Argosy path and every tunneled app) is down for seconds; owner present" ;;
+    traefik) echo "the whole edge (public Argosy path and every tunneled app, every public host) is down for about 12 s (12.1 s measured in the SATL-24 rollout, not the 0.8 s of a scratch run); quiet window, owner present" ;;
     *) echo "unknown" ;;
   esac
 }
@@ -473,6 +477,7 @@ print_merge_sequence() {
   say "  1. merge #$PR yourself (squash, as the repo does), AFTER the dropin phase passed. The docker-compose.yml change runs the"
   say "     whole-stack prod deploy, which recreates ${SVCS[*]} onto journald (and any drifted first-party service, see preflight)."
   say "  2. this script then checks: #$PR merged into main, the $DEPLOY_WORKFLOW run for the merge commit finished green,"
+  say "     ${SVCS[*]} were RECREATED by it (StartedAt and container id differ from the preflight record),"
   say "     ${SVCS[*]} report LogConfig.Type=journald, and ${JSONFILE_SVCS[*]} still report json-file."
 }
 
@@ -527,6 +532,26 @@ mg_drivers() {
   return "$ok"
 }
 
+mg_recreated() {   # every wave service was RECREATED by the merge deploy: its StartedAt (and id) differ from the preflight record
+  local s k got started id ok=0
+  for s in "${SVCS[@]}"; do
+    k="pf_${s//-/_}"; started="$(st_get "${k}_started")"; id="$(st_get "${k}_id")"
+    got="$(ctr_id_started "$s")"
+    if [ -z "$started" ]; then
+      note "$s: no preflight StartedAt recorded (run preflight before the merge); cannot assert the deploy recreated it"
+      continue
+    fi
+    rec "  - $s StartedAt: preflight $started, now ${got#*|}; container: preflight $id, now ${got:0:12}"
+    if [ -n "$got" ] && [ "${got#*|}" != "$started" ] && [ "${got:0:12}" != "$id" ]; then
+      st_set "mg_${s//-/_}_recreated" 1
+    else
+      rec "  - $s was NOT recreated by the deploy (StartedAt or container id unchanged); it is still on the old spec: nothing moved it. 'make force-recreate svc=$s' is the fix, in the quiet window"
+      ok=1
+    fi
+  done
+  return "$ok"
+}
+
 phase_merge_gate() {
   say "## merge-gate"
   print_merge_sequence
@@ -536,6 +561,7 @@ phase_merge_gate() {
   pause "merge #$PR now (the host drop-in must already be installed). Press Enter once it is merged; the deploy then runs." force
   check "#$PR merged into main" mg_merged
   check "prod deploy run for ${MERGE_SHA:0:9} finished green" mg_deploy_green
+  check "${SVCS[*]} recreated by the deploy (StartedAt changed since preflight)" mg_recreated
   check "${SVCS[*]} on journald; ${JSONFILE_SVCS[*]} still json-file" mg_drivers
   st_set merge_gate_ok 1
 }
@@ -568,7 +594,8 @@ phase_canary() {
   need docker make jq journalctl
   local w
   for w in "${SVCS[@]}"; do
-    if [ "${#SVCS[@]}" -gt 1 ]; then pause "next canary: force-recreate $w. Outage: $(outage_of "$w")" soft; fi
+    if [ "$w" = traefik ]; then pause "next canary: force-recreate traefik, a SECOND edge outage (the merge deploy already recreated it). Outage: $(outage_of "$w"). Ctrl-C to skip it: the merge-gate StartedAt check and verify already prove the driver" force
+    elif [ "${#SVCS[@]}" -gt 1 ]; then pause "next canary: force-recreate $w. Outage: $(outage_of "$w")" soft; fi
     canary_one "$w"
   done
 }
