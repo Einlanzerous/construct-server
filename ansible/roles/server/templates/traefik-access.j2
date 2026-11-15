@@ -1,5 +1,5 @@
-# Traefik access log rotation (SATL-24). Install as /etc/logrotate.d/traefik-access
-# (owner step, sudo; see docs/zerogravity-edge.md). Run by the host's logrotate.timer
+# Managed by ansible (roles/server, tag logrotate); edit the template, not this file.
+# Traefik access log rotation (SATL-24). Run by the host's logrotate.timer
 # (hourly check; `daily` means at most one time-based rotation per day).
 #
 # The log lives in the named volume construct-server_traefik_access_logs (root-only

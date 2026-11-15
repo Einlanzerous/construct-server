@@ -34,7 +34,7 @@ accessLog:
   # cf-access-guard returns and cf-access-jwt copies onto the request (authResponseHeaders);
   # logging only, absent on the public entrypoint. NOTE: this file is a single-file bind and
   # a merge does NOT apply it; it needs `make recreate svc=traefik` (SERV-164). Rotation:
-  # config/logrotate/traefik-access.
+  # ansible/roles/server/templates/traefik-access.j2.
   fields:
     headers:
       defaultMode: drop

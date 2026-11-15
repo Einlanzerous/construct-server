@@ -146,7 +146,7 @@ exemptions at all — and is documented in `docs/dev-environment.md`. The two sh
 |------|---------|
 | `config/traefik/traefik.yml` | Static config: entrypoints, providers, ACME resolver |
 | `config/traefik/dynamic/routers.yml` | Routers, services, header-strip + deny-all + `cf-access-jwt` middlewares |
-| `config/logrotate/traefik-access` | Host logrotate drop-in for the Traefik access log (SATL-24); installed by hand, see below |
+| `ansible/roles/server/templates/traefik-access.j2` | Host logrotate drop-in for the Traefik access log (SATL-24); rendered to `/etc/logrotate.d/traefik-access` by the server role (tag `logrotate`), see below |
 | `config/traefik-dev/` | The **dev** edge's static + dynamic config (SERV-93) |
 | `services/cf-access-guard/` | Origin-side Access JWT validation (SERV-106); the only stack image built on the box, and built for both projects |
 | `scripts/check-edge-auth.sh` | Asserts the origin rejects a spoofed Host, and that Cloudflare's edge redirects each gated host to its Access login with the mapped audience (SERV-171) — config *and* live probes. `--dev` for the dev edge |
@@ -166,19 +166,27 @@ deletes any client-supplied copy. It is absent on public-entrypoint routers (no 
 there) and on denied requests. The Access email and JWT are never logged (`drop`).
 It is for logging only: no backend may trust it.
 
-Rotation is `config/logrotate/traefik-access`: daily, `rotate 14`, `maxsize 200M`, `compress`,
+Rotation is `ansible/roles/server/templates/traefik-access.j2` (rendered by the server role, which keeps `/etc/logrotate.d/traefik-access` in step with the repo; edit the template, never the installed copy): daily, `rotate 14`, `maxsize 200M`, `compress`,
 `delaycompress`, `sharedscripts`, rename rotation (never `copytruncate`), postrotate
 `docker kill -s USR1 traefik` (Traefik reopens its log on USR1; a signal, not a restart).
 
 ### Rollout (owner-attended; order matters)
 
-1. Merge the guard PR (`routers.yml` hot-reloads; the guard recreate gives a few seconds
+1. Merge the guard PR (already merged in #296) (`routers.yml` hot-reloads; the guard recreate gives a few seconds
    of 500s on tunneled hosts). Inert until step 4.
-2. Install the drop-in and dry-run it:
+2. Install the drop-in (the role validates it with `logrotate -d` before writing):
    ```bash
-   sudo install -m 0644 -o root -g root config/logrotate/traefik-access /etc/logrotate.d/traefik-access
+   ansible-playbook ansible/site.yml --tags logrotate    # ... plus your usual inventory/become flags
+   ```
+   Never run the whole `site.yml` for this: its "Start Docker Stack" task would apply compose
+   changes. By-hand equivalent, which renders the same bytes because the template has no
+   variables (the role takes over from the next run; copy the template, not a stale file):
+   ```bash
+   sudo install -m 0644 -o root -g root ansible/roles/server/templates/traefik-access.j2 /etc/logrotate.d/traefik-access
    sudo logrotate -d /etc/logrotate.d/traefik-access     # debug, changes nothing
    ```
+   After this the role owns the file: a repo edit reaches the host with the same
+   `--tags logrotate` run, and a rebuilt host gets it from the server role.
 3. Merging a `config/**` change runs the **whole-stack** prod deploy (SERV-109): pull every
    first-party pin that moved, recreate what drifted. Compare running digests with the
    registry first, or accept and list what moves. **Merging does not apply `traefik.yml`**
@@ -198,7 +206,8 @@ Rotation is `config/logrotate/traefik-access`: daily, `rotate 14`, `maxsize 200M
 Window question for the owner: a quiet period you choose, attended. Nothing here needs more
 than a minute of edge downtime on the measured figures.
 
-Rollback: delete the drop-in (rotated files stay and are harmless); revert `traefik.yml` and
+Rollback: delete the drop-in and revert the role task (or the next `--tags logrotate` run
+reinstalls it; rotated files stay and are harmless); revert `traefik.yml` and
 `make recreate svc=traefik` again (fields are additive, so leaving them is harmless); revert
 `routers.yml` (hot reload) then the guard. If Traefik fails to start, restore the old
 `traefik.yml` on `/opt/construct-server` and recreate.
