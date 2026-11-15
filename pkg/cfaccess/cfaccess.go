@@ -70,6 +70,20 @@ type Config struct {
 	// pass/fail does not.
 	RequireEmail bool
 
+	// RequirePrincipal is the opt-in principal mode (SERV-293). With it set,
+	// every verified assertion must name exactly ONE principal: `email` (a person,
+	// Kind PrincipalPerson) or `common_name` (a service token, Kind
+	// PrincipalService), never both and never neither. An assertion carrying both
+	// is ErrAmbiguousPrincipal and one carrying neither is ErrNoPrincipal, because
+	// a consumer that maps an identity to an account must not have to pick which
+	// claim to believe. Claims.Kind and Claims.CommonName are populated only in
+	// this mode.
+	//
+	// Mutually exclusive with RequireEmail, which would refuse the service
+	// principal it exists to admit; New returns an error when both are set.
+	// cf-access-guard does not set it: the guard only decides pass/fail.
+	RequirePrincipal bool
+
 	// HTTPClient fetches the key set. Injectable so tests never reach Cloudflare:
 	// give it a Transport that serves a JWKS and the whole verifier is offline.
 	// That is the supported test seam, and it is why the certs URL itself is NOT
@@ -129,16 +143,17 @@ type Verifier struct {
 	certsURL string
 	audience []string
 
-	requireEmail    bool
-	client          *http.Client
-	now             func() time.Time
-	log             *slog.Logger
-	refreshInterval time.Duration
-	maxKeyAge       time.Duration
-	cooldown        time.Duration
-	staleAfter      time.Duration
-	leeway          time.Duration
-	fetchTimeout    time.Duration
+	requireEmail     bool
+	requirePrincipal bool
+	client           *http.Client
+	now              func() time.Time
+	log              *slog.Logger
+	refreshInterval  time.Duration
+	maxKeyAge        time.Duration
+	cooldown         time.Duration
+	staleAfter       time.Duration
+	leeway           time.Duration
+	fetchTimeout     time.Duration
 
 	// fetchMu serialises key-set fetches, so a burst of unknown-kid requests
 	// produces one HTTP call rather than one each. Held across the request; the
@@ -174,6 +189,10 @@ func New(cfg Config) (*Verifier, error) {
 		return nil, errors.New("cfaccess: TeamDomain is unset or empty")
 	}
 
+	if cfg.RequireEmail && cfg.RequirePrincipal {
+		return nil, errors.New("cfaccess: RequireEmail and RequirePrincipal are mutually exclusive: RequireEmail would refuse the service principal RequirePrincipal admits")
+	}
+
 	aud := make([]string, 0, len(cfg.Audience))
 	for _, a := range cfg.Audience {
 		if a = strings.TrimSpace(a); a != "" {
@@ -182,20 +201,21 @@ func New(cfg Config) (*Verifier, error) {
 	}
 
 	v := &Verifier{
-		issuer:          "https://" + team,
-		certsURL:        cfg.certsURL,
-		audience:        aud,
-		requireEmail:    cfg.RequireEmail,
-		client:          cfg.HTTPClient,
-		now:             cfg.Now,
-		log:             cfg.Logger,
-		refreshInterval: cfg.RefreshInterval,
-		maxKeyAge:       cfg.MaxKeyAge,
-		cooldown:        cfg.RefreshCooldown,
-		staleAfter:      cfg.StaleAfter,
-		leeway:          cfg.Leeway,
-		fetchTimeout:    cfg.FetchTimeout,
-		keys:            map[string]*rsa.PublicKey{},
+		issuer:           "https://" + team,
+		certsURL:         cfg.certsURL,
+		audience:         aud,
+		requireEmail:     cfg.RequireEmail,
+		requirePrincipal: cfg.RequirePrincipal,
+		client:           cfg.HTTPClient,
+		now:              cfg.Now,
+		log:              cfg.Logger,
+		refreshInterval:  cfg.RefreshInterval,
+		maxKeyAge:        cfg.MaxKeyAge,
+		cooldown:         cfg.RefreshCooldown,
+		staleAfter:       cfg.StaleAfter,
+		leeway:           cfg.Leeway,
+		fetchTimeout:     cfg.FetchTimeout,
+		keys:             map[string]*rsa.PublicKey{},
 	}
 
 	if v.certsURL == "" {
@@ -348,6 +368,19 @@ func (v *Verifier) VerifyAudience(ctx context.Context, token string, audiences .
 	}
 	if v.requireEmail && out.Email == "" {
 		return nil, ErrNoEmail
+	}
+	if v.requirePrincipal {
+		switch {
+		case out.Email != "" && claims.CommonName != "":
+			return nil, ErrAmbiguousPrincipal
+		case out.Email != "":
+			out.Kind = PrincipalPerson
+		case claims.CommonName != "":
+			out.Kind = PrincipalService
+			out.CommonName = claims.CommonName
+		default:
+			return nil, ErrNoPrincipal
+		}
 	}
 	return out, nil
 }

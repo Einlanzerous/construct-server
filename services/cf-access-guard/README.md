@@ -112,4 +112,5 @@ through an injected `Transport`, so they need no network and no Cloudflare.
 property the shared module cannot test, because the per-host map is deliberately
 the guard's. The bypass table it used to own (alg=none, HMAC replay, expired,
 unknown kid, tampered payload) is now shared vectors in `pkg/cfaccess`, run by
-this repo's Go tests **and** by Switchyard's TypeScript suite against `jose`.
+`pkg/cfaccess`'s Go tests. (Other consumers are expected to vendor the vectors and
+run them; until they do, only the Go tests run them.)

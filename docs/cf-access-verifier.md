@@ -143,19 +143,28 @@ audiences would be one forgotten line away from accepting everything.
 ## Shared test vectors
 
 [`pkg/cfaccess/testdata/vectors.json`](../pkg/cfaccess/testdata/vectors.json) is
-a set of signed tokens, key sets, and expected verdicts, run by **both** the Go
-module's tests and Switchyard's TypeScript suite.
+a set of signed tokens, key sets, and expected verdicts. **Only the Go module's
+tests run it today.** Other consumers are expected to vendor a pinned copy and run
+it (SERV-308, SERV-309, SERV-310); until they do, no second suite runs it, and the
+cross-language agreement below is intended, not demonstrated.
 
-That cross-language run is the only mechanism in this design that reaches
+A cross-language run is the only mechanism in this design that can reach
 Switchyard at all. Switchyard keeps `jose` — replacing a maintained library with
 estate code would be the wrong direction — so code sharing cannot help there, and
-the vectors are what give the fourth implementation a cross-check.
+the vectors are what would give the fourth implementation a cross-check.
+
+The file's `spec` is `cfaccess-vectors/2` (SERV-293): each vector may carry an
+optional `config` (`requirePrincipal`, for the opt-in principal mode, where an
+assertion must name exactly one of `email` or `common_name`) and an
+`expectPrincipal` (`kind`, `commonName`). Absent `config` means the default
+configuration, so the original vectors are unchanged. A runner that only knows
+spec 1 must refuse the file.
 
 Each vector carries a `class`:
 
 - **`protocol`** — a rule any conforming verifier must apply: `alg: none`, an RSA
   public key replayed as an HMAC secret, a cross-application audience, a wrong
-  issuer, expiry, `nbf`, an unknown `kid`, a tampered payload. Both suites must
+  issuer, expiry, `nbf`, an unknown `kid`, a tampered payload. Every runner must
   agree, and these are exactly the cases a hand-rolled verifier gets wrong
   *quietly*.
 - **`keypolicy`** — estate hardening about key material that a general JWT
@@ -183,8 +192,8 @@ purpose — the same reason RFC 7515 Appendix A publishes private keys), so
 `.gitguardian.yaml` excludes that one directory and each file carries the
 disclaimer above its `BEGIN` line. See
 [`pkg/cfaccess/testdata/README.md`](../pkg/cfaccess/testdata/README.md). The vectors are checked in rather than generated per-suite precisely
-because two suites in two languages in two repositories regenerating their own
-would let both stay green while drifting apart — the failure this ticket exists
+because suites in several languages and repositories regenerating their own
+would let all stay green while drifting apart — the failure this ticket exists
 to stop.
 
 ## Adopting it in a service
@@ -249,7 +258,7 @@ reaches the guard's Docker build as a **named build context**, never by widening
 the context to the deploy root — that root holds the rendered `.env`.
 Switchyard stays on `jose` deliberately: replacing a maintained library with
 estate code is the wrong direction, and the cross-language check is
-`pkg/cfaccess/testdata/vectors.json`, shared vectors that **both** suites run.
+`pkg/cfaccess/testdata/vectors.json`, shared vectors that the Go module's tests run (and that other consumers are expected to vendor and run).
 A `class: protocol` vector must hold in any conforming verifier; `keypolicy`
 ones are estate hardening a general JWT library need not enforce, and a
 legitimate difference is recorded in `expectBy` rather than skipped.

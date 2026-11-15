@@ -133,11 +133,7 @@ func main() {
 	// shape — it would be the union of every host's AUD, which is exactly the
 	// "a wiki token opens Switchyard" failure the per-host map exists to stop.
 	// Verify() on this verifier fails closed with ErrNoAudienceConfigured.
-	verifier, err := cfaccess.New(cfaccess.Config{
-		TeamDomain:      cfg.teamDomain,
-		RefreshInterval: cfg.refresh,
-		Logger:          log,
-	})
+	verifier, err := cfaccess.New(verifierConfig(cfg, log))
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		os.Exit(2)
@@ -392,4 +388,17 @@ func probeSelf(addr string) int {
 		return 1
 	}
 	return 0
+}
+
+// verifierConfig is the one place the guard's verifier is configured. main
+// calls it and so does the test harness (overriding only HTTPClient), so a test
+// that pins the guard's verdict exercises the shipped configuration. It must not
+// set RequireEmail or RequirePrincipal: the guard allows all three principal
+// shapes (person, service token, neither/both) and decides on audience alone.
+func verifierConfig(cfg *config, log *slog.Logger) cfaccess.Config {
+	return cfaccess.Config{
+		TeamDomain:      cfg.teamDomain,
+		RefreshInterval: cfg.refresh,
+		Logger:          log,
+	}
 }

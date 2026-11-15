@@ -3,8 +3,8 @@ name: cf-access-guard tests
 # The guard decides whether requests to every tunneled app are authenticated
 # (SERV-106). The bypass table it used to own — alg=none, HS256 algorithm
 # confusion, cross-application audience, expired, no exp at all, tampered payload,
-# unknown kid — now lives in pkg/cfaccess as shared vectors that Switchyard's
-# TypeScript suite runs too (SERV-131), and this job runs BOTH modules. Until this
+# unknown kid — now lives in pkg/cfaccess as shared vectors (SERV-131) that the module's Go
+# tests run, and this job runs BOTH modules. Until this
 # workflow existed, nothing ran any of it: the tests could rot silently and the
 # first symptom would have been at the edge.
 #
