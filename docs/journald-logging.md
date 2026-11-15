@@ -18,8 +18,8 @@ every adopter in it, so the wave size is the number of simultaneous restarts.
 | Wave | Services | State |
 |---|---|---|
 | A (canary) | satlink | merged, canary passed |
-| B | purser, cf-access-guard | this change (SATL-72); see "Wave B" |
-| C | switchyard (24 h rate-limit check) | later PR |
+| B | purser, cf-access-guard | merged (SATL-72); see "Wave B" |
+| C | switchyard (24 h rate-limit check) | this change (SATL-73); see "Wave C" |
 | D | traefik (short edge outage) | later PR |
 | E | postgres | **DEFERRED** (ruling 3), see the cascade note |
 
@@ -86,6 +86,81 @@ scripts/journald-logging-rollout.sh $WAVE rollback --apply --revert-pr <revert P
 
 Each returns to `json-file` (the previous config for both: no `logging:` block), and the journal lines
 already written stay queryable with `journalctl CONTAINER_NAME=purser`. The same outages apply.
+
+## Wave C: switchyard
+
+**Which service, and why.** The plan puts exactly `switchyard` (the backend; not `switchyard-mcp` and
+not the frontend) in PR-C (subtask SATL-73): the busiest and most incident-relevant app (webhook
+handling, poller, plan and ledger errors) and the real test of the host-wide rate limit. Its compose
+stanza had no `logging:` block, so the change is the one `logging: *journald-logging` line. Wave C
+recreates only switchyard.
+
+**What the recreate costs** (the owner picks the window; it is the compose notes and workflows, not a measurement):
+
+| What | Effect while switchyard is recreated (healthcheck `start_period` 15 s) |
+|---|---|
+| Switchyard API (`switchyard:4002`, the web app's `/v1/*`) | Unavailable. The frontend's passthrough returns errors until the backend is healthy again. |
+| MCP (`switchyard-mcp`, and so every agent session's Switchyard tools) | Tool calls fail for the window; `switchyard-mcp` forwards to `http://switchyard:4002` and holds no state, so it recovers by itself. Agents retry. |
+| GitHub webhook receiver (`/v1/external/github`, Tailscale Funnel) | Deliveries in the window fail. **GitHub does not redeliver on its own**; the external-ref poller is the reconciliation backstop (the compose comment on `GITHUB_TOKEN`), so PR state catches up on its next cycle. A merge that lands inside the window may auto-close its ticket a poll cycle late. |
+| `pr-review` jobs (`pr-review-reusable.yml`) | They read Switchyard on the runner's host (`http://localhost:4002`) with `curl -m 10` and report a fetch failure as a caveat in the review rather than failing the job. A review that starts inside the window loses its ticket context; re-run it. |
+| Other API clients (chronicle, purser, satlink, deploy.yml's token checks) | Their calls fail for the window and succeed on their next cycle. Pick a moment with no deploy running. |
+| interlock-worker | **Not a dependent.** It talks to postgres only (`depends_on: postgres`); it never calls Switchyard. |
+
+**Postgres cascade: not triggered.** postgres is untouched in this wave (ruling 3), so no address
+changes and neither switchyard nor interlock-worker needs the postgres-recreate `force-recreate`.
+This PR changes only switchyard's spec, so the merge deploy's unscoped `up -d` recreates only
+switchyard (plus any first-party pin that published since the last deploy, see below); interlock-worker
+is not recreated. The direction of the dependency matters here: switchyard depends on postgres, not
+the reverse, and recreating switchyard leaves postgres, interlock-worker, the frontend and
+switchyard-mcp running (compose does not recreate dependents of a recreated service).
+
+**Deploy scope.** As for wave B, any `docker-compose.yml` change takes deploy.yml's whole-stack path:
+`pull` for every pin and an unscoped `up -d`, so anything that drifted since the last deploy moves too.
+Nothing was run against the host when writing this; the drift reasoning is the same as wave B's and
+has to be re-checked on the day:
+
+```sh
+make deploy-scope base=origin/main head=<this branch>
+scripts/journald-logging-rollout.sh --svc switchyard --pr <this wave's PR number> preflight   # lists any drift and pauses
+```
+
+If preflight lists drift on switchyard's own pin (`SWITCHYARD_TAG`) the merge deploy will also pull a
+new switchyard image: the same single recreate, with new code in it. Prefer to deploy that
+separately first so a wave failure is attributable to the logging change.
+
+**The 24 h rate-limit check.** Plan criterion 5: no `Suppressed ... messages from docker.service`
+notice in a 24 h window after the switchyard wave. switchyard is the largest new journal producer
+(about 16 MB/day measured at planning), and the limit is one host-wide bucket, so this is the
+behavioural proof of the `50000` per `30s` setting. `canary` asserts zero `Suppressed` since its start;
+the 24 h figure is read by `verify`, whose Suppressed count is for the last 24 h, so run `verify`
+again about a day after the deploy and record that count on SATL-25 / SATL-73. Also compare
+`journalctl --disk-usage` with the preflight baseline (expect growth in the tens of MB per day, no
+vacuum of older host files; the 6G cap holds).
+
+**Canary precondition.** `canary` refuses to recreate a service whose journal has no lines (BEFORE=0,
+"nothing to prove"). switchyard logs continuously, and after the merge deploy it has written to the
+journal since its recreate, so BEFORE>0 holds. If it did not (a quiet window right after the deploy),
+`canary` stops before touching anything; wait and re-run.
+
+```sh
+WAVE="--svc switchyard --pr <this wave's PR number>"
+scripts/journald-logging-rollout.sh $WAVE preflight
+scripts/journald-logging-rollout.sh $WAVE merge-gate --apply   # pauses while YOU merge, then checks the deploy and the driver
+scripts/journald-logging-rollout.sh $WAVE canary --apply       # force-recreate switchyard (a second outage, names it first), id/StartedAt changed, lines survive, docker logs, healthy, zero Suppressed
+scripts/journald-logging-rollout.sh $WAVE verify               # now, and again ~24 h later for the rate-limit check
+scripts/journald-logging-rollout.sh $WAVE --print-evidence     # counts-only block for SATL-25 / SATL-73
+```
+
+The merge deploy's own recreate already puts switchyard on journald; `canary` does one MORE recreate
+to prove the lines survive. Skip it (Ctrl-C at its pause) if you would rather not take the second
+outage: `merge-gate` and `verify` prove the driver. `make journald-check` now expects switchyard on
+journald.
+
+**Rollback.** Revert this PR (the one `logging: *journald-logging` line) and merge it, then
+`scripts/journald-logging-rollout.sh $WAVE rollback --apply --revert-pr <revert PR number>` or by hand
+`make force-recreate svc=switchyard`. It returns to `json-file` with no `logging:` block (the previous
+config); lines already in the journal stay queryable with `journalctl CONTAINER_NAME=switchyard`.
+The same outage applies.
 
 ## Caps
 
