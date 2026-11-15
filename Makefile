@@ -6,7 +6,7 @@
         lint-gate lint-gate-install lint-gate-status lint-gate-test lint-gate-uninstall \
         comfy-file comfy-bootstrap comfy-build comfy-up comfy-down comfy-recreate comfy-ps comfy-logs comfy-health comfy-gpu comfy-preflight \
         backup-test backup-status \
-        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test plimsoll-llm-isolation plimsoll-llm-canary mcp-tools
+        plimsoll-sandbox-check plimsoll-sandbox-test plimsoll-llm-seed plimsoll-llm-seed-test satlink-edge-rollout-test traefik-access-log-rollout-test plimsoll-llm-isolation plimsoll-llm-canary mcp-tools
 
 # The live stack is deployed from a fixed path, not from whatever checkout you
 # happen to be standing in (SERV-76). Every target below targets that path
@@ -874,6 +874,14 @@ plimsoll-llm-seed-test:
 # Usage: make satlink-edge-rollout-test
 satlink-edge-rollout-test:
 	@./scripts/test/test-satlink-edge-rollout.sh
+
+# Prove scripts/traefik-access-log-rollout.sh (SATL-24) against fake binaries and a synthetic
+# access log: each phase's pass and fail paths (digest-drift pause, old config still live, a leaked
+# Cf-Access key, subject absent or on a 403, crowdsec not advancing, a missed reopen after rotate),
+# dry-run runs nothing, and no log value reaches a record. Touches nothing on the host.
+# Usage: make traefik-access-log-rollout-test
+traefik-access-log-rollout-test:
+	@./scripts/test/test-traefik-access-log-rollout.sh
 
 # Prove the RUNNING sandbox is isolated: plimsoll_ai's options and its two members, no
 # default route, no external TCP or DNS, and no connection from the host or from a
