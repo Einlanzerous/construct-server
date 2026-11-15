@@ -27,19 +27,21 @@
 #                or after the installed file's mtime. Never restarts dockerd or a container. Idempotent.
 #   merge-gate   (--apply) prints the sequence and PAUSES while YOU merge the PR; then verifies via gh that it
 #                merged and that the prod deploy run for the merge commit finished green (bounded poll), then that
-#                satlink reports LogConfig.Type=journald and plimsoll / plimsoll-llm still json-file. The merge
-#                deploy itself recreates satlink onto journald.
-#   canary       (--apply) BEFORE counts from the journal (CONTAINER_NAME=satlink lines, the CONTAINER_ID of the
-#                running container), `make -C <deploy root> force-recreate svc=satlink` (NEVER plain `recreate`:
+#                each wave service reports LogConfig.Type=journald and plimsoll / plimsoll-llm still json-file. The merge
+#                deploy itself recreates each wave service onto journald.
+#   canary       (--apply) for EACH service of the wave (default satlink; `--svc purser,cf-access-guard` or
+#                JOURNALD_ROLLOUT_SVCS, in that order, one at a time): BEFORE counts from the journal
+#                (CONTAINER_NAME=<svc> lines, the CONTAINER_ID of the
+#                running container), `make -C <deploy root> force-recreate svc=<svc>` (NEVER plain `recreate`:
 #                that is `up -d --no-deps`, a no-op on an unchanged spec; it exited 0 and left the old traefik
 #                container running), asserts the container id AND StartedAt changed, then AFTER counts: AFTER >=
-#                BEFORE, lines for the OLD container id > 0, `docker logs satlink` works, satlink healthy, zero
+#                BEFORE, lines for the OLD container id > 0, `docker logs <svc>` works, <svc> healthy, zero
 #                'Suppressed ... docker.service' notices in the window. Counts only.
 #   verify       READ-ONLY, always executes. `make journald-check`, disk usage not vacuumed, oldest entry
 #                unchanged, driver per service, the Suppressed count against the preflight baseline, and the
 #                Dozzle check that only YOU can do (recorded as PAUSE until you confirm; never an auto-PASS).
 #   rollback     (--apply, each step confirmed) the documented revert: you merge the revert of the compose
-#                logging block; this script waits for it, force-recreates satlink if it is still on journald,
+#                logging block; this script waits for it, force-recreates each wave service still on journald,
 #                asserts json-file and that the journal history is still queryable. Removing the journald drop-in (and any legacy docker.service one)
 #                and restarting journald happens ONLY with --remove-dropins.
 #   all          preflight, dropin, merge-gate, canary, verify in order, pausing before each
@@ -50,13 +52,20 @@
 # MODE. Dry-run is the default: dropin, merge-gate, canary and rollback only PRINT their plan unless --apply is
 # given. preflight and verify only read, so they execute in either mode (verify inside a dry-run `all` only prints).
 #
+# WAVES. --svc a,b names the wave's services (allowed: satlink purser cf-access-guard switchyard traefik; never
+# plimsoll, plimsoll-llm or postgres). It drives the preflight driver records, merge-gate, canary, verify and
+# rollback checks. Wave B: `--svc purser,cf-access-guard --pr <wave PR>`. The default, satlink, behaves as before
+# and keeps its state keys; another service's canary keys are canary_<svc>_*. The dry-run plan of the canary
+# prints each service's outage.
+#
 # Flags: --apply            really run the phase (dropin, merge-gate, canary, rollback, all)
 #        --yes              do not pause between phases of `all` (forced pauses still happen)
 #        --confirm-apply    skip the forced owner pauses (drift, merge). Never skips a rollback step.
 #        --confirm-rollback skip the per-step typed confirmation of `rollback` (tests)
 #        --confirm-dozzle   record the Dozzle check as owner-confirmed without asking (tests)
 #        --remove-dropins   rollback: also remove the host drop-ins and restart journald
-#        --pr N             the PR to merge in merge-gate (default 297)
+#        --pr N             the PR to merge in merge-gate (default 297, the wave A PR)
+#        --svc A[,B...]     the wave's services (default satlink), see WAVES
 #        --revert-pr N      rollback: the revert PR the owner merges (optional, verified via gh when given)
 #        --record F         record file (default ~/.cache/journald-logging-rollout/rollout-<utc>-<phase>.md)
 #        --print-evidence   see above
@@ -66,8 +75,9 @@
 #
 # WHAT THE RECORD HOLDS. Counts, container ids, service names, exit codes, byte sizes, dates. Never a log line:
 # every journal read is a pipeline whose only output is a number, and the reader's output is never echoed. No
-# `set -x`. Nothing here merges, pushes or commits, and nothing here restarts dockerd or any other container
-# than satlink (canary / rollback only).
+# `set -x`. Nothing here merges, pushes or commits, and nothing here restarts dockerd, and the only containers it
+# recreates are the wave's own --svc services (canary / rollback only; recreating cf-access-guard 500s every
+# tunneled host for its restart window, see the per-service outage line the canary prints).
 
 set -euo pipefail
 set +a +x +v
@@ -86,10 +96,13 @@ DK_FILE="50-log-rate.conf"   # LEGACY (wave A): a docker.service drop-in journal
 BURST_WANT=50000
 INTERVAL_WANT=30s
 SVC="satlink"
+SVCS_ARG="${JOURNALD_ROLLOUT_SVCS:-satlink}"
+SVCS=()
+ALLOWED_SVCS=(satlink purser cf-access-guard switchyard traefik)
 JSONFILE_SVCS=(plimsoll plimsoll-llm)
 DEPLOY_WORKFLOW="deploy.yml"
-STATE_DIR="${JOURNALD_ROLLOUT_DIR:-$HOME/.cache/journald-logging-rollout}"
-STATE="$STATE_DIR/state.kv"
+# STATE_DIR and STATE are set after the arguments are parsed: each wave (its --svc list) has its own state
+# directory, see "per-wave state" below.
 DEPLOY_POLL_MAX="${JOURNALD_ROLLOUT_DEPLOY_POLL_MAX:-1800}"   # seconds to wait for the deploy run
 DEPLOY_POLL_GAP="${JOURNALD_ROLLOUT_DEPLOY_POLL_GAP:-15}"
 MERGE_POLL_MAX="${JOURNALD_ROLLOUT_MERGE_POLL_MAX:-300}"
@@ -186,18 +199,37 @@ st_set() {   # st_set KEY VALUE
   mkdir -p "$STATE_DIR"; touch "$STATE"
   { grep -v "^$1=" "$STATE" 2>/dev/null || true; printf '%s=%s\n' "$1" "$2"; } >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 }
+st_clear() {   # st_clear ERE — drop every key matching ^ERE= so a phase never reports an earlier run's outcome
+  [ -f "$STATE" ] || return 0
+  { grep -Ev "^($1)=" "$STATE" 2>/dev/null || true; } >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+}
 st_get() { { grep "^$1=" "$STATE" 2>/dev/null || true; } | tail -1 | cut -d= -f2-; }
 st_or() { local v; v="$(st_get "$1")"; printf '%s' "${v:-n/a}"; }
 
 now_s() { date +%s.%N; }
+
+# State-key prefix for a service's canary: satlink keeps the wave A keys (canary_before ...), any other
+# service is canary_<svc>_before ...
+ckp() { if [ "$1" = satlink ]; then echo canary; else echo "canary_${1//-/_}"; fi; }
+# What a recreate of the service costs (printed in the dry-run plan).
+outage_of() {
+  case "$1" in
+    satlink) echo "the dashboard is down for a few seconds; its Docker-state exporter may read unavailable for up to 90 s" ;;
+    purser) echo "purser's API on port 4006 is down for its start window (healthcheck start_period 10 s); it has no Traefik router and no dependents, deploy tooling just pauses" ;;
+    cf-access-guard) echo "every tunneled host behind forwardAuth answers with 500s for a few seconds (Traefik retries per request; the compose notes say a few seconds); the public Argosy path is not gated by it" ;;
+    switchyard) echo "a few seconds of API/MCP errors; agents mid-request retry and GitHub retries webhook deliveries" ;;
+    traefik) echo "the whole edge (public Argosy path and every tunneled app) is down for seconds; owner present" ;;
+    *) echo "unknown" ;;
+  esac
+}
 
 # ── reads (numbers only: a log line never leaves these pipelines) ────────────────
 
 jcount() {   # jcount FIELD=VALUE -> number of journal lines
   { journalctl "$1" --no-pager -q -o cat 2>/dev/null || true; } | wc -l | tr -d ' '
 }
-journal_container_id() {   # the CONTAINER_ID journal field of the newest satlink entry (12 chars), nothing else
-  { journalctl "CONTAINER_NAME=$SVC" --no-pager -q -n 1 -o json 2>/dev/null || true; } | jq -r '.CONTAINER_ID // empty' 2>/dev/null | head -1
+journal_container_id() {   # journal_container_id SVC — the CONTAINER_ID journal field of its newest entry (12 chars), nothing else
+  { journalctl "CONTAINER_NAME=$1" --no-pager -q -n 1 -o json 2>/dev/null || true; } | jq -r '.CONTAINER_ID // empty' 2>/dev/null | head -1
 }
 suppressed_since() {   # suppressed_since "<journalctl --since value>" -> count
   { journalctl -u systemd-journald --since "$1" --no-pager -q -o cat 2>/dev/null || true; } | grep -c 'Suppressed .* messages from docker.service' || true
@@ -278,20 +310,24 @@ pf_drivers() {
   [ "$total" -gt 0 ]
 }
 
-pf_satlink() {
-  local d s id started
-  s="$(ctr_id_started "$SVC")"
-  [ -n "$s" ] || { rec "  - container $SVC not found"; return 1; }
-  d="$(driver_of "$SVC")"; id="${s%%|*}"; started="${s#*|}"
-  rec "  - $SVC driver $d, container ${id:0:12}, StartedAt $started"
-  st_set pf_satlink_driver "$d"; st_set pf_satlink_id "${id:0:12}"; st_set pf_satlink_started "$started"
+pf_satlink() {   # every service of the wave (satlink by default); keys pf_<svc>_driver / _id / _started
+  local d s id started w rc=0 k
+  for w in "${SVCS[@]}"; do
+    k="pf_${w//-/_}"
+    s="$(ctr_id_started "$w")"
+    [ -n "$s" ] || { rec "  - container $w not found"; rc=1; continue; }
+    d="$(driver_of "$w")"; id="${s%%|*}"; started="${s#*|}"
+    rec "  - $w driver $d, container ${id:0:12}, StartedAt $started"
+    st_set "${k}_driver" "$d"; st_set "${k}_id" "${id:0:12}"; st_set "${k}_started" "$started"
+  done
+  return "$rc"
 }
 
 pf_check() {
   local s
   run make -C "$REPO" journald-check
   s="$(sed -n 's/^Suppressed notices for docker.service: \([0-9][0-9]*\).*/\1/p' <<<"$OUT" | head -1)"
-  rec "  - make journald-check exit $RC (make reports the check's exit 1 as 2; a non-zero exit is expected before the merge: $SVC is still json-file); Suppressed notices (24h): ${s:-n/a}"
+  rec "  - make journald-check exit $RC (make reports the check's exit 1 as 2; a non-zero exit is expected before the merge: ${SVCS[*]} still json-file); Suppressed notices (24h): ${s:-n/a}"
   st_set pf_check_rc "$RC"; st_set pf_suppressed "${s:-0}"
   # it must have RUN (its last section printed), whatever it concluded about the drivers
   [ "$RC" -eq 0 ] || grep -q '^== rate-limit drops' <<<"$OUT"
@@ -356,7 +392,7 @@ phase_preflight() {
   soft "the journald drop-in is absent, or present and byte-identical to the repo copy (legacy docker.service drop-in recorded present/absent)" pf_dropins
   soft "effective global RateLimitBurst/Interval from systemd-analyze cat-config recorded" pf_burst
   soft "containers counted per log driver" pf_drivers
-  soft "$SVC driver, container id and StartedAt recorded" pf_satlink
+  soft "${SVCS[*]}: driver, container id and StartedAt recorded" pf_satlink
   soft "make journald-check baseline ran (a red result is expected before the merge)" pf_check
   soft "#$PR state read (merged or not; recorded)" pf_pr_state
   soft "first-party image digests resolved against the registry for origin/main's pins" pf_digest_drift
@@ -435,9 +471,9 @@ ratelimit_effective() {
 print_merge_sequence() {
   say "The sequence (you do the merge; this script never merges):"
   say "  1. merge #$PR yourself (squash, as the repo does), AFTER the dropin phase passed. The docker-compose.yml change runs the"
-  say "     whole-stack prod deploy, which recreates satlink onto journald (and any drifted first-party service, see preflight)."
+  say "     whole-stack prod deploy, which recreates ${SVCS[*]} onto journald (and any drifted first-party service, see preflight)."
   say "  2. this script then checks: #$PR merged into main, the $DEPLOY_WORKFLOW run for the merge commit finished green,"
-  say "     $SVC reports LogConfig.Type=journald, and ${JSONFILE_SVCS[*]} still report json-file."
+  say "     ${SVCS[*]} report LogConfig.Type=journald, and ${JSONFILE_SVCS[*]} still report json-file."
 }
 
 mg_merged() {
@@ -478,9 +514,11 @@ mg_deploy_green() {
 
 mg_drivers() {
   local d s ok=0
-  d="$(driver_of "$SVC")"; rec "  - $SVC driver: ${d:-unreadable}"
-  st_set mg_satlink_driver "${d:-unreadable}"
-  [ "$d" = journald ] || ok=1
+  for s in "${SVCS[@]}"; do
+    d="$(driver_of "$s")"; rec "  - $s driver: ${d:-unreadable}"
+    st_set "mg_${s//-/_}_driver" "${d:-unreadable}"
+    [ "$d" = journald ] || ok=1
+  done
   for s in "${JSONFILE_SVCS[@]}"; do
     d="$(driver_of "$s")"; rec "  - $s driver: ${d:-unreadable}"
     st_set "mg_${s//-/_}_driver" "${d:-unreadable}"
@@ -494,10 +532,11 @@ phase_merge_gate() {
   print_merge_sequence
   if [ "$APPLY" -eq 0 ]; then say "- $(ts) DRY-RUN: would pause for the merge, then poll gh and assert the checks above"; return 0; fi
   need gh jq docker
-  pause "merge #$PR now (the host drop-ins must already be installed). Press Enter once it is merged; the deploy then runs." force
+  st_clear 'merge_gate_ok|merge_sha|deploy_conclusion|mg_.*'
+  pause "merge #$PR now (the host drop-in must already be installed). Press Enter once it is merged; the deploy then runs." force
   check "#$PR merged into main" mg_merged
   check "prod deploy run for ${MERGE_SHA:0:9} finished green" mg_deploy_green
-  check "$SVC is on journald; ${JSONFILE_SVCS[*]} are still json-file" mg_drivers
+  check "${SVCS[*]} on journald; ${JSONFILE_SVCS[*]} still json-file" mg_drivers
   st_set merge_gate_ok 1
 }
 
@@ -514,55 +553,67 @@ wait_healthy() {   # wait_healthy NAME — healthy, or running when the image ha
 }
 
 phase_canary() {
-  say "## canary"
+  say "## canary (${SVCS[*]})"
   if [ "$APPLY" -eq 0 ]; then
-    say "- $(ts) DRY-RUN: would, in order:"
-    say "  1. assert $SVC is on journald; BEFORE = lines of \`journalctl CONTAINER_NAME=$SVC\`; OLD_ID = the CONTAINER_ID journal field; record container id and StartedAt"
-    say "  2. \`make -C $DEPLOY_ROOT force-recreate svc=$SVC\` (NOT plain \`recreate\`: that is up -d --no-deps, a no-op on an unchanged spec)"
-    say "  3. assert the container id AND StartedAt changed (a no-op make would leave both), $SVC healthy"
-    say "  4. AFTER = lines of CONTAINER_NAME=$SVC (>= BEFORE); OLDN = lines of CONTAINER_ID=OLD_ID (> 0); \`docker logs $SVC\` works;"
+    local w
+    say "- $(ts) DRY-RUN: would, for EACH of ${SVCS[*]} in that order, one at a time:"
+    say "  1. assert the service is on journald; BEFORE = lines of \`journalctl CONTAINER_NAME=<svc>\`; OLD_ID = the CONTAINER_ID journal field; record container id and StartedAt"
+    say "  2. \`make -C $DEPLOY_ROOT force-recreate svc=<svc>\` (NOT plain \`recreate\`: that is up -d --no-deps, a no-op on an unchanged spec)"
+    say "  3. assert the container id AND StartedAt changed (a no-op make would leave both), the service healthy"
+    say "  4. AFTER = lines of CONTAINER_NAME=<svc> (>= BEFORE); OLDN = lines of CONTAINER_ID=OLD_ID (> 0); \`docker logs <svc>\` works;"
     say "     zero 'Suppressed ... messages from docker.service' notices since the start. Counts only; no line is printed."
-    say "  $SVC is down for a few seconds (its Docker-state exporter may read unavailable for up to 90 s)."
+    for w in "${SVCS[@]}"; do say "  outage of the $w recreate: $(outage_of "$w")"; done
     return 0
   fi
   need docker make jq journalctl
+  local w
+  for w in "${SVCS[@]}"; do
+    if [ "${#SVCS[@]}" -gt 1 ]; then pause "next canary: force-recreate $w. Outage: $(outage_of "$w")" soft; fi
+    canary_one "$w"
+  done
+}
+
+canary_one() {   # canary_one SVC — the wave A assertions, for one service
+  local svc="$1" k; k="$(ckp "$svc")"
+  st_clear "${k}_(before|old_id|started_before|since|new_id|after|old_lines|docker_logs|docker_lines|suppressed|ok)"
+  say "### $svc (outage during the recreate: $(outage_of "$svc"))"
   local d s0 id0 started0 jid before since after oldn s1 id1 started1 dl sup
-  d="$(driver_of "$SVC")"
-  check "$SVC is on the journald driver before the canary (got ${d:-none})" test "$d" = journald
-  s0="$(ctr_id_started "$SVC")"; [ -n "$s0" ] || die "$SVC is not running; refusing"
+  d="$(driver_of "$svc")"
+  check "$svc is on the journald driver before the canary (got ${d:-none})" test "$d" = journald
+  s0="$(ctr_id_started "$svc")"; [ -n "$s0" ] || die "$svc is not running; refusing"
   id0="${s0%%|*}"; started0="${s0#*|}"
-  jid="$(journal_container_id)"
-  before="$(jcount "CONTAINER_NAME=$SVC")"
-  rec "  - BEFORE: $before journal lines for CONTAINER_NAME=$SVC; journal CONTAINER_ID ${jid:-none}; running container ${id0:0:12}, StartedAt $started0"
-  [[ "$before" =~ ^[0-9]+$ ]] && [ "$before" -gt 0 ] || die "no journal lines for CONTAINER_NAME=$SVC before the recreate: nothing to prove survives (is the deploy done and $SVC logging?)"
-  [ -n "$jid" ] || die "the journal carries no CONTAINER_ID field for $SVC"
+  jid="$(journal_container_id "$svc")"
+  before="$(jcount "CONTAINER_NAME=$svc")"
+  rec "  - BEFORE: $before journal lines for CONTAINER_NAME=$svc; journal CONTAINER_ID ${jid:-none}; running container ${id0:0:12}, StartedAt $started0"
+  [[ "$before" =~ ^[0-9]+$ ]] && [ "$before" -gt 0 ] || die "no journal lines for CONTAINER_NAME=$svc before the recreate: nothing to prove survives (is the deploy done and $svc logging? a service that printed nothing since its recreate cannot be proven this way: nothing was recreated)"
+  [ -n "$jid" ] || die "the journal carries no CONTAINER_ID field for $svc"
   check "the journal's newest CONTAINER_ID is the running container (${jid})" test "$jid" = "${id0:0:12}"
-  st_set canary_before "$before"; st_set canary_old_id "$jid"; st_set canary_started_before "$started0"
+  st_set "${k}_before" "$before"; st_set "${k}_old_id" "$jid"; st_set "${k}_started_before" "$started0"
   since="$(date '+%Y-%m-%d %H:%M:%S')"
-  st_set canary_since "$since"
+  st_set "${k}_since" "$since"
   # force-recreate, not recreate: `recreate` is `up -d --no-deps`, which does nothing when the compose spec is
   # unchanged. It exited 0 and left the old container running in the traefik window (SERV-164).
-  run make_deployed force-recreate "svc=$SVC"
-  [ "$RC" -eq 0 ] || die "make force-recreate svc=$SVC exited $RC"
-  s1="$(ctr_id_started "$SVC")"; id1="${s1%%|*}"; started1="${s1#*|}"
+  run make_deployed force-recreate "svc=$svc"
+  [ "$RC" -eq 0 ] || die "make force-recreate svc=$svc exited $RC"
+  s1="$(ctr_id_started "$svc")"; id1="${s1%%|*}"; started1="${s1#*|}"
   rec "  - after: container ${id1:0:12}, StartedAt $started1"
-  check "$SVC really restarted (container id changed; a no-op make leaves it)" test -n "$id1" -a "$id0" != "$id1"
-  check "$SVC StartedAt changed" test -n "$started1" -a "$started0" != "$started1"
-  check "$SVC healthy again" wait_healthy "$SVC"
-  st_set canary_new_id "${id1:0:12}"
-  after="$(jcount "CONTAINER_NAME=$SVC")"; oldn="$(jcount "CONTAINER_ID=$jid")"
+  check "$svc really restarted (container id changed; a no-op make leaves it)" test -n "$id1" -a "$id0" != "$id1"
+  check "$svc StartedAt changed" test -n "$started1" -a "$started0" != "$started1"
+  check "$svc healthy again" wait_healthy "$svc"
+  st_set "${k}_new_id" "${id1:0:12}"
+  after="$(jcount "CONTAINER_NAME=$svc")"; oldn="$(jcount "CONTAINER_ID=$jid")"
   rec "  - AFTER: $after lines (BEFORE $before); lines for the old container $jid: $oldn"
-  st_set canary_after "$after"; st_set canary_old_lines "$oldn"
+  st_set "${k}_after" "$after"; st_set "${k}_old_lines" "$oldn"
   check "pre-recreate lines survived (AFTER $after >= BEFORE $before)" test "$after" -ge "$before"
   check "the old container id still yields journal lines ($oldn > 0)" test "$oldn" -gt 0
-  if docker logs --tail 5 "$SVC" >/dev/null 2>&1; then pass "docker logs $SVC works"; st_set canary_docker_logs ok; else st_set canary_docker_logs fail; die "docker logs $SVC failed"; fi
-  dl="$({ docker logs "$SVC" 2>&1 || true; } | wc -l | tr -d ' ')"
-  rec "  - docker logs $SVC lines (new container only): $dl"; st_set canary_docker_lines "$dl"
+  if docker logs --tail 5 "$svc" >/dev/null 2>&1; then pass "docker logs $svc works"; st_set "${k}_docker_logs" ok; else st_set "${k}_docker_logs" fail; die "docker logs $svc failed"; fi
+  dl="$({ docker logs "$svc" 2>&1 || true; } | wc -l | tr -d ' ')"
+  rec "  - docker logs $svc lines (new container only): $dl"; st_set "${k}_docker_lines" "$dl"
   sup="$(suppressed_since "$since")"
   rec "  - 'Suppressed ... docker.service' notices since $since: $sup"
-  st_set canary_suppressed "$sup"
+  st_set "${k}_suppressed" "$sup"
   check "zero Suppressed notices from docker.service in the window" test "${sup:-1}" = 0
-  st_set canary_ok 1
+  st_set "${k}_ok" 1
 }
 
 # ── phase: verify ────────────────────────────────────────────────────────────────
@@ -580,7 +631,9 @@ vf_check() {
 
 vf_drivers() {
   local d s ok=0
-  d="$(driver_of "$SVC")"; rec "  - $SVC: ${d:-unreadable}"; st_set v_satlink_driver "${d:-unreadable}"; [ "$d" = journald ] || ok=1
+  for s in "${SVCS[@]}"; do
+    d="$(driver_of "$s")"; rec "  - $s: ${d:-unreadable}"; st_set "v_${s//-/_}_driver" "${d:-unreadable}"; [ "$d" = journald ] || ok=1
+  done
   for s in "${JSONFILE_SVCS[@]}"; do
     d="$(driver_of "$s")"; rec "  - $s: ${d:-unreadable}"; st_set "v_${s//-/_}_driver" "${d:-unreadable}"; [ "$d" = json-file ] || ok=1
   done
@@ -588,19 +641,19 @@ vf_drivers() {
 }
 
 vf_dozzle() {
-  say "- $(ts) MANUAL CHECK (only you can do this): open Dozzle, select the $SVC container."
+  say "- $(ts) MANUAL CHECK (only you can do this): open Dozzle, select each of: ${SVCS[*]}."
   say "    a) the LIVE TAIL streams new lines;  b) scroll-back / history renders older lines and timestamps."
-  say "    Then run \`journalctl CONTAINER_NAME=$SVC --since -1h | wc -l\` yourself if you want a count. Do not paste lines anywhere."
+  say "    Then run \`journalctl CONTAINER_NAME=<svc> --since -1h | wc -l\` yourself if you want a count. Do not paste lines anywhere."
   if [ "$CONFIRM_DOZZLE" -eq 1 ]; then
-    say "- $(ts) PASS (owner-confirmed via --confirm-dozzle): Dozzle live tail and history for $SVC"; st_set dozzle confirmed; return 0
+    say "- $(ts) PASS (owner-confirmed via --confirm-dozzle): Dozzle live tail and history for ${SVCS[*]}"; st_set dozzle confirmed; return 0
   fi
   if [ "$APPLY" -eq 1 ] && have_tty; then
     local ans=""
-    printf '\n>>> Did Dozzle show BOTH the live tail and the history for %s? Type yes to record it, anything else to leave it pending: ' "$SVC" >/dev/tty
+    printf '\n>>> Did Dozzle show BOTH the live tail and the history for %s? Type yes to record it, anything else to leave it pending: ' "${SVCS[*]}" >/dev/tty
     read -r ans </dev/tty
-    if [ "$ans" = yes ]; then say "- $(ts) PASS (owner-confirmed, typed yes): Dozzle live tail and history for $SVC"; st_set dozzle confirmed; return 0; fi
+    if [ "$ans" = yes ]; then say "- $(ts) PASS (owner-confirmed, typed yes): Dozzle live tail and history for ${SVCS[*]}"; st_set dozzle confirmed; return 0; fi
   fi
-  say "- $(ts) PAUSE: Dozzle live tail and history for $SVC are NOT yet confirmed by the owner (not an automatic pass). Re-run verify with a terminal and --apply, or record it by hand."
+  say "- $(ts) PAUSE: Dozzle live tail and history for ${SVCS[*]} are NOT yet confirmed by the owner (not an automatic pass). Re-run verify with a terminal and --apply, or record it by hand."
   st_set dozzle pending
 }
 
@@ -611,12 +664,13 @@ phase_verify() {
     return 0
   fi
   need docker make journalctl jq
+  st_clear 'verify_ok|dozzle|v_.*'
   local b o
   b="$(st_get pf_disk_bytes)"; o="$(st_get pf_oldest_epoch)"
   [[ "$b" =~ ^[0-9]+$ ]] && [[ "$o" =~ ^[0-9]+$ ]] || die "no recorded preflight baseline (disk usage / oldest entry): run the preflight phase first"
   check "make journald-check passes and Suppressed is not above the baseline" vf_check
   check "nothing vacuumed since the preflight baseline (usage not reduced, oldest entry unchanged)" not_vacuumed "$b" "$o"
-  check "driver per service: $SVC journald, ${JSONFILE_SVCS[*]} json-file" vf_drivers
+  check "driver per service: ${SVCS[*]} journald, ${JSONFILE_SVCS[*]} json-file" vf_drivers
   vf_dozzle
   st_set verify_ok 1
 }
@@ -628,18 +682,42 @@ rb_step() {   # rb_step MSG — each step is confirmed
   confirm_typed yes "$1"
 }
 
-rb_compose_driver() {   # the logging driver the DEPLOYED compose file gives satlink
+rb_compose_driver() {   # rb_compose_driver SVC — the logging driver the DEPLOYED compose file gives it
   docker compose -f "$DEPLOY_ROOT/docker-compose.yml" --env-file "$DEPLOY_ROOT/.env" config --format json 2>/dev/null \
-    | jq -r --arg s "$SVC" '.services[$s].logging.driver // "json-file"' 2>/dev/null || true
+    | jq -r --arg s "$1" '.services[$s].logging.driver // "json-file"' 2>/dev/null || true
+}
+
+rollback_one() {   # rollback_one SVC — steps 1 (deployed compose) and 2 (recreate if still journald) for one service
+  local svc="$1" k; if [ "$svc" = satlink ]; then k=rb; else k="rb_${svc//-/_}"; fi
+  local cd; cd="$(rb_compose_driver "$svc")"
+  rec "  - deployed compose gives $svc logging driver: ${cd:-unreadable}"
+  check "the deployed compose file no longer puts $svc on journald (got ${cd:-unreadable})" test "$cd" = json-file
+  local d s0 s1
+  d="$(driver_of "$svc")"
+  if [ "$d" = journald ]; then
+    rb_step "Step 2: force-recreate $svc ($(outage_of "$svc"))?"
+    s0="$(ctr_id_started "$svc")"
+    run make_deployed force-recreate "svc=$svc"; [ "$RC" -eq 0 ] || die "make force-recreate svc=$svc exited $RC"
+    s1="$(ctr_id_started "$svc")"
+    check "$svc really restarted (container id changed)" test -n "${s1%%|*}" -a "${s0%%|*}" != "${s1%%|*}"
+  else
+    note "$svc is already on ${d:-?} (the revert deploy recreated it): no recreate needed"
+  fi
+  check "$svc healthy" wait_healthy "$svc"
+  check "$svc is back on json-file" test "$(driver_of "$svc")" = json-file
+  local n; n="$(jcount "CONTAINER_NAME=$svc")"
+  rec "  - journal lines for CONTAINER_NAME=$svc after the rollback: $n (canary AFTER was $(st_or "$(ckp "$svc")_after"))"
+  st_set "${k}_journal_lines" "$n"
+  check "journal history stays queryable after the rollback ($n lines)" test "$n" -gt 0
 }
 
 phase_rollback() {
   say "## rollback"
   say "Documented rollback (docs/journald-logging.md): per service, no data cost."
-  say "  1. (yours) revert the PR that put \`logging: *journald-logging\` on $SVC (or put its json-file 10m x 3 block back) and merge it;"
-  say "     this script waits for it${REVERT_PR:+ (#$REVERT_PR)} and checks the deployed compose file gives $SVC json-file"
-  say "  2. \`make -C $DEPLOY_ROOT force-recreate svc=$SVC\` if it is still on journald (the revert deploy normally recreates it already);"
-  say "     assert json-file and that the journal lines are STILL queryable (\`journalctl CONTAINER_NAME=$SVC\`)"
+  say "  1. (yours) revert the PR that put \`logging: *journald-logging\` on ${SVCS[*]} (satlink: or put its json-file 10m x 3 block back) and merge it;"
+  say "     this script waits for it${REVERT_PR:+ (#$REVERT_PR)} and checks the deployed compose file gives each of ${SVCS[*]} json-file"
+  say "  2. \`make -C $DEPLOY_ROOT force-recreate svc=<svc>\` for each one still on journald (the revert deploy normally recreates it already);"
+  say "     assert json-file and that the journal lines are STILL queryable (\`journalctl CONTAINER_NAME=<svc>\`)"
   say "  3. only with --remove-dropins: \`sudo rm -f\` the journald drop-in (and the legacy docker.service one if present), daemon-reload, restart systemd-journald (touches no container)"
   if [ "$APPLY" -eq 0 ]; then say "- $(ts) DRY-RUN: nothing done"; return 0; fi
   need docker make jq journalctl
@@ -650,26 +728,8 @@ phase_rollback() {
     [ "$RC" -eq 0 ] && [ "$OUT" = MERGED ] || die "revert PR #$REVERT_PR is not merged"
     pass "revert PR #$REVERT_PR is merged"
   fi
-  local cd; cd="$(rb_compose_driver)"
-  rec "  - deployed compose gives $SVC logging driver: ${cd:-unreadable}"
-  check "the deployed compose file no longer puts $SVC on journald (got ${cd:-unreadable})" test "$cd" = json-file
-  local d s0 s1
-  d="$(driver_of "$SVC")"
-  if [ "$d" = journald ]; then
-    rb_step "Step 2: force-recreate $SVC (a few seconds of dashboard downtime)?"
-    s0="$(ctr_id_started "$SVC")"
-    run make_deployed force-recreate "svc=$SVC"; [ "$RC" -eq 0 ] || die "make force-recreate svc=$SVC exited $RC"
-    s1="$(ctr_id_started "$SVC")"
-    check "$SVC really restarted (container id changed)" test -n "${s1%%|*}" -a "${s0%%|*}" != "${s1%%|*}"
-  else
-    note "$SVC is already on ${d:-?} (the revert deploy recreated it): no recreate needed"
-  fi
-  check "$SVC healthy" wait_healthy "$SVC"
-  check "$SVC is back on json-file" test "$(driver_of "$SVC")" = json-file
-  local n; n="$(jcount "CONTAINER_NAME=$SVC")"
-  rec "  - journal lines for CONTAINER_NAME=$SVC after the rollback: $n (canary AFTER was $(st_or canary_after))"
-  st_set rb_journal_lines "$n"
-  check "journal history stays queryable after the rollback ($n lines)" test "$n" -gt 0
+  local w
+  for w in "${SVCS[@]}"; do rollback_one "$w"; done
   if [ "$REMOVE_DROPINS" -eq 1 ]; then
     rb_step "Step 3: remove the journald drop-in (and any legacy docker.service one) and restart systemd-journald (no container is touched)?"
     run sudo rm -f "$JD_DIR/$JD_FILE" "$DK_DIR/$DK_FILE"; [ "$RC" -eq 0 ] || die "could not remove the drop-ins"
@@ -685,17 +745,38 @@ phase_rollback() {
 
 # ── evidence ─────────────────────────────────────────────────────────────────────
 
+# Evidence helpers: one entry per service of the wave. satlink alone prints exactly the wave A wording.
+ev_each() {   # ev_each KEYFMT LABEL — "<svc> <label> <value>" for each service
+  local w out=() v
+  for w in "${SVCS[@]}"; do v="$(st_or "$(printf "$1" "${w//-/_}")")"; out+=("$w ${2:+$2 }$v"); done
+  local i; for i in "${!out[@]}"; do [ "$i" -eq 0 ] && printf '%s' "${out[$i]}" || printf ', %s' "${out[$i]}"; done
+}
+ev_canary() {
+  local w k out=() multi=0 pre
+  { [ "${#SVCS[@]}" -gt 1 ] || [ "${SVCS[0]}" != satlink ]; } && multi=1
+  for w in "${SVCS[@]}"; do
+    k="$(ckp "$w")"; pre=""; [ "$multi" -eq 0 ] || pre="$w: "
+    out+=("${pre}BEFORE $(st_or "${k}_before") lines, AFTER $(st_or "${k}_after") lines, old container $(st_or "${k}_old_id") lines $(st_or "${k}_old_lines"), new container $(st_or "${k}_new_id"); docker logs $(st_or "${k}_docker_logs") ($(st_or "${k}_docker_lines") lines, new container only); Suppressed in the window $(st_or "${k}_suppressed"); canary passed: $([ "$(st_get "${k}_ok")" = 1 ] && echo yes || echo no)")
+  done
+  local i; for i in "${!out[@]}"; do [ "$i" -eq 0 ] && printf '%s' "${out[$i]}" || printf ' | %s' "${out[$i]}"; done
+}
+ev_rollback() {
+  local w k out=""
+  for w in "${SVCS[@]}"; do if [ "$w" = satlink ]; then k=rb; else k="rb_${w//-/_}"; fi; out+="${out:+, }$w $(st_or "${k}_journal_lines")"; done
+  printf '%s' "$out"
+}
+
 print_evidence() {
   [ -f "$STATE" ] || { echo "no recorded state at $STATE: nothing to summarise" >&2; return 1; }
   cat <<EOF
 **SATL-25 / SATL-71 journald canary evidence** (counts only; no log line, no log value)
 
-- preflight: #$PR state $(st_or pf_pr_state); journal $(st_or pf_disk_bytes) bytes, oldest entry $(date_of "$(st_or pf_oldest_epoch)"); journald drop-in before: $(st_or pf_dropin_journald), legacy docker.service drop-in $(st_or pf_dropin_docker); effective RateLimitBurst before $(st_or pf_burst); containers by driver: journald $(st_or pf_ctr_journald), json-file $(st_or pf_ctr_jsonfile), other $(st_or pf_ctr_other) of $(st_or pf_ctr_total); $SVC driver $(st_or pf_satlink_driver), container $(st_or pf_satlink_id); journald-check exit $(st_or pf_check_rc); Suppressed (24h) $(st_or pf_suppressed); pending whole-stack drift items $(st_or pf_drift_n), versions.env keys differing $(st_or pf_versions_n)
+- preflight: #$PR state $(st_or pf_pr_state); journal $(st_or pf_disk_bytes) bytes, oldest entry $(date_of "$(st_or pf_oldest_epoch)"); journald drop-in before: $(st_or pf_dropin_journald), legacy docker.service drop-in $(st_or pf_dropin_docker); effective RateLimitBurst before $(st_or pf_burst); containers by driver: journald $(st_or pf_ctr_journald), json-file $(st_or pf_ctr_jsonfile), other $(st_or pf_ctr_other) of $(st_or pf_ctr_total); $(ev_each "pf_%s_driver" "driver"), container ids $(ev_each "pf_%s_id" ""); journald-check exit $(st_or pf_check_rc); Suppressed (24h) $(st_or pf_suppressed); pending whole-stack drift items $(st_or pf_drift_n), versions.env keys differing $(st_or pf_versions_n)
 - dropin: $([ "$(st_get dropin_ok)" = 1 ] && echo "installed, byte-identical, nothing vacuumed (journal $(st_or dropin_disk_before) bytes before)" || echo "not recorded"); host-wide rate limit (effective config) RateLimitBurst $(st_or dropin_burst), RateLimitIntervalSec $(st_or dropin_interval), journald restarted after the file: $([ "$(st_get ratelimit_ok)" = 1 ] && echo yes || echo "not recorded") (journald has no runtime readback)
-- merge-gate: merge commit $(st_or merge_sha | cut -c1-9); deploy run conclusion $(st_or deploy_conclusion); drivers: $SVC $(st_or mg_satlink_driver), plimsoll $(st_or mg_plimsoll_driver), plimsoll-llm $(st_or mg_plimsoll_llm_driver)
-- canary: BEFORE $(st_or canary_before) lines, AFTER $(st_or canary_after) lines, old container $(st_or canary_old_id) lines $(st_or canary_old_lines), new container $(st_or canary_new_id); docker logs $(st_or canary_docker_logs) ($(st_or canary_docker_lines) lines, new container only); Suppressed in the window $(st_or canary_suppressed); canary passed: $([ "$(st_get canary_ok)" = 1 ] && echo yes || echo no)
-- verify: journald-check exit $(st_or v_check_rc), Suppressed (24h) $(st_or v_suppressed); journal now $(st_or last_disk_bytes) bytes, oldest entry $(date_of "$(st_or last_oldest_epoch)"); drivers: $SVC $(st_or v_satlink_driver), plimsoll $(st_or v_plimsoll_driver), plimsoll-llm $(st_or v_plimsoll_llm_driver); Dozzle (live tail + history): $(st_or dozzle); verify passed: $([ "$(st_get verify_ok)" = 1 ] && echo yes || echo no)
-- rollback: $([ "$(st_get rollback_done)" = 1 ] && echo "done; journal lines still queryable $(st_or rb_journal_lines); drop-ins removed: $(st_or rb_dropins_removed)" || echo "not run")
+- merge-gate: merge commit $(st_or merge_sha | cut -c1-9); deploy run conclusion $(st_or deploy_conclusion); drivers: $(ev_each "mg_%s_driver" ""), plimsoll $(st_or mg_plimsoll_driver), plimsoll-llm $(st_or mg_plimsoll_llm_driver)
+- canary: $(ev_canary)
+- verify: journald-check exit $(st_or v_check_rc), Suppressed (24h) $(st_or v_suppressed); journal now $(st_or last_disk_bytes) bytes, oldest entry $(date_of "$(st_or last_oldest_epoch)"); drivers: $(ev_each "v_%s_driver" ""), plimsoll $(st_or v_plimsoll_driver), plimsoll-llm $(st_or v_plimsoll_llm_driver); Dozzle (live tail + history): $(st_or dozzle); verify passed: $([ "$(st_get verify_ok)" = 1 ] && echo yes || echo no)
+- rollback: $([ "$(st_get rollback_done)" = 1 ] && echo "done; journal lines still queryable $(ev_rollback); drop-ins removed: $(st_or rb_dropins_removed)" || echo "not run")
 EOF
 }
 
@@ -712,6 +793,7 @@ while [ $# -gt 0 ]; do
     --remove-dropins) REMOVE_DROPINS=1 ;;
     --print-evidence) EVIDENCE=1 ;;
     --pr) PR="${2:?--pr needs a number}"; shift ;;
+    --svc) SVCS_ARG="${2:?--svc needs a service list}"; shift ;;
     --revert-pr) REVERT_PR="${2:?--revert-pr needs a number}"; shift ;;
     --record) RECORD="${2:?--record needs a file}"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -722,6 +804,23 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+IFS=',' read -r -a SVCS <<<"$SVCS_ARG"
+[ "${#SVCS[@]}" -gt 0 ] || { echo "ERROR: --svc needs at least one service" >&2; exit 2; }
+for _s in "${SVCS[@]}"; do
+  case " ${ALLOWED_SVCS[*]} " in *" $_s "*) ;; *) echo "ERROR: '$_s' is not a journald wave service (allowed: ${ALLOWED_SVCS[*]}; plimsoll, plimsoll-llm and postgres are never in a wave here)" >&2; exit 2 ;; esac
+done
+SVC="${SVCS[0]}"
+# Per-wave state: wave A (satlink only) keeps the original directory so its recorded state is still read;
+# any other wave gets a sibling directory suffixed with its service list, so a later wave can never read
+# (or be shown) an earlier wave's verify_ok, merge_sha, deploy_conclusion or dozzle.
+if [ -n "${JOURNALD_ROLLOUT_DIR:-}" ]; then
+  STATE_DIR="$JOURNALD_ROLLOUT_DIR"
+elif [ "${SVCS[*]}" = satlink ]; then
+  STATE_DIR="$HOME/.cache/journald-logging-rollout"
+else
+  STATE_DIR="$HOME/.cache/journald-logging-rollout-$(IFS=-; echo "${SVCS[*]}")"
+fi
+STATE="$STATE_DIR/state.kv"
 if [ "$EVIDENCE" -eq 1 ]; then print_evidence; exit $?; fi
 [ -n "$PHASE" ] || { usage >&2; exit 2; }
 [[ "$PR" =~ ^[0-9]+$ ]] || { echo "ERROR: --pr must be a number" >&2; exit 2; }

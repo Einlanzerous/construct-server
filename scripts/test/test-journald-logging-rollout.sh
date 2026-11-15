@@ -60,11 +60,13 @@ mk systemd-analyze 'echo "[Journal]"; echo "# RateLimitBurst=1"; [ -n "$(cat "$F
 [ -n "$(cat "$FAKE/eff_interval" 2>/dev/null)" ] && echo "RateLimitIntervalSec=$(cat "$FAKE/eff_interval")"; exit 0'
 # journalctl: counts come from files; every counted line is the CANARY.
 mk journalctl 'emit() { local n="$1" i; for ((i = 0; i < n; i++)); do echo "$CANARY secret reading $i"; done; }
+nm=satlink; for a in "$@"; do case "$a" in CONTAINER_NAME=*) nm="${a#CONTAINER_NAME=}" ;; esac; done
+fk() { if [ "$nm" = satlink ]; then echo "$FAKE/$1"; else echo "$FAKE/$nm.$1"; fi; }
 case "$*" in
   *--disk-usage*) echo "Archived and active journals take up $(cat "$FAKE/disk") in the file system." ;;
   *"-o short-unix"*) echo "$(cat "$FAKE/oldest").123456 imperial-construct kernel: $CANARY"; echo "1770000000.5 imperial-construct app: $CANARY" ;;
-  *"CONTAINER_NAME=satlink"*"-o json"*) echo "{\"CONTAINER_ID\":\"$(cat "$FAKE/jid")\",\"MESSAGE\":\"$CANARY\"}" ;;
-  *"CONTAINER_NAME=satlink"*) emit "$(cat "$FAKE/count")" ;;
+  *"CONTAINER_NAME="*"-o json"*) echo "{\"CONTAINER_ID\":\"$(cat "$(fk jid)")\",\"MESSAGE\":\"$CANARY\"}" ;;
+  *"CONTAINER_NAME="*) emit "$(cat "$(fk count)")" ;;
   *"CONTAINER_ID="*) id="${*#*CONTAINER_ID=}"; id="${id%% *}"; emit "$(cat "$FAKE/old_$id" 2>/dev/null || echo 0)" ;;
   *"-u systemd-journald"*) for ((i = 0; i < $(cat "$FAKE/suppressed"); i++)); do echo "Suppressed 9 messages from docker.service"; done; echo "$CANARY" ;;
 esac'
@@ -73,16 +75,18 @@ mk make 'case "$*" in
   *journald-check*) [ "$(cat "$FAKE/check_rc" 2>/dev/null || echo 0)" = 7 ] && { echo "ERROR: journalctl not found" >&2; exit 2; }
     echo "== rate-limit drops, last 24 h (expect 0) =="; echo "Suppressed notices for docker.service: $(cat "$FAKE/suppressed")"
     [ "$(cat "$FAKE/check_rc" 2>/dev/null || echo 0)" = 0 ] || exit 2; exit 0 ;;   # make reports the check'"'"'s exit 1 as 2
-  *"force-recreate svc=satlink"*)
+  *"force-recreate svc="*)
     [ -e "$FAKE/recreate_noop" ] && exit 0
-    old="$(cat "$FAKE/jid")"; n="$(cat "$FAKE/count")"
+    for a in "$@"; do case "$a" in svc=*) nm="${a#svc=}" ;; esac; done; fk() { if [ "$nm" = satlink ]; then echo "$FAKE/$1"; else echo "$FAKE/$nm.$1"; fi; }
+    old="$(cat "$(fk jid)")"; n="$(cat "$(fk count)")"
     [ -e "$FAKE/old_absent" ] || echo "$n" >"$FAKE/old_$old"
-    echo "newcontainerid0000000000000000000000000000000000000000000000000001" >"$FAKE/cid"; cut -c1-12 "$FAKE/cid" >"$FAKE/jid"
-    echo "2026-11-15T04:00:00.000000000Z" >"$FAKE/started"
-    if [ -e "$FAKE/lines_lost" ]; then echo 2 >"$FAKE/count"; else echo $((n + 6)) >"$FAKE/count"; fi
-    [ -e "$FAKE/rollback_flips" ] && echo json-file >"$FAKE/drv_satlink"
+    echo "new${nm}container000000000000000000000000000000000000000000000001" >"$(fk cid)"; cut -c1-12 "$(fk cid)" >"$(fk jid)"
+    echo "2026-11-15T04:00:00.000000000Z" >"$(fk started)"
+    if [ -e "$FAKE/lines_lost" ]; then echo 2 >"$(fk count)"; else echo $((n + 6)) >"$(fk count)"; fi
+    echo "$nm" >>"$FAKE/recreated"
+    [ -e "$FAKE/rollback_flips" ] && echo json-file >"$FAKE/drv_$nm"
     exit 0 ;;
-  *"recreate svc=satlink"*) exit 0 ;;   # the plain target is a no-op on an unchanged spec: the script must never call it
+  *"recreate svc="*) exit 0 ;;   # the plain target is a no-op on an unchanged spec: the script must never call it
 esac'
 mk gh 'case "$*" in
   *"pr view 297"*"-q .state"*) cat "$FAKE/gh_state" ;;
@@ -100,7 +104,8 @@ mk docker 'case "$*" in
   "ps -aq") echo satlink; echo plimsoll; echo plimsoll-llm; echo traefik ;;
   *"LogConfig.Type"*) name="${*: -1}"; cat "$FAKE/drv_$name" 2>/dev/null || exit 1 ;;
   *"State.Health"*) cat "$FAKE/health" 2>/dev/null || echo healthy ;;
-  *".Id}}|{{.State.StartedAt"*) [ -e "$FAKE/no_satlink" ] && exit 1; echo "$(cat "$FAKE/cid")|$(cat "$FAKE/started")" ;;
+  *".Id}}|{{.State.StartedAt"*) nm="${*: -1}"; [ "$nm" = satlink ] && p="$FAKE/" || p="$FAKE/$nm."
+    [ -e "$FAKE/no_$nm" ] && exit 1; echo "$(cat "${p}cid")|$(cat "${p}started")" ;;
   "logs --tail"*) [ -e "$FAKE/logs_broken" ] && exit 1; echo "$CANARY" ;;
   "logs"*) for i in 1 2 3; do echo "$CANARY"; done ;;
 esac'
@@ -130,12 +135,20 @@ reset_fake() {
   echo "oldcontainerid00000000000000000000000000000000000000000000000000001" >"$F/cid"; echo oldcontainer >"$F/jid"
   echo "2026-11-14T01:00:00.000000000Z" >"$F/started"
   echo 40 >"$F/count"
+  # wave B services (purser, cf-access-guard): same shape, files named <svc>.<what>
+  local w; for w in purser cf-access-guard; do
+    echo json-file >"$F/drv_$w"
+    echo "old${w}container000000000000000000000000000000000000000000000000001" >"$F/$w.cid"; cut -c1-12 "$F/$w.cid" >"$F/$w.jid"
+    echo "2026-11-14T01:00:00.000000000Z" >"$F/$w.started"; echo 3 >"$F/$w.count"
+  done
 }
 # the world as it is after the merge deploy: satlink on journald, the journald drop-in installed and effective
 post_merge() {
   echo journald >"$F/drv_satlink"; echo 50000 >"$F/eff_burst"; echo 30s >"$F/eff_interval"
   cp "$R/ansible/roles/server/files/journald/$JDF" "$T/etc/jd/$JDF"
 }
+# wave B world: purser and cf-access-guard on journald, the host drop-in installed and effective
+post_merge_b() { post_merge; echo journald >"$F/drv_purser"; echo journald >"$F/drv_cf-access-guard"; }
 # the world once the journald drop-in is effective (what dropin --apply needs the host to look like after the restart)
 effective() { echo 50000 >"$F/eff_burst"; echo 30s >"$F/eff_interval"; }
 # preflight state as the owner would have it (verify and evidence need the baseline)
@@ -251,6 +264,35 @@ expect "no journal lines before the recreate FAILS (nothing to prove)" '[ "$(rc_
 reset_fake; post_merge; echo otherid00000 >"$F/jid"
 expect "a journal CONTAINER_ID that is not the running container FAILS" '[ "$(rc_of go canary --apply)" = 1 ] && ! grep -q "force-recreate" "$CALLS"'
 
+
+echo "wave B: --svc purser,cf-access-guard"
+W=purser,cf-access-guard
+reset_fake; post_merge_b
+expect "--svc with a service outside the waves is a usage error (plimsoll, postgres, unknown)" '[ "$(rc_of go canary --svc plimsoll)" = 2 ] && [ "$(rc_of go canary --svc purser,postgres)" = 2 ] && [ "$(rc_of go canary --svc nonesuch)" = 2 ] && [ "$(rc_of go canary --svc plimsoll-llm)" = 2 ]'
+expect "dry-run canary for the wave prints each outage and recreates nothing" '[ "$(rc_of go canary --svc $W)" = 0 ] && grep -q "DRY-RUN" "$T/rec.md" && grep -q "outage of the purser recreate" "$T/rec.md" && grep -q "outage of the cf-access-guard recreate: every tunneled host.*500s" "$T/rec.md" && ! grep -q force-recreate "$CALLS"'
+expect "the wave canary pauses before each recreate (outage named) and, with no terminal, stops before the first" '[ "$(rc_of go canary --svc $W --apply)" = 3 ] && grep -q "PAUSE: next canary: force-recreate purser" "$T/rec.md" && ! grep -q force-recreate "$CALLS"'
+expect "the wave canary passes: both force-recreated, in order, from the deploy root, nothing else touched" '[ "$(rc_of go canary --svc $W --apply --yes)" = 0 ] && ! grep -q FAIL "$T/rec.md" && [ "$(tr "\n" " " <"$F/recreated")" = "purser cf-access-guard " ] && grep -q "^make -C $D force-recreate svc=purser" "$CALLS" && grep -q "^make -C $D force-recreate svc=cf-access-guard" "$CALLS" && ! grep -Eq "^make -C $D recreate|svc=(satlink|plimsoll|traefik|switchyard|postgres)|restart docker" "$CALLS"'
+expect "per-service canary keys are recorded; satlink keys are not touched" 'grep -q "^canary_purser_before=3" "$T/state/state.kv" && grep -q "^canary_purser_after=9" "$T/state/state.kv" && grep -q "^canary_purser_old_lines=3" "$T/state/state.kv" && grep -q "^canary_cf_access_guard_old_lines=3" "$T/state/state.kv" && grep -q "^canary_cf_access_guard_ok=1" "$T/state/state.kv" && ! grep -q "^canary_before=" "$T/state/state.kv"'
+expect "the wave evidence names each service" 'bash "$S" --print-evidence --svc $W >"$T/evidence.md" 2>&1 && grep -q "purser: BEFORE 3 lines, AFTER 9 lines, old container" "$T/evidence.md" && grep -q "cf-access-guard: BEFORE 3 lines" "$T/evidence.md"; cat "$T/evidence.md" >>"$T/all.log"'
+reset_fake; post_merge_b; echo 0 >"$F/cf-access-guard.count"
+expect "a quiet service with no journal lines fails BEFORE it is recreated; the first service was already done" '[ "$(rc_of go canary --svc $W --apply --yes)" = 1 ] && grep -q "nothing to prove" "$T/rec.md" && [ "$(tr "\n" " " <"$F/recreated")" = "purser " ]'
+reset_fake; post_merge_b; echo json-file >"$F/drv_cf-access-guard"
+expect "a wave service still on json-file refuses to canary" '[ "$(rc_of go canary --svc $W --apply --yes)" = 1 ] && grep -q "FAIL.*cf-access-guard is on the journald driver" "$T/rec.md"'
+reset_fake; post_merge_b; touch "$F/recreate_noop"
+expect "a no-op make for a wave service FAILS (the traefik lesson holds per service)" '[ "$(rc_of go canary --svc $W --apply --yes)" = 1 ] && grep -q "FAIL.*purser really restarted" "$T/rec.md"'
+reset_fake; post_merge_b; echo 3 >"$F/suppressed"
+expect "Suppressed > 0 FAILS a wave service too" '[ "$(rc_of go canary --svc $W --apply --yes)" = 1 ] && grep -q "FAIL.*Suppressed" "$T/rec.md"'
+reset_fake; post_merge_b
+expect "merge-gate for the wave: both journald, plimsoll json-file" '[ "$(rc_of go merge-gate --svc $W --apply --confirm-apply)" = 0 ] && grep -q "^mg_purser_driver=journald" "$T/state/state.kv" && grep -q "^mg_cf_access_guard_driver=journald" "$T/state/state.kv"'
+reset_fake; post_merge_b; echo json-file >"$F/drv_purser"
+expect "merge-gate fails when one wave service is not on journald" '[ "$(rc_of go merge-gate --svc $W --apply --confirm-apply)" = 1 ]'
+reset_fake; baseline; post_merge_b
+expect "verify for the wave passes" '[ "$(rc_of go verify --svc $W --confirm-dozzle)" = 0 ] && grep -q "^v_purser_driver=journald" "$T/state/state.kv"'
+reset_fake; baseline; post_merge_b; echo json-file >"$F/drv_cf-access-guard"
+expect "verify fails when a wave service is on json-file" '[ "$(rc_of go verify --svc $W)" = 1 ]'
+reset_fake; post_merge_b; touch "$F/rollback_flips"; echo '{"services":{"purser":{},"cf-access-guard":{}}}' >"$F/config.json"
+expect "wave rollback: each recreated, json-file, journal still queryable" '[ "$(rc_of go rollback --svc $W --apply --confirm-rollback)" = 0 ] && [ "$(tr "\n" " " <"$F/recreated")" = "purser cf-access-guard " ] && grep -q "^rb_purser_journal_lines=9" "$T/state/state.kv"'
+
 echo "verify"
 reset_fake; baseline; post_merge
 expect "verify passes; Dozzle is PAUSE (pending), never an auto-PASS" '[ "$(rc_of go verify)" = 0 ] && grep -q "PAUSE: Dozzle" "$T/rec.md" && ! grep -q "PASS.*Dozzle" "$T/rec.md" && grep -q "^dozzle=pending" "$T/state/state.kv"'
@@ -285,10 +327,33 @@ expect "--remove-dropins removes both files, daemon-reloads, restarts journald o
 echo "evidence"
 reset_fake; post_merge; baseline; go dropin --apply >/dev/null || true; go merge-gate --apply --confirm-apply >/dev/null || true; go canary --apply >/dev/null || true; go verify --confirm-dozzle >/dev/null || true
 bash "$S" --print-evidence >"$T/evidence.md" 2>&1 || fail "print-evidence exited non-zero"
-cat "$T/evidence.md" >>"$T/all.log"
+cat "$T/evidence.md" >>"$T/all.log"; [ -n "${DBG:-}" ] && cat "$T/evidence.md"
 expect "evidence block has canary counts, drivers, vacuum baseline and Dozzle" 'grep -q "SATL-25 / SATL-71" "$T/evidence.md" && grep -q "BEFORE 40 lines, AFTER 46 lines" "$T/evidence.md" && grep -q "old container oldcontainer lines 40" "$T/evidence.md" && grep -q "Dozzle (live tail + history): confirmed" "$T/evidence.md" && grep -q "canary passed: yes" "$T/evidence.md"'
 rm -f "$T/state/state.kv"
 expect "evidence with no state says so and exits non-zero" '! bash "$S" --print-evidence >/dev/null 2>&1'
+
+echo "stale state"
+rm -rf "$T/state"; reset_fake; baseline; post_merge
+go verify --confirm-dozzle >/dev/null || true
+expect "verify passes first: the evidence says verify passed" 'bash "$S" --print-evidence >"$T/evidence.md" 2>&1; cat "$T/evidence.md" >>"$T/all.log"; grep -q "verify passed: yes" "$T/evidence.md" && grep -q "Dozzle.*confirmed" "$T/evidence.md"'
+echo 1 >"$F/check_rc"
+go verify >/dev/null || true
+expect "a later failing verify in the same state dir no longer reports passed or a stale Dozzle confirmation" 'bash "$S" --print-evidence >"$T/evidence.md" 2>&1; cat "$T/evidence.md" >>"$T/all.log"; grep -q "verify passed: no" "$T/evidence.md" && ! grep -q "verify passed: yes" "$T/evidence.md" && ! grep -q "^dozzle=confirmed" "$T/state/state.kv" && ! grep -q "^verify_ok" "$T/state/state.kv"'
+rm -rf "$T/state"; reset_fake; baseline; post_merge
+go merge-gate --apply --confirm-apply >/dev/null || true
+expect "merge-gate records merge_sha and deploy_conclusion" 'grep -q "^merge_sha=" "$T/state/state.kv" && grep -q "^deploy_conclusion=success" "$T/state/state.kv"'
+printf 'merge_gate_ok=1\nmerge_sha=oldsha\ndeploy_conclusion=failure\n' >>"$T/state/state.kv"
+go merge-gate --apply >/dev/null 2>&1 || true
+expect "a stale merge_sha, deploy_conclusion and merge_gate_ok are cleared when merge-gate starts (before it pauses)" '! grep -q "^merge_sha=oldsha" "$T/state/state.kv" && ! grep -q "^deploy_conclusion=failure" "$T/state/state.kv" && ! grep -q "^merge_gate_ok" "$T/state/state.kv"'
+
+echo "per-wave state directories"
+rm -rf "$T/home/.cache"; reset_fake; post_merge_b
+( unset JOURNALD_ROLLOUT_DIR; go preflight >/dev/null || true; go preflight --svc $W >/dev/null || true; go verify --confirm-dozzle >/dev/null || true; go verify --svc $W --confirm-dozzle >/dev/null || true )
+D_A="$T/home/.cache/journald-logging-rollout"; D_B="$T/home/.cache/journald-logging-rollout-purser-cf-access-guard"
+expect "satlink-only keeps the original state path; another wave gets its own" '[ -s "$D_A/state.kv" ] && [ -s "$D_B/state.kv" ]'
+expect "wave A state has no wave B keys and wave B has no wave A keys" '! grep -q "^v_purser_driver" "$D_A/state.kv" && grep -q "^v_purser_driver" "$D_B/state.kv" && grep -q "^v_satlink_driver" "$D_A/state.kv"'
+( unset JOURNALD_ROLLOUT_DIR; rm -f "$D_B/state.kv"; bash "$S" --print-evidence --svc $W >"$T/evidence.md" 2>&1 ) && fail "wave B evidence read wave A's state" || ok "wave B evidence with no wave B state does not fall back to wave A's"
+cat "$T/evidence.md" >>"$T/all.log"
 
 echo "no log value anywhere"
 expect "no canary in any record, stdout or evidence" '! grep -qF -f "$T/canaries" "$T/all.log"'

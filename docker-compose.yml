@@ -62,12 +62,13 @@
 # driver writes to the host journal instead, keyed by CONTAINER_NAME, so
 # `journalctl CONTAINER_NAME=<name>` returns the lines of every past container of that name.
 #
-# Adopt with `logging: *journald-logging`, one service per wave (docs/journald-logging.md).
+# Adopt with `logging: *journald-logging`, one wave per PR (docs/journald-logging.md: A satlink, B purser +
+# cf-access-guard, then switchyard, traefik).
 # Every adopter is recreated by the deploy that merges it, so the wave size is the number
 # of simultaneous restarts. NOT for plimsoll or plimsoll-llm: scripts/check-plimsoll-llm-
 # canary.sh requires them to log through json-file (PLIM-14), so do not generalise this.
-# max-size/max-file are json-file options and are invalid here. The host drop-ins (size cap,
-# docker.service rate limit) are installed by the owner BEFORE any service adopts this.
+# max-size/max-file are json-file options and are invalid here. The host drop-in (size cap,
+# host-wide journald rate limit) is installed by the owner BEFORE any service adopts this.
 x-journald-logging: &journald-logging
   driver: journald
   options:
@@ -1615,6 +1616,9 @@ services:
     image: ghcr.io/einlanzerous/purser:${PURSER_TAG:-latest}
     container_name: purser
     restart: unless-stopped
+    # SATL-25 wave B: journald, so purser's lines outlive the recreate every deploy and
+    # rollback gives it (docs/journald-logging.md).
+    logging: *journald-logging
     ports:
       - "${PURSER_PORT:-4006}:4006"
     environment:
@@ -3098,6 +3102,9 @@ services:
         GUARD_REVISION: ${GUARD_REVISION:-unknown}
     container_name: cf-access-guard
     restart: unless-stopped
+    # SATL-25 wave B: journald, so the guard's refusals and key-refresh errors outlive its
+    # recreate (every deploy that touches it rebuilds and recreates it).
+    logging: *journald-logging
     environment:
       # Public identifiers, not secrets — same reasoning (and the same values) as the
       # CF_ACCESS_* pairs switchyard and lyceum already carry for their own SSO sign-in
