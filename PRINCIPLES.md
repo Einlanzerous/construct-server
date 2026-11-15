@@ -80,7 +80,8 @@ right call, but it should be visible.
 
 **All repos follow Conventional Commits + release-please.** New repos go on this
 flow on day one — it is not optional. Release-please owns `CHANGELOG.md` and
-version bumps; don't hand-edit either.
+version bumps; don't hand-edit either. A new repo with PRs also needs the Switchyard
+webhook (`scripts/add-switchyard-webhook.sh`), or auto-attach never fires for them.
 
 Keep the type vocabulary small. In practice there are four:
 
@@ -114,8 +115,8 @@ Title the PR as a conventional commit with the ticket key in the subject —
 `fix(signet): render the sudoers rule via template (SERV-62)`. Include the scope;
 it is the service or subsystem. Do **not** prefix with the bare key (`SERV-62: …`):
 under squash that becomes the commit subject, release-please does not recognise it,
-and the release silently does not cut. Auto-attach (PRs whose title or branch carries the key, in repos with the Switchyard
-webhook) finds the key anywhere in the title or branch, so the prefix buys nothing
+and the release silently does not cut. Auto-attach finds the key anywhere in the
+title or branch (in repos with the Switchyard webhook), so the prefix buys nothing
 and costs a release.
 
 Branches are `{type}/{slug}-{key}`.
@@ -205,9 +206,6 @@ own token. Two host jobs with two configs writing one ledger is how they disagre
 at 3am with nothing to say which was stale.
 
 ### Registering the service
-
-**A new repo needs the Switchyard webhook** (`scripts/add-switchyard-webhook.sh`), or
-auto-attach never fires for its PRs.
 
 **Shipping the endpoint is not sufficient, and this is the step everyone misses.**
 Switchyard's reconciler iterates services it already knows about; it does not

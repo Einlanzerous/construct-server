@@ -13,7 +13,9 @@ export URL=${WEBHOOK_URL:-https://switchyard.zerogravity.industries/v1/external/
 [ $# -gt 0 ] || { echo "usage: $0 repo [repo...]" >&2; exit 2; }
 rc=0
 for repo in "$@"; do
-  if gh api "repos/$OWNER/$repo/hooks" --jq '.[].config.url' | grep -qxF "$URL"; then
+  urls=$(gh api "repos/$OWNER/$repo/hooks" --jq '.[].config.url') \
+    || { echo "$repo: hook list FAILED" >&2; rc=1; continue; }
+  if grep -qxF "$URL" <<<"$urls"; then
     echo "$repo: already hooked, skipped"; continue
   fi
   id=$(python3 -c '
@@ -23,9 +25,11 @@ print(json.dumps({"name":"web","active":True,"events":["pull_request","push"],
  "secret":os.environ["GITHUB_WEBHOOK_SECRET"]}}))' \
     | gh api -X POST "repos/$OWNER/$repo/hooks" --input - --jq .id) || { echo "$repo: create FAILED" >&2; rc=1; continue; }
   sleep 1
-  gh api -X POST "repos/$OWNER/$repo/hooks/$id/pings" >/dev/null
+  gh api -X POST "repos/$OWNER/$repo/hooks/$id/pings" >/dev/null \
+    || { echo "$repo: hook $id created, ping FAILED" >&2; rc=1; continue; }
   sleep 3
-  st=$(gh api "repos/$OWNER/$repo/hooks/$id/deliveries" --jq '.[0].status_code // "none"')
+  st=$(gh api "repos/$OWNER/$repo/hooks/$id/deliveries" --jq '.[0].status_code // "none"') \
+    || { echo "$repo: hook $id created, delivery lookup FAILED" >&2; rc=1; continue; }
   echo "$repo: hook $id, ping delivery status $st"
   case $st in 2??) ;; *) rc=1;; esac
 done
