@@ -266,34 +266,13 @@ table, resolution-required-on-close, epic-close).
 
 ### Show, don't describe
 
-A PR, ticket comment or README that changes something visible carries an image
-of it. Prose about what a change looks like is what SERV-134 was filed to end:
-reviewers either took it on trust or checked the branch out and booted it.
-
-The estate's image host is **Trestle** (`Einlanzerous/trestle`, SERV-134): upload
-bytes over a bearer token, get a stable public URL, paste it. On the box the
-credentials are Signet-rendered, so an agent session does exactly this:
-
-```sh
-set -a; . ~/.config/trestle/trestle.env; set +a
-trestle upload shot.png            # → https://trestle.zerogravity.industries/m/<sha256>.png
-```
-
-Then `![what it shows](<url>)` in the PR body. The URL renders through GitHub's
-camo proxy, in a Switchyard comment, and in a README, and it is content-addressed:
-the same bytes twice is the same URL, and it never changes underneath a review.
-
-Three things to know before pasting:
-
-- **GitHub does not render external video.** An `.mp4` URL degrades to a link
-  (measured, SERV-208). Embed a poster PNG and link the MP4 beneath it.
-- **The serve path is public and immutable.** Anyone with the URL can fetch the
-  bytes for as long as the blob exists, and edge caches keep a permanent blob for
-  up to a year after a `DELETE`. Never upload anything that must not be public;
-  use `--ttl` for evidence that should not outlive the review.
-- **Allow-listed types only**: png, jpeg, webp, gif, svg (served as an
-  attachment), mp4, webm — 10 MiB per image, 100 MiB per video, 2 GiB per
-  consumer token. Anything else is a 415, and the type is sniffed, not trusted.
+A PR, ticket comment or README that changes something visible carries an image of
+it, hosted on Trestle (SERV-134). The upload recipe and limits are in the global
+`~/.claude/CLAUDE.md`, section *Screenshots go on Trestle*. Two rules that file does
+not carry: allowed types are png, jpeg, webp, gif, svg (served as an attachment), mp4
+and webm, at 10 MiB per image, 100 MiB per video and 2 GiB per consumer token (anything
+else is a 415); and `trestle upload --ttl` expires evidence that should not outlive the
+review, because edge caches keep a permanent blob for up to a year after a `DELETE`.
 
 ### Plans are reviewed by a machine first
 
