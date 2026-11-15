@@ -45,10 +45,13 @@ reaches either output format.
 
 ## Definitions worth knowing
 
-- A message is counted once per (session, message id, main/subagent): a streamed
-  message is written several times and the copy with the most output tokens wins.
+- A message is counted once per (session, message id): a streamed message is
+  written several times and the copy with the most output tokens wins. A forked
+  subagent's file replays its parent's history, so the same message can appear in
+  a main and a `subagents/` file; the main-thread copy is the one counted.
   `<synthetic>` messages are ignored.
-- A tool call is counted once per tool_use id per file.
+- A tool call, and the result of a `get_plan` call, is counted once per
+  (session, tool_use id), for the same reason.
 - "Operator prompt": a typed main-thread user turn. Excluded: tool results,
   subagent briefs, meta entries, compaction summaries (which quote earlier prompts
   and double-count them) and entries whose `origin.kind` is not `human` (task
@@ -69,24 +72,28 @@ reaches either output format.
 
 ## Baseline: 2026-10-15 to 2026-11-14
 
-Run on 2026-11-15 (UTC) over the live transcripts; this matches the original
-Python inspection scripts token for token on the same window.
+Run on 2026-11-15 (UTC) over the live transcripts. It matches the original
+Python inspection scripts on sessions, turns, per-model tokens and the PR,
+prompt and denial counts. It differs in one deliberate way: forked subagents
+replay their parent's history in their own file, and the Python counted those
+replays again (39 spawns, 23 API messages, one `get_plan` call). Here each is
+counted once.
 
 | Measure | Baseline |
 |---|---|
 | Sessions | 582: interactive 135, runner 425, dispatch 22 |
-| Total tokens | 5,918,073,200 |
-| Subagent share of tokens | 61.1% (3,614,851,109) |
+| Total tokens | 5,914,658,960 |
+| Subagent share of tokens | 61.1% (3,611,436,869) |
 | Subagent tokens as share of all tokens, opus | 27.2% |
 | ... sonnet | 30.0% |
 | ... fable | 3.9% |
 | ... haiku | 0.03% |
-| Subagent spawns | 613: named a model 233 (38.0%), named none 380 |
-| Tokens by directory (top 3) | `-home-magos-projects` 24.7%, `-home-magos-projects-genzo` 24.4%, `-home-magos-projects-catenary` 8.4% |
+| Subagent spawns | 574: named a model 233 (40.6%), named none 341 |
+| Tokens by directory (top 3) | `-home-magos-projects` 24.7%, `-home-magos-projects-genzo` 24.5%, `-home-magos-projects-catenary` 8.4% |
 | Interactive sessions that ran `gh pr create` | 40, of which 22 called `attach_external_ref` (55.0%) |
 | Operator prompts "file a ticket" / "I don't see" | 26 / 10 |
-| Plan tools: open / submit / revise / get / feedback | 61 / 75 / 121 / 415 / 209 |
-| `get_plan` errors (`is_error`) | 98 of 415 (23.6%); 194 more results start `Error` without `is_error` |
+| Plan tools: open / submit / revise / get / feedback | 61 / 75 / 121 / 414 / 209 |
+| `get_plan` errors (`is_error`) | 98 of 414 (23.7%); 193 more results start `Error` without `is_error` |
 | Permission denials | 142 |
 
 The 26 / 10 prompt figures agree with `~/.claude/history.jsonl` for the same

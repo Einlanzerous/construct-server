@@ -155,10 +155,9 @@ func TestTokenAccounting(t *testing.T) {
 		// Sidechain within the main file.
 		asst(day, "s1", "m5", "claude-sonnet-5-5", 1, 2, 3, 4, true),
 	)
-	// Subagent file: same sessionId, same message id as a main message is a
-	// different (side) message, not a duplicate.
+	// Subagent file: its own messages are subagent tokens.
 	f.write(dir+"/s1/subagents/agent-a.jsonl",
-		asst(day, "s1", "m1", "claude-haiku-5-5", 1, 1, 1, 1, false),
+		asst(day, "s1", "h1", "claude-haiku-5-5", 1, 1, 1, 1, false),
 	)
 	st := scan(t, f, "2026-11-01", "2026-11-02")
 	r := st.Usage()
@@ -413,5 +412,44 @@ func TestRunRejectsBadArgs(t *testing.T) {
 		if code := run(args, &out, &errb); code != 2 {
 			t.Errorf("run(%v) = %d, want 2", args, code)
 		}
+	}
+}
+
+// A forked subagent's file replays its parent's history. The replayed
+// messages, tool calls and results are the same events, not new ones.
+func TestForkedSubagentReplayCountsOnce(t *testing.T) {
+	f := newFx(t)
+	const dir = "-home-magos-projects-a"
+	spawn := toolUse("sp1", "Agent", `{"model":"opus"}`)
+	get := toolUse("g1", "mcp__switchyard__get_plan", `{}`)
+	res := toolResult(day, "s", "r1", "g1", "boom", true)
+	f.write(dir+"/s.jsonl",
+		asst(day, "s", "m1", "claude-opus-5-5", 0, 10, 0, 0, false, spawn, get),
+		res,
+	)
+	f.write(dir+"/s/subagents/agent-f.jsonl",
+		// Replayed parent turn (sidechain copy sorts first in some walks), then own work.
+		asst(day, "s", "m1", "claude-opus-5-5", 0, 10, 0, 0, true, spawn, get),
+		res,
+		asst(day, "s", "own", "claude-sonnet-5-5", 0, 3, 0, 0, true),
+	)
+	r := scan(t, f, "2026-11-01", "2026-11-01")
+	u := r.Usage()
+	if u.Tokens.Total != 13 || u.Tokens.Main != 10 || u.Tokens.Subagent != 3 {
+		t.Errorf("tokens total/main/sub = %d/%d/%d, want 13/10/3", u.Tokens.Total, u.Tokens.Main, u.Tokens.Subagent)
+	}
+	if u.Spawns.Total != 1 {
+		t.Errorf("spawns = %d, want 1", u.Spawns.Total)
+	}
+	c := r.Compliance()
+	if c.PlanTools["get_plan"] != 1 || c.GetPlanErr != 1 {
+		t.Errorf("get_plan calls %d errors %d, want 1 and 1", c.PlanTools["get_plan"], c.GetPlanErr)
+	}
+	// And in the other order: subagent copy first, main copy later wins.
+	g := newFx(t)
+	g.write(dir+"/s/subagents/agent-f.jsonl", asst(day, "s", "m1", "claude-opus-5-5", 0, 10, 0, 0, true))
+	g.write(dir+"/s.jsonl", asst(day, "s", "m1", "claude-opus-5-5", 0, 10, 0, 0, false))
+	if u := scan(t, g, "2026-11-01", "2026-11-01").Usage(); u.Tokens.Main != 10 || u.Tokens.Subagent != 0 {
+		t.Errorf("main/sub = %d/%d, want 10/0", u.Tokens.Main, u.Tokens.Subagent)
 	}
 }

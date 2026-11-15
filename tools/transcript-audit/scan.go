@@ -74,9 +74,8 @@ type session struct {
 }
 
 type msgKey struct {
-	sid  string
-	mid  string
-	side bool
+	sid string
+	mid string
 }
 
 type msgRec struct {
@@ -118,6 +117,7 @@ type Stats struct {
 
 	Denials map[string]int
 
+	seenUse    map[string]struct{}
 	seenPerm   map[string]struct{}
 	seenPrompt map[string]struct{}
 }
@@ -132,6 +132,7 @@ func newStats(since, until string) *Stats {
 		PlanCalls:     map[string]int{},
 		PlanCallsKind: map[string]map[string]int{},
 		Denials:       map[string]int{},
+		seenUse:       map[string]struct{}{},
 		seenPerm:      map[string]struct{}{},
 		seenPrompt:    map[string]struct{}{},
 	}
@@ -196,7 +197,7 @@ func (st *Stats) scanFile(path, dir string, sub bool) error {
 
 func (st *Stats) scanReader(r io.Reader, dir string, sub bool) error {
 	br := bufio.NewReaderSize(r, 1<<20)
-	fst := &fileState{names: map[string]string{}, seenUse: map[string]struct{}{}}
+	fst := &fileState{names: map[string]string{}}
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
@@ -211,12 +212,10 @@ func (st *Stats) scanReader(r io.Reader, dir string, sub bool) error {
 	}
 }
 
-// fileState is per transcript file: tool_use ids repeat across the streamed
-// copies of one message, and a tool_result only ever follows its call in the
-// same file.
+// fileState is per transcript file: a tool_result only ever follows its call
+// in the same file.
 type fileState struct {
-	names   map[string]string // tool_use id -> name, for results we care about
-	seenUse map[string]struct{}
+	names map[string]string // tool_use id -> name, for results we care about
 }
 
 func (st *Stats) line(line []byte, dir string, sub bool, fst *fileState) {
@@ -260,11 +259,15 @@ func (st *Stats) line(line []byte, dir string, sub bool, fst *fileState) {
 func (st *Stats) assistant(e *entry, s *session, dir string, side bool, fst *fileState) {
 	m := &e.Message
 	if m.ID != "" && m.Model != "<synthetic>" {
-		k := msgKey{e.SessionID, m.ID, side}
+		k := msgKey{e.SessionID, m.ID}
 		u := usageTokens{m.Usage.In, m.Usage.Out, m.Usage.CacheRead, m.Usage.CacheWrite}
 		// One API message is written once per streamed content block; the
-		// last copy carries the final output count, so keep the largest.
-		if old := st.msgs[k]; old == nil || u.Out >= old.u.Out {
+		// last copy carries the final output count, so keep the largest. A
+		// forked subagent's file also replays its parent's history, so the same
+		// message can sit in a main and a subagent file: it is one API call, and
+		// the main-thread copy is the one that counts.
+		old := st.msgs[k]
+		if old == nil || (old.side && !side) || (old.side == side && u.Out >= old.u.Out) {
 			st.msgs[k] = &msgRec{model: m.Model, dir: dir, side: side, u: u}
 		}
 	}
@@ -272,14 +275,15 @@ func (st *Stats) assistant(e *entry, s *session, dir string, side bool, fst *fil
 		if b.Type != "tool_use" || b.ID == "" {
 			continue
 		}
-		if _, dup := fst.seenUse[b.ID]; dup {
+		if short, ok := switchyardTool(b.Name); ok && short == "get_plan" {
+			fst.names[b.ID] = short // results pair within a file even when the call was counted in another
+		}
+		// tool_use ids are unique, so key the dedupe on the session: the same
+		// call can be replayed in a subagent file that inherited the history.
+		if !st.firstSightID(e.SessionID+"/use/"+b.ID, st.seenUse) {
 			continue
 		}
-		fst.seenUse[b.ID] = struct{}{}
 		st.toolUse(&b, s)
-		if short, ok := switchyardTool(b.Name); ok && short == "get_plan" {
-			fst.names[b.ID] = short
-		}
 	}
 }
 
@@ -346,6 +350,9 @@ func (st *Stats) user(e *entry, s *session, side bool, fst *fileState) {
 				hasResult = true
 				if fst.names[b.ToolUseID] == "get_plan" {
 					delete(fst.names, b.ToolUseID)
+					if !st.firstSightID(e.SessionID+"/res/"+b.ToolUseID, st.seenUse) {
+						continue
+					}
 					if b.IsError {
 						st.GetPlanErrors++
 					} else if leadsWithError(b.Content) {
@@ -386,6 +393,15 @@ func (st *Stats) firstSight(e *entry, seen map[string]struct{}) bool {
 		return false
 	}
 	seen[k] = struct{}{}
+	return true
+}
+
+// firstSightID reports whether key is new in seen, recording it.
+func (st *Stats) firstSightID(key string, seen map[string]struct{}) bool {
+	if _, dup := seen[key]; dup {
+		return false
+	}
+	seen[key] = struct{}{}
 	return true
 }
 
