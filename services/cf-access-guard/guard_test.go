@@ -6,8 +6,8 @@ package main
 //
 // The verification itself — the alg:none / HMAC-replay / expired / unknown-kid
 // bypass table, the JWKS cache, the fail-closed key handling — moved to
-// pkg/cfaccess and is tested there, against shared vectors that Switchyard's
-// TypeScript suite runs too. Restating any of it here would recreate in the test
+// pkg/cfaccess and is tested there, against shared vectors, which that module's
+// Go tests run. Restating any of it here would recreate in the test
 // suite exactly the duplication the ticket removed from the source.
 //
 // The one thing that MUST be tested here and cannot be tested there: that a
@@ -57,13 +57,28 @@ func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func signToken(t *testing.T, aud string) string {
 	t.Helper()
+	return signTokenWith(t, aud, nil)
+}
+
+// signTokenWith signs the standard claims with `over` applied on top; a nil value
+// deletes the claim.
+func signTokenWith(t *testing.T, aud string, over map[string]any) string {
+	t.Helper()
 	now := time.Now()
 	h, _ := json.Marshal(map[string]any{"alg": "RS256", "kid": testKid, "typ": "JWT"})
-	c, err := json.Marshal(map[string]any{
+	claims := map[string]any{
 		"iss": testIssuer, "aud": []string{aud},
 		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nbf": now.Unix(),
 		"sub": "abc123", "email": "operator@example.com",
-	})
+	}
+	for k, v := range over {
+		if v == nil {
+			delete(claims, k)
+		} else {
+			claims[k] = v
+		}
+	}
+	c, err := json.Marshal(claims)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +179,27 @@ func TestATokenIsOnlyGoodForItsOwnHost(t *testing.T) {
 	}
 	if _, err := g.validate(ctx, wikiHost, signToken(t, switchyardAud)); err == nil {
 		t.Fatal("a Switchyard token opened the wiki")
+	}
+}
+
+// SERV-293: pkg/cfaccess gained an opt-in principal mode that refuses an assertion
+// carrying both email and common_name, or neither. The guard does NOT enable it —
+// it only decides pass/fail, and a service token (common_name, no email) is a
+// legitimate caller it must keep letting through. This pins that: a future change
+// that flips the mode on here fails this test rather than silently refusing every
+// service-token caller at the edge.
+func TestGuardVerdictIsIndifferentToThePrincipalClaims(t *testing.T) {
+	g := testGuard(t, modeEnforce, true)
+	ctx := context.Background()
+
+	for name, over := range map[string]map[string]any{
+		"both email and common_name": {"common_name": "svc.example.test"},
+		"neither claim":              {"email": nil},
+		"service token only":         {"email": nil, "common_name": "svc.example.test"},
+	} {
+		if _, err := g.validate(ctx, switchyardHost, signTokenWith(t, switchyardAud, over)); err != nil {
+			t.Errorf("%s: a genuine assertion for a mapped host was refused: %v", name, err)
+		}
 	}
 }
 

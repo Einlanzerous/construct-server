@@ -7,7 +7,8 @@
 // anything that could open a socket to it — has to verify the assertion itself.
 // Four services on this estate reached that conclusion independently and each
 // hand-rolled the same check: construct-server's cf-access-guard, Lyceum,
-// Chronicle, and Switchyard (the last in TypeScript, on jose).
+// Chronicle, and Switchyard (the last in TypeScript, on jose, and so unable to
+// import this package).
 //
 // The three Go copies were made by copying, and they drifted. LYCM-122 is what
 // that cost: a JWKS key with a >8-byte RSA exponent sliced a fixed 8-byte buffer
@@ -52,9 +53,11 @@
 // which check failed (a probing oracle) map any non-nil error to one generic
 // response, which is what every consumer here does.
 //
-// Shared test vectors in testdata/vectors.json are run by this package's tests
-// AND by Switchyard's TypeScript suite. They are the only mechanism in this
-// design that spans the language boundary, and they cover the cases a
+// Shared test vectors in testdata/vectors.json are run by this package's Go
+// tests; a consumer that cannot import this package (Switchyard's TypeScript) or
+// that wants a pinned check is expected to vendor a copy and run it, and until one
+// does, only the Go tests run them. They are the only mechanism in this design
+// that can span the language boundary, and they cover the cases a
 // hand-rolled verifier gets wrong quietly: alg=none, an RSA public key replayed
 // as an HMAC secret, cross-application audiences, and malformed key material.
 //

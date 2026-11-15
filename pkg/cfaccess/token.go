@@ -33,7 +33,27 @@ type Claims struct {
 	Expires   time.Time
 	NotBefore time.Time
 	IssuedAt  time.Time
+
+	// Kind and CommonName are set only when Config.RequirePrincipal is on (Kind is
+	// PrincipalNone otherwise). Kind is PrincipalPerson when the assertion named
+	// an email, PrincipalService when it named a common_name; CommonName is set
+	// only for the latter.
+	Kind       PrincipalKind
+	CommonName string
 }
+
+// PrincipalKind says what sort of caller an assertion identifies. It is the
+// zero value unless Config.RequirePrincipal is set.
+type PrincipalKind string
+
+const (
+	// PrincipalNone is the zero value: principal mode was not requested.
+	PrincipalNone PrincipalKind = ""
+	// PrincipalPerson is an assertion carrying an email and no common_name.
+	PrincipalPerson PrincipalKind = "person"
+	// PrincipalService is an assertion carrying a common_name and no email.
+	PrincipalService PrincipalKind = "service"
+)
 
 // audience is a JWT `aud`, which RFC 7519 allows to be either a single string or
 // an array of strings. Cloudflare emits an array today; accepting both is two
@@ -87,6 +107,9 @@ type accessClaims struct {
 	Iat   int64    `json:"iat"`
 	Sub   string   `json:"sub"`
 	Email string   `json:"email"`
+	// CommonName is the service-token principal (Cloudflare's `common_name`),
+	// read only to implement Config.RequirePrincipal.
+	CommonName string `json:"common_name"`
 }
 
 // decodeSegment decodes one JOSE segment. Base64URL WITHOUT padding is what the

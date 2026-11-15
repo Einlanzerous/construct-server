@@ -2,12 +2,15 @@ package cfaccess
 
 // Runs the shared vectors in testdata/vectors.json.
 //
-// The same file is run by Switchyard's TypeScript suite against jose (SERV-131).
-// That cross-language run is the only check in this design that spans the
-// language boundary — code sharing cannot reach a TypeScript service, and the
-// cases a hand-rolled verifier gets wrong QUIETLY (alg:none, an RSA public key
-// replayed as an HMAC secret) are exactly the ones where "both implementations
-// agree" is worth more than "one implementation has a test".
+// This Go runner is the only thing that runs the file today. It is written to be
+// vendored by a consumer in another language or repository (Switchyard's
+// TypeScript service on jose, heitan, Chronicle: SERV-308, SERV-309, SERV-310),
+// and a cross-language run is the one check that can span the language boundary
+// — code sharing cannot reach a TypeScript service, and the cases a hand-rolled
+// verifier gets wrong QUIETLY (alg:none, an RSA public key replayed as an HMAC
+// secret) are exactly the ones where "both implementations agree" is worth more
+// than "one implementation has a test". Until a second runner exists, that
+// agreement is intended and not demonstrated.
 
 import (
 	"context"
@@ -30,8 +33,8 @@ func loadVectors(t *testing.T) vectorFile {
 	if err := json.Unmarshal(raw, &vf); err != nil {
 		t.Fatalf("shared vectors are not valid JSON: %v", err)
 	}
-	if vf.Spec != "cfaccess-vectors/1" {
-		t.Fatalf("unknown vector spec %q — the TypeScript runner reads the same field", vf.Spec)
+	if vf.Spec != "cfaccess-vectors/2" {
+		t.Fatalf("unknown vector spec %q — this runner reads cfaccess-vectors/2 and refuses spec 1, whose vectors carry no config or expectPrincipal", vf.Spec)
 	}
 	if len(vf.Vectors) == 0 {
 		t.Fatal("the vector file is empty, so this test proves nothing")
@@ -63,12 +66,16 @@ func TestSharedVectors(t *testing.T) {
 				t.Fatalf("vector now=%q: %v", vec.Now, err)
 			}
 
-			v, err := New(Config{
+			cfg := Config{
 				TeamDomain: vf.TeamDomain,
 				Audience:   vec.Audience,
 				Now:        func() time.Time { return now },
 				certsURL:   srv.URL,
-			})
+			}
+			if vec.Config != nil {
+				cfg.RequirePrincipal = vec.Config.RequirePrincipal
+			}
+			v, err := New(cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -93,6 +100,14 @@ func TestSharedVectors(t *testing.T) {
 						t.Errorf("sub = %q, want %q", claims.Subject, vec.Claims.Subject)
 					}
 				}
+				if vec.ExpectPrincipal != nil {
+					if string(claims.Kind) != vec.ExpectPrincipal.Kind {
+						t.Errorf("principal kind = %q, want %q", claims.Kind, vec.ExpectPrincipal.Kind)
+					}
+					if claims.CommonName != vec.ExpectPrincipal.CommonName {
+						t.Errorf("principal commonName = %q, want %q", claims.CommonName, vec.ExpectPrincipal.CommonName)
+					}
+				}
 			case "reject":
 				if err == nil {
 					t.Fatalf("vector expects reject (%s) but verification SUCCEEDED — this is a bypass", vec.Because)
@@ -113,7 +128,7 @@ func TestSharedVectorsCoverTheNamedCases(t *testing.T) {
 	seen := map[string]bool{}
 	for _, v := range vf.Vectors {
 		if seen[v.Name] {
-			t.Errorf("duplicate vector name %q — the TypeScript runner keys its report on this", v.Name)
+			t.Errorf("duplicate vector name %q — other runners may key their report on this", v.Name)
 		}
 		seen[v.Name] = true
 		if v.Class != "protocol" && v.Class != "keypolicy" {
@@ -137,9 +152,12 @@ func TestSharedVectorsCoverTheNamedCases(t *testing.T) {
 		"weak-modulus",
 		"encryption-key",
 		"empty-key-set",
+		"principal-both-refused",
+		"principal-neither-refused",
+		"principal-service-only-accepted",
 	} {
 		if !seen[name] {
-			t.Errorf("vector %q is missing — SERV-131 names it explicitly", name)
+			t.Errorf("vector %q is missing — SERV-131 and SERV-293 name it explicitly", name)
 		}
 	}
 }

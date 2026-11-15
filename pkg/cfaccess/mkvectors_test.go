@@ -5,10 +5,13 @@ package cfaccess
 //	go test ./... -run TestUpdateVectors -update
 //
 // The vectors are checked in, not generated at test time, because they are run
-// by TWO suites in two languages and two repositories — this package's tests and
-// Switchyard's TypeScript suite (SERV-131). A fixture that each side regenerated
-// would let the two drift apart while both stayed green, which is the exact
-// failure this whole ticket exists to stop.
+// meant to be consumed by suites in more than one language and repository, not
+// only this package's tests. Today ONLY this package's Go tests run them;
+// Switchyard (TypeScript, on jose) and the other consumers are expected to
+// vendor a pinned copy and run it (SERV-308, SERV-309), and until they do the
+// cross-language check is a plan and not a fact (SERV-131). A fixture that each
+// side regenerated would let the copies drift apart while all stayed green,
+// which is the exact failure this fixture exists to stop.
 //
 // Regeneration is byte-stable: the RSA keys are checked in as PEM under
 // testdata/keys, RSASSA-PKCS1-v1_5 signing is deterministic (no random padding),
@@ -87,18 +90,36 @@ type jwksDoc struct {
 }
 
 type vector struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Class       string            `json:"class"` // "protocol" | "keypolicy"
-	KeySet      string            `json:"keySet"`
-	Audience    []string          `json:"audience"`
-	Now         string            `json:"now"`
-	Token       string            `json:"token"`
-	Expect      string            `json:"expect"` // "accept" | "reject"
-	Because     string            `json:"because"`
-	Claims      *expectedClaims   `json:"claims,omitempty"`
-	ExpectBy    map[string]string `json:"expectBy,omitempty"`
-	ExpectByWhy string            `json:"expectByWhy,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Class       string          `json:"class"` // "protocol" | "keypolicy"
+	KeySet      string          `json:"keySet"`
+	Audience    []string        `json:"audience"`
+	Now         string          `json:"now"`
+	Token       string          `json:"token"`
+	Expect      string          `json:"expect"` // "accept" | "reject"
+	Because     string          `json:"because"`
+	Claims      *expectedClaims `json:"claims,omitempty"`
+	// Config and ExpectPrincipal exist from spec 2 and are OPTIONAL: a vector
+	// without Config runs against the default configuration, so the vectors
+	// written for spec 1 are unchanged byte for byte.
+	Config          *vectorConfig     `json:"config,omitempty"`
+	ExpectPrincipal *expectPrincipal  `json:"expectPrincipal,omitempty"`
+	ExpectBy        map[string]string `json:"expectBy,omitempty"`
+	ExpectByWhy     string            `json:"expectByWhy,omitempty"`
+}
+
+// vectorConfig is the verifier configuration a vector runs under, where it is not
+// the default one.
+type vectorConfig struct {
+	RequirePrincipal bool `json:"requirePrincipal,omitempty"`
+}
+
+// expectPrincipal is the principal an accepted assertion must resolve to under
+// requirePrincipal: kind is "person" or "service", commonName is set for service.
+type expectPrincipal struct {
+	Kind       string `json:"kind"`
+	CommonName string `json:"commonName"`
 }
 
 type expectedClaims struct {
@@ -290,6 +311,12 @@ func TestUpdateVectors(t *testing.T) {
 	otherParts := splitJWT(t, other)
 	tampered := tamperedParts[0] + "." + otherParts[1] + "." + tamperedParts[2]
 
+	// Principal-mode vectors (spec 2). They are signed over the same key and
+	// carry the base claims with `email` and `common_name` varied.
+	principalCfg := &vectorConfig{RequirePrincipal: true}
+	svcSub := "svc0123456789abcdef0123456789abcd"
+	svcName := "heitan.example.test"
+
 	vs := []vector{
 		{
 			Name: "good-token", Class: "protocol", KeySet: "standard",
@@ -428,11 +455,40 @@ func TestUpdateVectors(t *testing.T) {
 		},
 	}
 
+	vs = append(vs,
+		vector{
+			Name: "principal-both-refused", Class: "protocol", KeySet: "standard",
+			Description: "under requirePrincipal, a genuine assertion carrying both email and common_name",
+			Audience:    []string{audWeb}, Now: nowStr,
+			Token:  signRS256(t, good, rs256Header(kidGood), with(baseClaims(), map[string]any{"common_name": svcName})),
+			Expect: "reject", Because: "a verifier must not guess whether the caller is a person or a service token",
+			Config: principalCfg,
+		},
+		vector{
+			Name: "principal-neither-refused", Class: "protocol", KeySet: "standard",
+			Description: "under requirePrincipal, a genuine assertion carrying neither email nor common_name",
+			Audience:    []string{audWeb}, Now: nowStr,
+			Token:  signRS256(t, good, rs256Header(kidGood), with(baseClaims(), map[string]any{"email": nil})),
+			Expect: "reject", Because: "an assertion that names no principal cannot be mapped to an account",
+			Config: principalCfg,
+		},
+		vector{
+			Name: "principal-service-only-accepted", Class: "protocol", KeySet: "standard",
+			Description: "under requirePrincipal, a genuine assertion carrying common_name and no email",
+			Audience:    []string{audWeb}, Now: nowStr,
+			Token:  signRS256(t, good, rs256Header(kidGood), with(baseClaims(), map[string]any{"email": nil, "sub": svcSub, "common_name": svcName})),
+			Expect: "accept", Because: "a service token names its caller by common_name, and is accepted as kind service",
+			Claims: &expectedClaims{Email: "", Subject: svcSub},
+			Config: principalCfg, ExpectPrincipal: &expectPrincipal{Kind: "service", CommonName: svcName},
+		},
+	)
+
 	out := vectorFile{
-		Spec: "cfaccess-vectors/1",
+		Spec: "cfaccess-vectors/2",
 		Comment: "Shared Cloudflare Access verification vectors (SERV-131). Generated by " +
-			"pkg/cfaccess/mkvectors_test.go -update; run by this module's tests AND by " +
-			"Switchyard's TypeScript suite. class=protocol must hold in any conforming " +
+			"pkg/cfaccess/mkvectors_test.go -update; run by this module's Go tests " +
+			"only today; other consumers are expected to vendor a pinned copy and run it. " +
+			"A vector without config runs under the default configuration. class=protocol must hold in any conforming " +
 			"verifier; class=keypolicy is estate hardening about key material that a " +
 			"general JWT library does not necessarily enforce — expectBy records where " +
 			"a given implementation legitimately differs.",

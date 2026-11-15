@@ -249,6 +249,67 @@ func TestRequireEmailIsOptIn(t *testing.T) {
 	}
 }
 
+func TestRequirePrincipalAdmitsExactlyOnePrincipal(t *testing.T) {
+	c := &clock{t: time.Unix(1_700_000_000, 0).UTC()}
+	cs := newCertsServer(t, goodJWKS(t))
+	v := newTestVerifier(t, cs, c, func(cfg *Config) { cfg.RequirePrincipal = true })
+
+	withClaims := func(over map[string]any) string {
+		return token(t, with(claimsAt(c.now()), over))
+	}
+
+	if _, err := v.Verify(context.Background(), withClaims(map[string]any{"common_name": "svc.example.test"})); !errors.Is(err, ErrAmbiguousPrincipal) {
+		t.Fatalf("both claims: err = %v, want ErrAmbiguousPrincipal", err)
+	}
+	if _, err := v.Verify(context.Background(), withClaims(map[string]any{"email": nil})); !errors.Is(err, ErrNoPrincipal) {
+		t.Fatalf("neither claim: err = %v, want ErrNoPrincipal", err)
+	}
+
+	got, err := v.Verify(context.Background(), withClaims(map[string]any{"email": nil, "common_name": "svc.example.test"}))
+	if err != nil {
+		t.Fatalf("service-only: %v", err)
+	}
+	if got.Kind != PrincipalService || got.CommonName != "svc.example.test" || got.Email != "" {
+		t.Fatalf("service-only claims = %+v", got)
+	}
+
+	got, err = v.Verify(context.Background(), withClaims(nil))
+	if err != nil {
+		t.Fatalf("email-only: %v", err)
+	}
+	if got.Kind != PrincipalPerson || got.CommonName != "" || got.Email == "" {
+		t.Fatalf("email-only claims = %+v", got)
+	}
+}
+
+// Principal mode is opt-in: off, a service-token assertion verifies as it always
+// did and carries no Kind.
+func TestPrincipalModeOffLeavesVerificationUnchanged(t *testing.T) {
+	c := &clock{t: time.Unix(1_700_000_000, 0).UTC()}
+	cs := newCertsServer(t, goodJWKS(t))
+	v := newTestVerifier(t, cs, c, nil)
+	for name, over := range map[string]map[string]any{
+		"both":    {"common_name": "svc.example.test"},
+		"neither": {"email": nil},
+		"service": {"email": nil, "common_name": "svc.example.test"},
+	} {
+		got, err := v.Verify(context.Background(), token(t, with(claimsAt(c.now()), over)))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.Kind != PrincipalNone || got.CommonName != "" {
+			t.Fatalf("%s: principal fields set with the mode off: %+v", name, got)
+		}
+	}
+}
+
+func TestRequireEmailAndRequirePrincipalAreMutuallyExclusive(t *testing.T) {
+	_, err := New(Config{TeamDomain: tIssuerDomain, RequireEmail: true, RequirePrincipal: true})
+	if err == nil {
+		t.Fatal("New accepted RequireEmail together with RequirePrincipal")
+	}
+}
+
 // The regression LYCM-122 would have been caught by. It is a *panic* test as
 // much as a rejection test: without the bound this does not fail, it crashes the
 // process, and a crashed test binary reads as an infrastructure problem rather
