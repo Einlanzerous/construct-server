@@ -52,6 +52,11 @@
 #      in CF_ACCESS_GATEWAY_AUD) carries the same tag; that tag is a mapped AUD; and
 #      it is never one of a reader's own web/MCP audiences (SERV-266). The same
 #      silent-and-green failure as 5, with more than two readers.
+#   5c. When heitan is in the compose file, every backend it is configured for has its
+#      readers carrying heitan's own audience (SERV-268); a missing one is a FAIL once heitan's
+#      audience is real and a NOTE while it is a placeholder.
+#   5d. A `__PLACEHOLDER__` audience anywhere is PEND under --config-only and a FAIL in a
+#      deploy (SERV-268): a service may be added before its Access application exists.
 #   6. traefik.yml's `internal` address matches Traefik's ipv4_address in the
 #      compose file — if they disagree, Traefik binds an address it does not hold
 #      and every tunneled app goes dark.
@@ -212,7 +217,7 @@ echo
 # holding the deployed environment.
 ROUTERS="$ROUTERS" STATIC="$STATIC" COMPOSE="$COMPOSE" MIDDLEWARE="$MIDDLEWARE" PROBE_OUT="$PROBES" \
 TRAEFIK_SERVICE="$TRAEFIK_SERVICE" EDGE_NET="$EDGE_NET" EXEMPT_JSON="$EXEMPT_JSON" \
-AUD_PENDING_OK="$AUD_PENDING_OK" \
+AUD_PENDING_OK="$AUD_PENDING_OK" CONFIG_ONLY="$CONFIG_ONLY" \
 python3 <<'PY' || FAIL=1
 import json, os, re, sys, yaml
 
@@ -740,6 +745,105 @@ if gw_readers:
         if gw_ok:
             print(f"  ok    {len(seen)} reader(s) agree on the gateway audience; it is mapped and is")
             print("        no reader's own web/MCP audience (SERV-266)")
+
+# THE GATEWAY'S BACKENDS MUST ACCEPT ITS AUDIENCE (SERV-268), and the gateway's own
+# audience is the one they accept.
+#
+# The block above checks the readers AMONG THEMSELVES. It cannot see the readers that are
+# missing, and that is the failure that matters: heitan forwards each caller's assertion to a
+# backend MCP, the backend exchanges it, and a backend that does not accept heitan's audience
+# answers 401 to every forwarded call while Access, the guard, heitan's /healthz and every
+# other check here stay green. It is the SERV-161 failure a third time, so it gets the same
+# treatment: gated on heitan being IN the compose file and a backend URL being set, and
+# config-only.
+#
+# Which services must read the audience for a backend is a fact about that backend (its MCP
+# container AND the API the MCP exchanges at), so it is a table here. A backend heitan is
+# configured for that is not in the table FAILS: adding one (Chronicle with SERV-231,
+# Commonplace with COOK-52) means adding its readers here, in the same change.
+#
+# While heitan's own audience is still a __PLACEHOLDER__ it is not serving anything, so a
+# missing reader is a NOTE, not a FAIL. With a real audience it is a FAIL.
+GW_SVC = "heitan"
+GW_OWN_KEY = "HEITAN_CF_ACCESS_AUD"
+GW_READERS = {"SWITCHYARD": ("switchyard-mcp", "switchyard")}
+PLACEHOLDER = re.compile(r"^__[A-Z0-9_]+__$")
+if GW_SVC in (compose_doc.get("services") or {}):
+    gw_env = service_env(GW_SVC)
+    gw_own = (gw_env.get(GW_OWN_KEY) or "").strip()
+    if not gw_own:
+        bad(f"{GW_SVC} is deployed but carries no literal {GW_OWN_KEY}")
+        print("        It refuses to boot without its own audience; a value passed through from")
+        print("        the env file cannot be cross-checked here.")
+    else:
+        wired = 0
+        for key, value in sorted(gw_env.items()):
+            m = re.fullmatch(r"HEITAN_BACKEND_([A-Z0-9]+)_URL", key)
+            if not m or not (value or "").strip():
+                continue
+            backend = m.group(1)
+            readers = GW_READERS.get(backend)
+            if readers is None:
+                bad(f"{GW_SVC} is configured for backend {backend.lower()} ({key}), which this script has no readers for")
+                print("        Add the services that must accept the gateway audience for it to GW_READERS in")
+                print("        this script, in the same change that adds the URL.")
+                continue
+            for r in readers:
+                rvals = {k: (v or "").strip() for k, v in service_env(r).items() if GATEWAY_KEY.match(k)}
+                if not any(rvals.values()):
+                    msg = (f"{GW_SVC} forwards to {backend.lower()} but {r} carries no "
+                           f"{'/'.join(sorted(rvals)) or 'CF_ACCESS_GATEWAY_AUD'}: its sessions 401 at that exchange")
+                    if PLACEHOLDER.match(gw_own):
+                        print(f"  NOTE  {msg}")
+                        print(f"        Expected while {GW_OWN_KEY} is a placeholder: nothing is served yet.")
+                    else:
+                        bad(msg)
+                        print("        Every call heitan forwards fails, silently, with every other check green.")
+                        print(f"        Set the gateway audience on {r} to {GW_OWN_KEY} ({gw_own}).")
+                    continue
+                for k, v in sorted(rvals.items()):
+                    if v and v != gw_own and not PLACEHOLDER.match(gw_own):
+                        bad(f"{r} {k} is not {GW_SVC}'s own audience ({GW_OWN_KEY})")
+                        print(f"        {r}: {v}")
+                        print(f"        {GW_SVC}: {gw_own}")
+                        print("        A reader that accepts a different tag than the gateway presents refuses every")
+                        print("        forwarded session.")
+                    elif v and not PLACEHOLDER.match(gw_own):
+                        wired += 1
+        if wired:
+            print(f"  ok    {wired} backend reader(s) accept {GW_SVC}'s own audience")
+
+# PLACEHOLDER AUDIENCES (SERV-268, the SATL-58 / GENZO-8 shape).
+#
+# A service can land in the compose file before its Access application exists, with an
+# audience written `__<SVC>_ACCESS_AUD__` in both places it is read (the service's own
+# variable and the host's CF_ACCESS_AUD_MAP entry). The checks above are satisfied by it:
+# it is the same string twice and distinct from every other. So it must be named, and a
+# deploy must not be able to mistake it for a tag.
+#   --config-only  PEND: the config is sound and a PR can be reviewed, but it is not deployable.
+#   live (deploy)  FAIL: a placeholder can never match an Access application, so the edge probe
+#                  below could not pass either, and the loud reason belongs here.
+# It cannot open anything: the guard and the service compare an Access JWT's `aud` with the
+# string, and no JWT carries it. The deploy is gated shut, never open.
+ph = []
+for _h, _a in sorted(aud_map.items()):
+    if PLACEHOLDER.match(_a):
+        ph.append(f"CF_ACCESS_AUD_MAP[{_h}]")
+for _svc in (compose_doc.get("services") or {}):
+    for _k, _v in sorted(service_env(_svc).items()):
+        if _v and OWN_AUD_KEY.match(_k) and any(PLACEHOLDER.match(a.strip()) for a in _v.split(",")):
+            ph.append(f"{_svc}.{_k}")
+if ph:
+    if os.environ.get("CONFIG_ONLY") == "1":
+        print(f"  PEND  placeholder audience(s), NOT DEPLOYABLE as they are: {', '.join(ph)}")
+        print("        Create the Access application, then replace each with its AUD tag in one")
+        print("        commit (docs/zerogravity-edge.md section 5). A deploy (without --config-only)")
+        print("        FAILS while any remains.")
+    else:
+        bad(f"placeholder audience(s) in a deploy: {', '.join(ph)}")
+        print("        A __PLACEHOLDER__ is not an Access audience tag. The service would refuse every")
+        print("        request (gated shut, not open), but the Access application it stands for does")
+        print("        not exist, so nothing can work. Replace each with the application's AUD tag.")
 
 # The address Traefik binds `internal` to must be an address Traefik holds.
 static = yaml.safe_load(open(static_file)) or {}

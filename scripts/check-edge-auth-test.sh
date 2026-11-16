@@ -24,9 +24,38 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CHECK="${CHECK:-$REPO/scripts/check-edge-auth.sh}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+# THE ESTATE'S EDGE AS IT WOULD BE ONCE EVERY PLACEHOLDER IS REPLACED (SERV-268).
+# docker-compose.yml may carry `__<SVC>_ACCESS_AUD__` audiences for a service whose Access
+# application does not exist yet, and check-edge-auth.sh FAILS a live run on one, correctly.
+# That is a fact about the real file at one moment, not about the edge-gating cases below, so
+# they run against $TMP/real: a copy of the real compose and routers with each placeholder
+# replaced by a synthetic tag (never a real one) and heitan's backends given the gateway
+# audience, which is the state the owner's steps produce. The cases that are ABOUT the
+# placeholder and about a missing reader start from the raw file instead (PLANT_COMPOSE).
+REAL="$TMP/real"
+mkdir -p "$REAL/scripts" "$REAL/config/traefik/dynamic"
+cp "$REPO/scripts/check-edge-auth.sh" "$REAL/scripts/"
+cp "$REPO/config/traefik/traefik.yml" "$REAL/config/traefik/"
+cp "$REPO/config/traefik/dynamic/routers.yml" "$REAL/config/traefik/dynamic/"
+python3 - "$REPO/docker-compose.yml" "$REAL/docker-compose.yml" <<'PYEND'
+import hashlib, re, sys
+raw = open(sys.argv[1]).read()
+def tag(m):   # one distinct, synthetic 64-hex tag per placeholder name
+    return hashlib.sha256(m.group(0).encode()).hexdigest()
+real = re.sub(r"__[A-Z0-9_]+_ACCESS_AUD__", tag, raw)
+# The same tag (heitan's own) on both backend readers, as the owner's commit puts it.
+own = re.search(r"^\s*-\s*HEITAN_CF_ACCESS_AUD=(\S+)$", real, re.M)
+if own:
+    for anchor in ("      - CF_ACCESS_MCP_AUD=", "      - MCP_CF_ACCESS_AUD="):
+        assert real.count(anchor) == 1, anchor
+        real = real.replace(anchor, f"      - CF_ACCESS_GATEWAY_AUD={own.group(1)}\n{anchor}")
+open(sys.argv[2], "w").write(real)
+PYEND
+CHECK="${CHECK:-$REAL/scripts/check-edge-auth.sh}"
+PLANT_COMPOSE="$REAL/docker-compose.yml"
 
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found in PATH" >&2; exit 2; }
 
@@ -94,7 +123,7 @@ STUB
 chmod +x "$BIN/docker" "$BIN/curl"
 
 # The healthy world: every gated host redirects to the team login with its mapped audience.
-python3 - "$REPO/docker-compose.yml" "$TMP/base" <<'PY'
+python3 - "$REAL/docker-compose.yml" "$TMP/base" <<'PY'
 import os, re, sys
 raw, out = open(sys.argv[1]).read(), sys.argv[2]
 team = re.search(r"^\s*-\s*CF_ACCESS_TEAM_DOMAIN=(\S+)$", raw, re.M).group(1)
@@ -191,7 +220,7 @@ planted() {
   cp "$REPO/scripts/check-edge-auth.sh" "$TMP/planted/scripts/"
   cp "$REPO/config/traefik/traefik.yml" "$TMP/planted/config/traefik/"
   cp "$REPO/config/traefik/dynamic/routers.yml" "$TMP/planted/config/traefik/dynamic/"
-  cp "$REPO/docker-compose.yml" "$TMP/planted/"
+  cp "$PLANT_COMPOSE" "$TMP/planted/docker-compose.yml"
 }
 # Remove one middleware line from one named router.
 strip_mw() {
@@ -329,6 +358,10 @@ run_planted_live "gated-path probe gets Traefik's unrouted 404 instead of the 30
 echo
 echo "=== check-edge-auth.sh the estate MCP gateway's audience (SERV-266) ==="
 
+# These cases plant their OWN gateway and readers (a stand-in host), so they start from the
+# raw compose, placeholder and all, rather than from the realised one heitan's backends are
+# already wired in (see PLANT_COMPOSE above); the SERV-268 section below is about heitan.
+PLANT_COMPOSE="$REPO/docker-compose.yml"
 # Nothing in the real compose reads a gateway audience yet (SERV-268 adds the gateway),
 # so every case plants one: a gated router + map entry for a stand-in gateway host, and
 # CF_ACCESS_GATEWAY_AUD / CHRONICLE_CF_ACCESS_GATEWAY_AUD on the readers this ticket
@@ -408,6 +441,81 @@ readers "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CF_ACCESS_GATEWAY_AUD=$GW_AUD" "CHRONIC
 run_planted "one reader passed through from the env file -> NOTE, the rest still checked" 0 \
   "NOTE  gateway audience reader(s) whose value is not in the tracked compose: chronicle.CHRONICLE_CF_ACCESS_GATEWAY_AUD" \
   "ok    2 reader(s) agree on the gateway audience"
+
+echo
+echo "=== check-edge-auth.sh heitan: placeholder audiences and its backends' readers (SERV-268) ==="
+
+# The raw compose carries heitan's placeholder; the realised one carries a synthetic tag and
+# both backends reading it. Every case here is one mutation of one of the two.
+HT_HOST="heitan.zerogravity.industries"
+PH="__HEITAN_ACCESS_AUD__"
+HT_AUD="$(sed -n 's/^ *- HEITAN_CF_ACCESS_AUD=\(.*\)$/\1/p' "$REAL/docker-compose.yml")"
+[ "${#HT_AUD}" -eq 64 ] || { echo "setup: could not read heitan's realised audience" >&2; exit 2; }
+
+PLANT_COMPOSE="$REPO/docker-compose.yml"
+world; planted
+run_planted "the real compose: heitan on its placeholder -> green, named PEND and not deployable" 0 \
+  "PEND  placeholder audience(s), NOT DEPLOYABLE as they are: CF_ACCESS_AUD_MAP[$HT_HOST], heitan.HEITAN_CF_ACCESS_AUD" \
+  "NOTE  heitan forwards to switchyard but switchyard-mcp carries no CF_ACCESS_GATEWAY_AUD" \
+  "NOTE  heitan forwards to switchyard but switchyard carries no CF_ACCESS_GATEWAY_AUD"
+
+# A deploy is a live run. The edge stub plays Access for every mapped host, the placeholder
+# included, so the ONLY thing that can turn this red is the placeholder check itself.
+world; planted
+run_planted_live "a deploy (live) on the placeholder -> red, naming both places" 1 \
+  "FAIL  placeholder audience(s) in a deploy: CF_ACCESS_AUD_MAP[$HT_HOST], heitan.HEITAN_CF_ACCESS_AUD"
+
+PLANT_COMPOSE="$REAL/docker-compose.yml"
+world; planted
+run_planted_live "a deploy (live) once both are replaced and the backends read it -> green" 0 \
+  "ok    2 backend reader(s) accept heitan's own audience" "ok    edge: $HT_HOST is gated by Access"
+
+world; planted
+run_planted "no placeholder anywhere -> no PEND" 0 "ok    2 backend reader(s) accept heitan's own audience"
+if printf '%s' "$OUT" | grep -q 'PEND  placeholder'; then bad "a real audience was reported as a placeholder"; fi
+
+# Only the map entry replaced: the map says one thing and the service another.
+PLANT_COMPOSE="$REPO/docker-compose.yml"
+world; planted; subst docker-compose.yml "$HT_HOST=$PH" "$HT_HOST=$HT_AUD"
+run_planted "the map entry replaced but heitan's own variable not -> red (check 4), both values shown" 1 \
+  "FAIL  heitan HEITAN_CF_ACCESS_AUD does not match the map entry for $HT_HOST" \
+  "heitan: $PH" "map[$HT_HOST]: $HT_AUD"
+
+# A real audience and a backend that does not accept it: the silent-and-green failure.
+PLANT_COMPOSE="$REAL/docker-compose.yml"
+world; planted; subst docker-compose.yml "      - CF_ACCESS_GATEWAY_AUD=$HT_AUD"$'\n'"      - MCP_CF_ACCESS_AUD=" "      - MCP_CF_ACCESS_AUD="
+run_planted "real audience, switchyard-mcp does not read it -> red, naming the reader and the value" 1 \
+  "FAIL  heitan forwards to switchyard but switchyard-mcp carries no CF_ACCESS_GATEWAY_AUD" \
+  "Set the gateway audience on switchyard-mcp to HEITAN_CF_ACCESS_AUD ($HT_AUD)"
+
+world; planted; subst docker-compose.yml "      - CF_ACCESS_GATEWAY_AUD=$HT_AUD"$'\n'"      - CF_ACCESS_MCP_AUD=" "      - CF_ACCESS_MCP_AUD="
+run_planted "real audience, the Switchyard API does not read it -> red (the one that 401s at the exchange)" 1 \
+  "FAIL  heitan forwards to switchyard but switchyard carries no CF_ACCESS_GATEWAY_AUD"
+
+world; planted; subst docker-compose.yml "      - CF_ACCESS_GATEWAY_AUD=$HT_AUD"$'\n'"      - CF_ACCESS_MCP_AUD=" "      - CF_ACCESS_GATEWAY_AUD=$OTHER_AUD"$'\n'"      - CF_ACCESS_MCP_AUD="
+run_planted "the API reads a different tag than heitan presents -> red, both shown" 1 \
+  "FAIL  switchyard CF_ACCESS_GATEWAY_AUD is not heitan's own audience (HEITAN_CF_ACCESS_AUD)" \
+  "switchyard: $OTHER_AUD" "heitan: $HT_AUD"
+
+# The reader suffix must not be heitan's own: it is how 5b finds BACKENDS (SERV-266 review).
+world; planted; subst docker-compose.yml "HEITAN_CF_ACCESS_AUD=" "HEITAN_CF_ACCESS_GATEWAY_AUD="
+run_planted "heitan naming its own audience with the reader suffix -> red" 1 \
+  "FAIL  heitan is deployed but carries no literal HEITAN_CF_ACCESS_AUD"
+
+# A backend heitan is told about that this script has no readers for.
+world; planted; subst docker-compose.yml "      - HEITAN_BACKEND_SWITCHYARD_URL=" "      - HEITAN_BACKEND_CHRONICLE_URL=http://chronicle-mcp:9/mcp"$'\n'"      - HEITAN_BACKEND_SWITCHYARD_URL="
+run_planted "a backend with no reader mapping (chronicle) -> red, saying where to add it" 1 \
+  "FAIL  heitan is configured for backend chronicle (HEITAN_BACKEND_CHRONICLE_URL), which this script has no readers for" \
+  "GW_READERS"
+
+# Unset (the shipped state): a backend with no URL is not a backend.
+world; planted; subst docker-compose.yml "      - HEITAN_BACKEND_SWITCHYARD_URL=http://switchyard-mcp:4080/mcp" "      - HEITAN_BACKEND_SWITCHYARD_URL="
+run_planted "no backend URL set -> nothing to check, green" 0 "ok    CF_ACCESS_AUD_MAP covers exactly"
+
+# The router is gated like every other internal one.
+world; planted; strip_mw heitan cf-access-jwt
+run_planted "heitan's router loses cf-access-jwt -> red" 1 \
+  "FAIL  internal routers with no cf-access-jwt middleware: heitan"
 
 echo
 echo "$PASS passed, $FAIL failed"
