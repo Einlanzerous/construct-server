@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.44.0](https://github.com/Einlanzerous/construct-server/compare/v4.43.0...v4.44.0) (2026-11-16)
+
+
+### Features
+
+* **cf-access-guard:** emit the opaque Access subject as a response header (SATL-24) ([#296](https://github.com/Einlanzerous/construct-server/issues/296)) ([a476e85](https://github.com/Einlanzerous/construct-server/commit/a476e8536c6fb1e0ad6b31f4d7d0debcfb55e795))
+* **cfaccess:** opt-in principal mode, vectors spec 2, correct who runs the vectors (SERV-305) ([#294](https://github.com/Einlanzerous/construct-server/issues/294)) ([31790b2](https://github.com/Einlanzerous/construct-server/commit/31790b2bb2b951b3a2e71208a86c338838ac0429))
+* **genzo:** compose blocks for trestle-genzo and genzo (GENZO-8) ([#286](https://github.com/Einlanzerous/construct-server/issues/286)) ([54b439f](https://github.com/Einlanzerous/construct-server/commit/54b439f5c05c10860d1b948306605b19eb1bc334))
+* **genzo:** the Access application's AUD replaces the placeholder (GENZO-8) ([#293](https://github.com/Einlanzerous/construct-server/issues/293)) ([4978fd4](https://github.com/Einlanzerous/construct-server/commit/4978fd40fbf86a3648a4b43f606aae8af188dcfb))
+* **logging:** journald log driver anchor, satlink canary and host drop-ins (SATL-69) ([#297](https://github.com/Einlanzerous/construct-server/issues/297)) ([763fac1](https://github.com/Einlanzerous/construct-server/commit/763fac18f8885fdf9ad61f22b3621da3928b3e67))
+* **logging:** wave B, purser and cf-access-guard adopt the journald anchor (SATL-72) ([#304](https://github.com/Einlanzerous/construct-server/issues/304)) ([fd7a54c](https://github.com/Einlanzerous/construct-server/commit/fd7a54c1f4009c9a753715d31da46d4d943eaaa0))
+* **logging:** wave C, switchyard adopts the journald anchor (SATL-73) ([#305](https://github.com/Einlanzerous/construct-server/issues/305)) ([c503270](https://github.com/Einlanzerous/construct-server/commit/c5032705694ee37cad4852fb650dd8233740e54a))
+* **logging:** wave D, traefik adopts the journald anchor (SATL-74) ([#306](https://github.com/Einlanzerous/construct-server/issues/306)) ([fe9518e](https://github.com/Einlanzerous/construct-server/commit/fe9518e5f957131a7cfc0b1d0e6676aecab4c86a))
+* **traefik:** owner-run rollout script for the access-log change (SATL-24) ([#302](https://github.com/Einlanzerous/construct-server/issues/302)) ([0e0fb29](https://github.com/Einlanzerous/construct-server/commit/0e0fb29cd72a7356937f5bed147191e2e9de5ed3))
+* **traefik:** rotate the access log and log UA, Upgrade and the Access subject (SATL-24) ([#299](https://github.com/Einlanzerous/construct-server/issues/299)) ([4cfcc94](https://github.com/Einlanzerous/construct-server/commit/4cfcc94577a2870761ac65eb1517b2d179e53b7e))
+
+
+### Bug Fixes
+
+* **logging:** global journald rate limit, drop inert docker.service drop-in (SATL-83) ([#303](https://github.com/Einlanzerous/construct-server/issues/303)) ([9af59af](https://github.com/Einlanzerous/construct-server/commit/9af59afd34fac2dd549104873222efbe92600ef5))
+
 ## [4.43.0](https://github.com/Einlanzerous/construct-server/compare/v4.42.0...v4.43.0) (2026-11-14)
 
 
