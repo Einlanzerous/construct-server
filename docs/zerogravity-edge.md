@@ -437,6 +437,122 @@ anything here:
      http://localhost:4080/mcp 2>&1 | head -3'
   ```
 
+### 5. The estate MCP gateway, heitan (SERV-268)
+
+`heitan.zerogravity.industries` is one hostname, one Access application, Streamable HTTP at
+`/mcp/<bundle>[+<bundle>...]`. A **bundle** is a reviewed allowlist of one backend MCP's tools
+(`switchyard.read`, `chronicle.read`); a client connects to the bundles it wants and sees only
+those, prefixed `<backend>_`, plus `heitan_catalogue`. Design: SERV-257's approved plan, and
+heitan's `docs/decisions/serv-267-heitan-v1.md`. In the plan, read `estate-mcp` as `heitan`.
+
+The origin half is in this repo: the `heitan` service, its `internal`-only router behind
+`cf-access-jwt`, its `CF_ACCESS_AUD_MAP` entry. The Zero Trust half cannot be made from a file.
+**heitan holds no credential.** It verifies each caller's assertion against **its own** AUD and
+forwards the same `Cf-Access-Jwt-Assertion`, unchanged, to a backend MCP over `construct_net`
+(`HEITAN_BACKEND_SWITCHYARD_URL=http://switchyard-mcp:4080/mcp`, never through Traefik, whose
+`strip-identity-headers` may drop it). The backend exchanges the assertion and applies its own write
+gate. So a bundle can only narrow what a caller gets.
+
+**It is merged with two placeholders and is not deployable until the owner's steps are done.** The
+Access application does not exist, so `HEITAN_CF_ACCESS_AUD` and the map entry are
+`__HEITAN_ACCESS_AUD__`. `check-edge-auth.sh --config-only` reports that as `PEND`; the live run
+`deploy.yml` makes **fails** on it, so **do not merge until step 7**. The placeholder cannot open
+anything: no Access JWT carries it, so heitan and the guard refuse every request.
+
+Three places read heitan's audience, and the last two fail silently:
+
+| Where | Variable | Why |
+|---|---|---|
+| heitan | `HEITAN_CF_ACCESS_AUD` | its own audience: callers' assertions must carry it. Named `*CF_ACCESS_AUD` so check 4 compares it with the map entry for heitan's own host |
+| cf-access-guard | the `heitan.zerogravity.industries` entry in `CF_ACCESS_AUD_MAP` | the origin guard on the router |
+| `switchyard-mcp` **and** `switchyard` | `CF_ACCESS_GATEWAY_AUD` (SERV-266, switchyard 4.59+) | the backend must accept heitan's audience, or every forwarded call 401s at the exchange while everything else is green |
+
+Never name heitan's own audience `*CF_ACCESS_GATEWAY_AUD`: that suffix is how check 5b finds the
+**backends** reading it, and it would fail heitan for reading its own host's tag.
+Chronicle's reader (`CHRONICLE_CF_ACCESS_GATEWAY_AUD`) and `HEITAN_BACKEND_CHRONICLE_URL` come with
+SERV-231, Commonplace's with COOK-52; until then the chronicle bundle shows `unavailable`.
+Each of those changes also adds its readers to `GW_READERS` in `check-edge-auth.sh`.
+
+**The owner's steps, in this order.** The Access policy goes on before the hostname is routed, or
+heitan is briefly open to anyone who finds the name:
+
+```
+1. Decide, in the PR: the hostname (heitan.zerogravity.industries is proposed), who the
+   Access policy admits, and when SERV-266 is switched on. Change HEITAN_PUBLIC_URL, the
+   router rule, the map key and every `heitan.zerogravity.industries` here together if the
+   hostname changes.
+2. Promote switchyard to 4.59 or later (Actions > Promote, service=switchyard). The pin was 4.57,
+   which ignores CF_ACCESS_GATEWAY_AUD without saying so; 4.59 is the first release that reads
+   it. This recreates switchyard, switchyard-frontend and switchyard-mcp together.
+3. In Zero Trust, create the Access application for heitan.zerogravity.industries as
+   type `self_hosted`, then:
+     - Managed OAuth ON (the beta flag). Without it an unauthenticated request gets a 302 to
+       the Access login page and a Claude connector cannot discover the authorization server.
+     - Allowed redirect URI for Claude connectors: https://claude.ai/api/mcp/auth_callback
+       (web, Desktop, mobile and Cowork share it).
+     - The policy you chose in step 1. WHO may use heitan is the owner's decision. Cook_book's
+       plan (COOK-13) makes Commonplace writes require an already-bound contributor
+       precisely because this policy may be wide: a wide policy is survivable by design, but
+       it is a choice, not a default.
+   The SERV-265 portal callbacks (the dashboard's
+   .../mcp-server/oauth-callback/<server-id> and https://<portal-host>/servers-callback) are
+   for an upstream behind a Cloudflare MCP portal and are NOT needed here: heitan is its own
+   gateway, not a portal upstream. Add them only if a portal is ever put in front.
+4. Add the tunnel route: Networks > Tunnels > the PROD tunnel > "published application routes",
+   host heitan.zerogravity.industries, type HTTP, URL traefik:9080, no path. The Access
+   application already gates the host, so the route opens nothing.
+5. Copy the application's AUD tag. In ONE commit on this PR's branch:
+     - replace __HEITAN_ACCESS_AUD__ in HEITAN_CF_ACCESS_AUD (service heitan) and in the
+       heitan entry of CF_ACCESS_AUD_MAP (service cf-access-guard);
+     - add `- CF_ACCESS_GATEWAY_AUD=<the same tag>` to switchyard-mcp and to switchyard
+       (beside MCP_CF_ACCESS_AUD and CF_ACCESS_MCP_AUD).
+6. `make edge-auth-check config_only=1`, from the checkout. Expect no PEND and
+   `ok    2 backend reader(s) accept heitan's own audience`. It FAILS if a backend does not
+   read the tag, or reads a different one.
+7. Merge. deploy.yml recreates heitan and cf-access-guard (the map changed) and runs the live
+   `check-edge-auth.sh`, which now has a real audience to compare with the edge's `kid=`.
+8. Verify (below).
+```
+
+**Verifying, per SERV-257 criterion 1.** A request through the public path, unauthenticated:
+
+```bash
+# 401 with a resource_metadata pointer, NOT a 302 and not HTML (criterion 1).
+curl -si -X POST -H 'Content-Type: application/json' -d '{}' \
+  https://heitan.zerogravity.industries/mcp | head -20
+```
+
+As in section 4 that 401 comes from Cloudflare (`Bearer realm="OAuth"`, `resource_metadata`
+pointing at `/.well-known/cloudflare-access-protected-resource/mcp`). heitan's own 401 (measured
+against the 0.1.1 image, `HEITAN_PUBLIC_URL` as above) is
+`Www-Authenticate: Bearer resource_metadata="https://heitan.zerogravity.industries/.well-known/oauth-protected-resource/mcp"`
+and the body `Cf-Access-Jwt-Assertion header missing`. A 302 means Managed OAuth is not applying
+(step 3). A 403 with `x-cf-access-guard: deny` means no Access application covers the host.
+Container side, if the two disagree:
+
+```bash
+docker exec heitan sh -c 'printf "POST /mcp HTTP/1.0\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}" | nc 127.0.0.1 4021'
+```
+
+What can and cannot be checked **at deploy**. The ticket's done-when is criterion 9, which is not
+reachable from this repo:
+
+| Check | At deploy? |
+|---|---|
+| Criterion 1: unauthenticated `/mcp` is 401 with `resource_metadata` | **Yes**, the command above |
+| `make edge-auth-check`: spoofed Host refused, the edge's `kid=` equals the map entry | **Yes**, and deploy.yml runs it |
+| heitan `/healthz` reports `version` 0.1.1 and a 40-character `sha` | **Yes**, `docker exec heitan wget -qO- http://127.0.0.1:4021/healthz` |
+| A hosted Claude connector at `/mcp/switchyard.read` lists five tools and answers a Switchyard question (criterion 8, Switchyard half) | **Yes, by hand**, and it proves step 2 and the readers: a 401 on the tool call is a missing reader or a stale switchyard pin |
+| `heitan_catalogue` lists `chronicle.read` as `unavailable` | **Yes**, the expected state until SERV-231 |
+| Criterion 8, Chronicle half; criterion 4 (Chronicle `whoami` through the gateway); criterion 5 end to end | **No**: Chronicle's hosted MCP (SERV-231) does not exist |
+| **Criterion 9: Eidolon answers a Switchyard question through the gateway with only its bundle advertised** | **No**: Eidolon has no Streamable HTTP client and no Access identity (SERV-269), and heitan refuses a service-token assertion (no `email` claim) until SERV-293 maps one to an agent account |
+| Per-person identity (two different people see their own tickets) | **No**: needs a second Access identity; SERV-265 saw one person only |
+
+heitan's own per-bundle token budget (criterion 7) is enforced in heitan's repo
+(`bundle-budget.yml`, `internal/manifest/measured.json`), not here. `scripts/measure-mcp-tools.py`
+spawns a service as a **stdio** MCP server, heitan has no stdio mode, and every bundle is a subset
+of a backend this baseline already measures; so heitan has no `mcp-tools-baseline.json` entry.
+
 ### Verification (subset of SERV-30, run once the relay + tunnel exist)
 
 - `curl --resolve switchyard.zerogravity.industries:443:<WAN_IP> https://switchyard.zerogravity.industries`

@@ -108,3 +108,12 @@ cross-checked by `check-edge-auth.sh` (SERV-161); note the first two are compare
 regex sweep over names *ending* in `CF_ACCESS_AUD`, which structurally cannot see the
 third, so it is asserted by name and widening that pattern is not the fix — it would
 also swallow `CF_ACCESS_AUD_MAP` and compare the map against itself.
+
+## The MCP gateway's AUD (heitan, SERV-268)
+
+heitan is the one service that reads **its own** audience and also has its audience **read by
+others**: it verifies callers against `HEITAN_CF_ACCESS_AUD`, and the backends it forwards to
+(`switchyard-mcp`, `switchyard`) accept the same tag as `CF_ACCESS_GATEWAY_AUD`. The two names
+differ on purpose, so `check-edge-auth.sh` can tell the owner from the readers. A placeholder
+(`__HEITAN_ACCESS_AUD__`) is `PEND` in `--config-only` and a failure in a deploy. Runbook:
+`docs/zerogravity-edge.md` section 5.
