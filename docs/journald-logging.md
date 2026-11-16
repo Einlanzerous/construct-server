@@ -21,6 +21,7 @@ every adopter in it, so the wave size is the number of simultaneous restarts.
 | B | purser, cf-access-guard | merged (SATL-72); see "Wave B" |
 | C | switchyard (24 h rate-limit check) | merged (SATL-73); see "Wave C" |
 | D | traefik (short edge outage, about 12 s) | this change (SATL-74); see "Wave D" |
+| (none) | heitan | on the anchor from its first deploy (SERV-268), so no wave; a new service restarts only itself |
 | E | postgres | **DEFERRED** (ruling 3), see the cascade note |
 
 **Never** plimsoll or plimsoll-llm: `scripts/check-plimsoll-llm-canary.sh` requires them to log

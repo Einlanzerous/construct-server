@@ -713,6 +713,21 @@ http:
       middlewares:
         - cf-access-jwt
 
+    # heitan (SERV-268): the estate's MCP gateway, one tunneled host, gated like
+    # switchyard-mcp. `internal` ONLY: no `-direct` router, and never crowdsec-bouncer (see the
+    # note above on Anthropic's egress). heitan re-verifies the Access assertion against its own
+    # AUD and forwards it, unchanged, straight to each backend container on construct_net, so
+    # nothing here sits between it and a backend. Its AUD-map entry on cf-access-guard is a
+    # placeholder until the Access application exists; see the heitan service in
+    # docker-compose.yml.
+    heitan:
+      entryPoints:
+        - internal
+      rule: "Host(`heitan.zerogravity.industries`)"
+      service: heitan
+      middlewares:
+        - cf-access-jwt
+
     # THE SECOND EXEMPTION from origin auth (PCAD-5 / IDEA-22), whole-host where
     # the webhook's is exact-Path — so state plainly what that costs: everything
     # placard serves is reachable by anything that can reach the entrypoint.
@@ -844,6 +859,13 @@ http:
         # router is the only route to it.
         servers:
           - url: "http://switchyard-mcp:4080"
+
+    heitan:
+      loadBalancer:
+        # One Go binary on :4021 (SERV-268). Literal because the file provider does not
+        # expand compose variables; it must equal HEITAN_PORT on the heitan service.
+        servers:
+          - url: "http://heitan:4021"
 
     chronicle:
       loadBalancer:

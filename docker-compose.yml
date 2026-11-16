@@ -790,6 +790,11 @@ services:
       # check existed, a typo here failed exactly as silently as the missing
       # variable did: every edge signal green, and only a 401 in switchyard's log.
       - CF_ACCESS_MCP_AUD=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466
+      # heitan's audience (SERV-266 / SERV-268), accepted in ADDITION to this service's own.
+      # heitan forwards each caller's Cf-Access-Jwt-Assertion verbatim, and those JWTs carry
+      # heitan's AUD. Must equal HEITAN_CF_ACCESS_AUD on heitan (check-edge-auth 5c); switchyard
+      # and switchyard-mcp must both carry it, or every forwarded call 401s while the edge is green.
+      - CF_ACCESS_GATEWAY_AUD=86a1f15cda956382ca2b724f1b0924f435e5bc4a2b62f7395877a56ae255efe6
       # Signet connector (SWY-165 / SERV-44). Signet is a host daemon, not a
       # container — reach it via host.docker.internal (see extra_hosts below).
       # Both vars absent => connector self-disables (Admin › Credentials hidden,
@@ -1030,6 +1035,11 @@ services:
       # serving the tool surface unauthenticated. That is the CLAUDE.md
       # empty-variable invariant working as intended: skip loudly, never substitute.
       - MCP_CF_ACCESS_AUD=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466
+      # heitan's audience (SERV-266 / SERV-268), accepted in ADDITION to this service's own.
+      # heitan forwards each caller's Cf-Access-Jwt-Assertion verbatim, and those JWTs carry
+      # heitan's AUD. Must equal HEITAN_CF_ACCESS_AUD on heitan (check-edge-auth 5c); switchyard
+      # and switchyard-mcp must both carry it, or every forwarded call 401s while the edge is green.
+      - CF_ACCESS_GATEWAY_AUD=86a1f15cda956382ca2b724f1b0924f435e5bc4a2b62f7395877a56ae255efe6
       # Configured, never derived from the Host header. It feeds the
       # `WWW-Authenticate: Bearer resource_metadata="…"` pointer a client follows to
       # discover the authorization server, and Host is attacker-controlled on the
@@ -1067,6 +1077,87 @@ services:
       # `make recreate svc=switchyard-mcp` bakes that in.
       switchyard:
         condition: service_healthy
+
+  # --- HEITAN (the estate's MCP gateway) — SERV-268, repo Einlanzerous/heitan ---
+  #
+  # One Access-gated hostname, Streamable HTTP at /mcp/<bundle>[+<bundle>...]. A bundle is a
+  # reviewed allowlist of ONE backend's tools; a client sees only the bundles it connects to.
+  # heitan HOLDS NO CREDENTIAL: it verifies each caller's Cf-Access-Jwt-Assertion against its
+  # own AUD and forwards that same header, unchanged, to the backend MCP, which exchanges it
+  # and applies its own write gate (SERV-257 ruling 4). Design of record: heitan's
+  # docs/decisions/serv-267-heitan-v1.md. Deploy runbook: docs/zerogravity-edge.md §5.
+  #
+  # `internal`-only router behind cf-access-jwt (config/traefik/dynamic/routers.yml), no `ports:`
+  # and no `-direct` public router, so the only route in is Cloudflare -> tunnel -> Traefik ->
+  # guard. `expose:` is documentation, as on satlink and genzo. Never behind crowdsec-bouncer:
+  # Anthropic's egress is one narrow range hitting one endpoint (see §4 of the runbook).
+  #
+  # Access application `heitan` (self_hosted, Managed OAuth, policy Self-Only) gates the host;
+  # the tunnel route and DNS record were provisioned by Purser (`--access none`, SERV-268).
+  heitan:
+    image: ghcr.io/einlanzerous/heitan:${HEITAN_TAG:-latest}
+    container_name: heitan
+    restart: unless-stopped
+    environment:
+      - HEITAN_PORT=4021
+      # The origin heitan is reached at, bare https, no path: it builds the
+      # `WWW-Authenticate: Bearer resource_metadata="..."` pointer from this, never from the
+      # Host header (attacker-controlled on the internal entrypoint). Boot refuses anything
+      # else. Must be the host of the router and of the CF_ACCESS_AUD_MAP entry below.
+      - HEITAN_PUBLIC_URL=https://heitan.zerogravity.industries
+      # Public identifiers, not secrets: the same team domain every other service carries.
+      - HEITAN_CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
+      # THIS GATEWAY'S OWN AUD, and named *CF_ACCESS_AUD on purpose: check-edge-auth.sh's
+      # per-host sweep (check 4) then compares it with the CF_ACCESS_AUD_MAP entry for
+      # heitan's own host. It must NOT be named *CF_ACCESS_GATEWAY_AUD: that suffix is how
+      # check 5b finds the BACKENDS that read this audience, and it fails a service that
+      # reads its own host's tag as a backend's (SERV-266 review).
+      #
+      # The AUD of the heitan.zerogravity.industries Access application. The same tag appears
+      # in four places that change together: here, the CF_ACCESS_AUD_MAP entry on
+      # cf-access-guard, and CF_ACCESS_GATEWAY_AUD on switchyard and switchyard-mcp.
+      - HEITAN_CF_ACCESS_AUD=86a1f15cda956382ca2b724f1b0924f435e5bc4a2b62f7395877a56ae255efe6
+      # The Switchyard backend: switchyard-mcp's own endpoint, container to container on
+      # construct_net, deliberately NOT through Traefik. Traefik's `strip-identity-headers`
+      # may drop the Cf-Access-Jwt-Assertion heitan must forward, and nothing in the
+      # SERV-265 spike tested it. No auth in the URL: heitan has no credential to put there.
+      # The path is part of it, as for MCP_PUBLIC_URL on switchyard-mcp.
+      - HEITAN_BACKEND_SWITCHYARD_URL=http://switchyard-mcp:4080/mcp
+      # No HEITAN_BACKEND_CHRONICLE_URL, on purpose: Chronicle's hosted MCP (SERV-231) does not
+      # exist yet. A backend with no URL boots as unconfigured, and heitan_catalogue shows the
+      # chronicle bundle as `unavailable`. Add the line when SERV-231 ships. Commonplace is
+      # COOK-52 and adds its own line then.
+      #
+      # For a forwarded call to work, switchyard AND switchyard-mcp must accept this gateway's
+      # audience: CF_ACCESS_GATEWAY_AUD on each (SERV-266, read from switchyard 4.59). A missing
+      # or different reader 401s every forwarded call; check-edge-auth.sh 5c fails on it.
+      #
+      # Left at heitan's defaults: HEITAN_BACKEND_TIMEOUT (5s), HEITAN_BACKEND_RETRIES (2),
+      # HEITAN_BACKEND_RETRY_BASE (250ms). No credential variable exists to set.
+    expose:
+      - "4021"
+    networks:
+      - construct_net
+    # A small Go binary holding sessions in memory: nothing here is big. The house way to
+    # say a ceiling is mem_limit (ollama, plimsoll-llm, genzo; no service uses
+    # deploy.resources for memory). 256m is generous for a router that forwards JSON.
+    mem_limit: 256m
+    healthcheck:
+      # /healthz on the port heitan serves, never /readyz. Probes the serving process over
+      # HTTP (busybox wget is in the image for exactly this, deploy/Dockerfile), 127.0.0.1
+      # rather than `localhost` so a v6-first resolver cannot make it miss a v4 listener.
+      # Unauthenticated by design: a probe that needed an assertion could never pass.
+      # Proven able to FAIL as well as pass (docs/stack-service-notes.md "Healthchecks"); the
+      # result is in the PR that added this.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:4021/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # No depends_on switchyard-mcp: heitan boots with any backend down and shows its bundle
+    # as `unavailable` (invariant 4), and a hard dependency would turn a switchyard-mcp
+    # recreate into a heitan recreate for nothing.
+    logging: *journald-logging
 
   # --- NEWSLETTER CURATION (Centrifuge) ---
   # Single image carrying the HTTP API and the decoupled scoring worker.
@@ -3130,7 +3221,9 @@ services:
       # tunneled router that nobody mapped is unreachable, which is loud, rather than
       # unauthenticated, which is not. scripts/check-edge-auth.sh asserts that this list
       # and the routers agree, so they cannot drift apart silently.
-      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e,arcus.zerogravity.industries=846a88d9327ce6e7bce48862657b39840725e8260298951d5a3c87d5b45d6457,satlink.zerogravity.industries=c557b5c9a3258be279cd8ad9c8a483ee6c722adb8468f90048aa8e543f3534d3,genzo.zerogravity.industries=7a679cc7c2b876dbd987546ea94e44f053adf0bffb57257ba59090e23d4106ef
+      # SERV-268: the heitan entry must equal HEITAN_CF_ACCESS_AUD on the heitan service and
+      # CF_ACCESS_GATEWAY_AUD on switchyard and switchyard-mcp (check-edge-auth 4 and 5c).
+      - CF_ACCESS_AUD_MAP=switchyard.zerogravity.industries=d3404fc362067f48ff1fd6c9a7fc9a1fd723510c2681feed15e35159649963de,lyceum.zerogravity.industries=e9bace230db8a112935e8d931393424390c840e0c58af7b8ccda21cb60e68850,wiki.zerogravity.industries=a0d75d29e6b849c4d1557e045c92cd830f060f1ae4370a7ea215fc3e68bce3a2,chronicle.zerogravity.industries=48bc1ca35a8a6bcf17c242cac59e209a53e58e5213b1656c82d3053df062f1ec,mcp.zerogravity.industries=47cb76de601dfe7aa7aa657935a76940588ecf22c802ec100782f40804929466,catenary.zerogravity.industries=a88c42a2994050e2d5e530aa93a2fe7b700e6ea8f1f8b63baafff17a94f29873,commonplace.zerogravity.industries=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e,arcus.zerogravity.industries=846a88d9327ce6e7bce48862657b39840725e8260298951d5a3c87d5b45d6457,satlink.zerogravity.industries=c557b5c9a3258be279cd8ad9c8a483ee6c722adb8468f90048aa8e543f3534d3,genzo.zerogravity.industries=7a679cc7c2b876dbd987546ea94e44f053adf0bffb57257ba59090e23d4106ef,heitan.zerogravity.industries=86a1f15cda956382ca2b724f1b0924f435e5bc4a2b62f7395877a56ae255efe6
       # enforce | audit. `audit` logs the decision it WOULD have made and allows the
       # request anyway — it exists so the cutover could be rehearsed against real traffic
       # before three live routers went fail-closed at once, and it is not a steady state.
