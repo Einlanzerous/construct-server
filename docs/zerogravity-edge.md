@@ -453,11 +453,13 @@ forwards the same `Cf-Access-Jwt-Assertion`, unchanged, to a backend MCP over `c
 `strip-identity-headers` may drop it). The backend exchanges the assertion and applies its own write
 gate. So a bundle can only narrow what a caller gets.
 
-**It is merged with two placeholders and is not deployable until the owner's steps are done.** The
-Access application does not exist, so `HEITAN_CF_ACCESS_AUD` and the map entry are
-`__HEITAN_ACCESS_AUD__`. `check-edge-auth.sh --config-only` reports that as `PEND`; the live run
-`deploy.yml` makes **fails** on it, so **do not merge until step 7**. The placeholder cannot open
-anything: no Access JWT carries it, so heitan and the guard refuse every request.
+**Edge as deployed (SERV-268).** The Access application `heitan` is `self_hosted` with Managed
+OAuth on and the reusable `Self-Only` policy (ruling 3 of the SERV-268 plan: the owner only). Purser
+provisioned the tunnel route (`http://traefik:9080`) and the proxied CNAME with
+`purser provision-service --service heitan --mode tunnelled --access none`; `--access none`
+because Purser's `gated` shape would add the members-group policy. The real AUD replaced the
+`__HEITAN_ACCESS_AUD__` placeholder before merge. A future replacement of the tag still changes all
+four places below in one commit, and check-edge-auth fails a deploy on any placeholder left behind.
 
 Three places read heitan's audience, and the last two fail silently:
 
@@ -498,9 +500,10 @@ heitan is briefly open to anyone who finds the name:
    .../mcp-server/oauth-callback/<server-id> and https://<portal-host>/servers-callback) are
    for an upstream behind a Cloudflare MCP portal and are NOT needed here: heitan is its own
    gateway, not a portal upstream. Add them only if a portal is ever put in front.
-4. Add the tunnel route: Networks > Tunnels > the PROD tunnel > "published application routes",
-   host heitan.zerogravity.industries, type HTTP, URL traefik:9080, no path. The Access
-   application already gates the host, so the route opens nothing.
+4. Add the tunnel route and DNS record, after the Access application exists:
+   `docker exec purser purser provision-service --service heitan --hostname heitan.zerogravity.industries --mode tunnelled --upstream http://traefik:9080 --access none --tunnel prod --logo none`
+   previews; add `--apply` to act. The Access application already gates the host, so the route
+   opens nothing.
 5. Copy the application's AUD tag. In ONE commit on this PR's branch:
      - replace __HEITAN_ACCESS_AUD__ in HEITAN_CF_ACCESS_AUD (service heitan) and in the
        heitan entry of CF_ACCESS_AUD_MAP (service cf-access-guard);

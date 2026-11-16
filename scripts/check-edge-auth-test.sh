@@ -27,20 +27,32 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# THE ESTATE'S EDGE AS IT WOULD BE ONCE EVERY PLACEHOLDER IS REPLACED (SERV-268).
-# docker-compose.yml may carry `__<SVC>_ACCESS_AUD__` audiences for a service whose Access
-# application does not exist yet, and check-edge-auth.sh FAILS a live run on one, correctly.
-# That is a fact about the real file at one moment, not about the edge-gating cases below, so
-# they run against $TMP/real: a copy of the real compose and routers with each placeholder
-# replaced by a synthetic tag (never a real one) and heitan's backends given the gateway
-# audience, which is the state the owner's steps produce. The cases that are ABOUT the
-# placeholder and about a missing reader start from the raw file instead (PLANT_COMPOSE).
+# TWO FIXTURES, DERIVED FROM THE REAL COMPOSE SO NEITHER DEPENDS ON ITS STATE AT ONE MOMENT.
+# $RAW_COMPOSE is heitan before the owner's commit (SERV-268): its audience back to the
+# `__HEITAN_ACCESS_AUD__` placeholder in both places and no backend reading it. The cases that
+# are ABOUT the placeholder, about a missing reader, and SERV-266's stand-in gateway start there.
+# $TMP/real is the edge once every placeholder is replaced: each `__<SVC>_ACCESS_AUD__` swapped
+# for a synthetic tag (never a real one) and heitan's backends given that tag, which is the state
+# the owner's steps produce. The edge-gating cases run against it. Since SERV-268 merged, the
+# real compose already is that shape with a real tag; the fixtures normalise both directions.
+RAW_COMPOSE="$TMP/raw-compose.yml"
+python3 - "$REPO/docker-compose.yml" "$RAW_COMPOSE" <<'PYEND'
+import re, sys
+s = open(sys.argv[1]).read()
+own = re.search(r"^\s*-\s*HEITAN_CF_ACCESS_AUD=([0-9a-f]{64})$", s, re.M)
+if own:
+    s = s.replace(own.group(1), "__HEITAN_ACCESS_AUD__")
+    s = re.sub(r"^      - CF_ACCESS_GATEWAY_AUD=__HEITAN_ACCESS_AUD__\n", "", s, flags=re.M)
+assert "CF_ACCESS_GATEWAY_AUD=" not in "".join(l for l in s.splitlines(True) if not l.lstrip().startswith("#")), \
+    "raw fixture: a gateway reader other than heitan's is in the compose; extend this normalisation"
+open(sys.argv[2], "w").write(s)
+PYEND
 REAL="$TMP/real"
 mkdir -p "$REAL/scripts" "$REAL/config/traefik/dynamic"
 cp "$REPO/scripts/check-edge-auth.sh" "$REAL/scripts/"
 cp "$REPO/config/traefik/traefik.yml" "$REAL/config/traefik/"
 cp "$REPO/config/traefik/dynamic/routers.yml" "$REAL/config/traefik/dynamic/"
-python3 - "$REPO/docker-compose.yml" "$REAL/docker-compose.yml" <<'PYEND'
+python3 - "$RAW_COMPOSE" "$REAL/docker-compose.yml" <<'PYEND'
 import hashlib, re, sys
 raw = open(sys.argv[1]).read()
 def tag(m):   # one distinct, synthetic 64-hex tag per placeholder name
@@ -359,11 +371,10 @@ echo
 echo "=== check-edge-auth.sh the estate MCP gateway's audience (SERV-266) ==="
 
 # These cases plant their OWN gateway and readers (a stand-in host), so they start from the
-# raw compose, placeholder and all, rather than from the realised one heitan's backends are
-# already wired in (see PLANT_COMPOSE above); the SERV-268 section below is about heitan.
-PLANT_COMPOSE="$REPO/docker-compose.yml"
-# Nothing in the real compose reads a gateway audience yet (SERV-268 adds the gateway),
-# so every case plants one: a gated router + map entry for a stand-in gateway host, and
+# pre-replacement compose ($RAW_COMPOSE: heitan on its placeholder, no backend reading it)
+# rather than from the realised one; the SERV-268 section below is about heitan.
+PLANT_COMPOSE="$RAW_COMPOSE"
+# Nothing in that compose reads a gateway audience, so every case plants one: a gated router + map entry for a stand-in gateway host, and
 # CF_ACCESS_GATEWAY_AUD / CHRONICLE_CF_ACCESS_GATEWAY_AUD on the readers this ticket
 # taught to accept it. Synthetic tags only, never a real one.
 GW_HOST="estate-mcp.zerogravity.industries"
@@ -454,7 +465,13 @@ HT_AUD="$(sed -n 's/^ *- HEITAN_CF_ACCESS_AUD=\(.*\)$/\1/p' "$REAL/docker-compos
 
 PLANT_COMPOSE="$REPO/docker-compose.yml"
 world; planted
-run_planted "the real compose: heitan on its placeholder -> green, named PEND and not deployable" 0 \
+run_planted "the real compose as shipped -> green, no placeholder, both backends read heitan's tag" 0 \
+  "ok    2 backend reader(s) accept heitan's own audience"
+if printf '%s' "$OUT" | grep -q 'PEND  placeholder'; then bad "the shipped compose still carries a placeholder"; fi
+
+PLANT_COMPOSE="$RAW_COMPOSE"
+world; planted
+run_planted "before the owner's commit: heitan on its placeholder -> green, named PEND and not deployable" 0 \
   "PEND  placeholder audience(s), NOT DEPLOYABLE as they are: CF_ACCESS_AUD_MAP[$HT_HOST], heitan.HEITAN_CF_ACCESS_AUD" \
   "NOTE  heitan forwards to switchyard but switchyard-mcp carries no CF_ACCESS_GATEWAY_AUD" \
   "NOTE  heitan forwards to switchyard but switchyard carries no CF_ACCESS_GATEWAY_AUD"
@@ -475,7 +492,7 @@ run_planted "no placeholder anywhere -> no PEND" 0 "ok    2 backend reader(s) ac
 if printf '%s' "$OUT" | grep -q 'PEND  placeholder'; then bad "a real audience was reported as a placeholder"; fi
 
 # Only the map entry replaced: the map says one thing and the service another.
-PLANT_COMPOSE="$REPO/docker-compose.yml"
+PLANT_COMPOSE="$RAW_COMPOSE"
 world; planted; subst docker-compose.yml "$HT_HOST=$PH" "$HT_HOST=$HT_AUD"
 run_planted "the map entry replaced but heitan's own variable not -> red (check 4), both values shown" 1 \
   "FAIL  heitan HEITAN_CF_ACCESS_AUD does not match the map entry for $HT_HOST" \
