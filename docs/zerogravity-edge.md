@@ -537,8 +537,10 @@ Container side, if the two disagree:
 docker exec heitan sh -c 'printf "POST /mcp HTTP/1.0\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}" | nc 127.0.0.1 4021'
 ```
 
-What can and cannot be checked **at deploy**. The ticket's done-when is criterion 9, which is not
-reachable from this repo:
+What can and cannot be checked **at deploy**. SERV-268's done-when is criteria 1–6 of its approved
+plan (rev 1); SERV-257 criterion 9 (Eidolon) moved to SERV-269 and is not reachable from this repo.
+Plan criterion 6 is the one that shows the policy is the gate: on a Managed-OAuth host a mis-scoped
+policy leaves every other check green.
 
 | Check | At deploy? |
 |---|---|
@@ -549,7 +551,8 @@ reachable from this repo:
 | `heitan_catalogue` lists `chronicle.read` as `unavailable` | **Yes**, the expected state until SERV-231 |
 | Criterion 8, Chronicle half; criterion 4 (Chronicle `whoami` through the gateway); criterion 5 end to end | **No**: Chronicle's hosted MCP (SERV-231) does not exist |
 | **Criterion 9: Eidolon answers a Switchyard question through the gateway with only its bundle advertised** | **No**: Eidolon has no Streamable HTTP client and no Access identity (SERV-269), and heitan refuses a service-token assertion (no `email` claim) until SERV-293 maps one to an agent account |
-| Per-person identity (two different people see their own tickets) | **No**: needs a second Access identity; SERV-265 saw one person only |
+| Plan criterion 6: an identity the `Self-Only` policy does not admit cannot complete the connector's OAuth flow, and no session is opened at heitan | **Yes, by hand, and before the merge**: it needs only the Access application, which already fronts the host. Add a connector for `https://heitan.zerogravity.industries/mcp/switchyard.read` while signed in to Cloudflare as any account outside the policy (an email one-time PIN to a second address works). Access must refuse at its login page and the connector must never reach "Connected"; `docker logs heitan` must show no session for that identity |
+| Per-person identity (two different people see their own tickets) | **No**: needs a second **admitted** Access identity; SERV-265 saw one person only. Criterion 6 above needs a refused one, which any outside account is |
 
 heitan's own per-bundle token budget (criterion 7) is enforced in heitan's repo
 (`bundle-budget.yml`, `internal/manifest/measured.json`), not here. `scripts/measure-mcp-tools.py`
