@@ -109,6 +109,7 @@ on:
           - drydock
           - eidolon
           - genzo
+          - heitan
           - interlock
           - lyceum
           - placard

@@ -201,6 +201,10 @@ is in `docs/stack-service-notes.md`. Safety rules for them:
   remote tool call 401s with all gates green. `switchyard-mcp` holds no Switchyard token,
   is not named `CF_ACCESS_AUD` on purpose, and must never go behind `crowdsec-bouncer`.
   `docs/origin-auth.md`, runbook in `docs/zerogravity-edge.md` §4.
+- **heitan (the MCP gateway) names its own AUD `HEITAN_CF_ACCESS_AUD`, never `*CF_ACCESS_GATEWAY_AUD`**:
+  that suffix is how `check-edge-auth.sh` finds the backends that read the tag (`switchyard-mcp` and
+  `switchyard` carry it; both must, or every forwarded call 401s green). `__HEITAN_ACCESS_AUD__`
+  placeholders are `PEND` under `--config-only` and a FAIL in a deploy. `docs/zerogravity-edge.md` §5.
 - **One Cloudflare Access verifier: `pkg/cfaccess`.** Never write or copy a second one.
 - **The generated wiki's generator never reads a resolved environment** (see `wiki/CLAUDE.md`).
 

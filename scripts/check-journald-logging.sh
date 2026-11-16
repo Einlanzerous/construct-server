@@ -12,7 +12,7 @@
 # number survives. Switchyard is shown to others and container logs can hold health data.
 # It changes nothing and needs no sudo (the owner reads the journal through the adm group).
 #
-# JOURNALD services are the adopters (wave A: satlink; wave B: purser, cf-access-guard; wave C: switchyard; wave D: traefik). A later wave adds its service to the
+# JOURNALD services are the adopters (wave A: satlink; wave B: purser, cf-access-guard; wave C: switchyard; wave D: traefik; heitan joined on day one, SERV-268, so it has no wave). A later wave adds its service to the
 # list below in the same PR that adds `logging: *journald-logging`. JSONFILE services must
 # stay on json-file: plimsoll-llm and plimsoll (PLIM-14, check-plimsoll-llm-canary.sh).
 #
@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-read -r -a JOURNALD <<<"${JOURNALD_SERVICES:-satlink purser cf-access-guard switchyard traefik}"
+read -r -a JOURNALD <<<"${JOURNALD_SERVICES:-satlink purser cf-access-guard switchyard traefik heitan}"
 read -r -a JSONFILE <<<"${JSONFILE_SERVICES:-plimsoll-llm plimsoll}"
 
 command -v docker >/dev/null 2>&1 || { echo "ERROR: docker not found in PATH" >&2; exit 2; }
