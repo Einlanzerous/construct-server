@@ -656,6 +656,16 @@ services:
       - CF_ACCESS_TEAM_DOMAIN=zero-gravity-industries.cloudflareaccess.com
       - CF_ACCESS_AUD=553278265593f59c00b28bf7161a89922aa85bd49553741e6997815e60b64b8e
       - PUBLIC_ORIGIN=https://commonplace.zerogravity.industries
+      # heitan's audience (COOK-52), accepted on the MCP listener only; the web
+      # listener never checks it. Must equal HEITAN_CF_ACCESS_AUD on heitan
+      # (check-edge-auth 5b and 5c). The app boot-fails if it equals CF_ACCESS_AUD or holds
+      # more than one value. Unset turns the MCP listener off (rollback). The listener is on
+      # MCP_PORT, default 4002, left unset on purpose: it must differ from PORT and the default does.
+      #
+      # NO `ports:` entry and NO Traefik router for 4002, ever. The listener is reached only by
+      # heitan, container to container on construct_net (HEITAN_BACKEND_COMMONPLACE_URL). The
+      # published port above stays the web port alone.
+      - CF_ACCESS_GATEWAY_AUD=86a1f15cda956382ca2b724f1b0924f435e5bc4a2b62f7395877a56ae255efe6
     networks:
       - construct_net
     depends_on:
@@ -1125,8 +1135,14 @@ services:
       - HEITAN_BACKEND_SWITCHYARD_URL=http://switchyard-mcp:4080/mcp
       # No HEITAN_BACKEND_CHRONICLE_URL, on purpose: Chronicle's hosted MCP (SERV-231) does not
       # exist yet. A backend with no URL boots as unconfigured, and heitan_catalogue shows the
-      # chronicle bundle as `unavailable`. Add the line when SERV-231 ships. Commonplace is
-      # COOK-52 and adds its own line then.
+      # chronicle bundle as `unavailable`. Add the line when SERV-231 ships.
+      #
+      # The Commonplace backend (COOK-52): cook_book's MCP listener, container to container on
+      # construct_net, deliberately NOT through Traefik and with no router for it. The port is
+      # cook_book's MCP_PORT default (4002), a literal here as with the switchyard line; cook_book
+      # publishes nothing for it. Until cook_book carries CF_ACCESS_GATEWAY_AUD its listener is off
+      # and heitan shows the commonplace bundle as `unavailable`. The path is part of the URL.
+      - HEITAN_BACKEND_COMMONPLACE_URL=http://cook_book:4002/mcp
       #
       # For a forwarded call to work, switchyard AND switchyard-mcp must accept this gateway's
       # audience: CF_ACCESS_GATEWAY_AUD on each (SERV-266, read from switchyard 4.59). A missing

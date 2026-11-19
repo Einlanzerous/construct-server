@@ -58,12 +58,14 @@ raw = open(sys.argv[1]).read()
 def tag(m):   # one distinct, synthetic 64-hex tag per placeholder name
     return hashlib.sha256(m.group(0).encode()).hexdigest()
 real = re.sub(r"__[A-Z0-9_]+_ACCESS_AUD__", tag, raw)
-# The same tag (heitan's own) on both backend readers, as the owner's commit puts it.
+# The same tag (heitan's own) on every backend reader (switchyard-mcp, switchyard, cook_book), as the owner's commit puts it.
 own = re.search(r"^\s*-\s*HEITAN_CF_ACCESS_AUD=(\S+)$", real, re.M)
 if own:
-    for anchor in ("      - CF_ACCESS_MCP_AUD=", "      - MCP_CF_ACCESS_AUD="):
+    for anchor in ("      - CF_ACCESS_MCP_AUD=", "      - MCP_CF_ACCESS_AUD=",
+                   "      - PUBLIC_ORIGIN=https://commonplace.zerogravity.industries\n"):
         assert real.count(anchor) == 1, anchor
-        real = real.replace(anchor, f"      - CF_ACCESS_GATEWAY_AUD={own.group(1)}\n{anchor}")
+        line = f"      - CF_ACCESS_GATEWAY_AUD={own.group(1)}\n"
+        real = real.replace(anchor, anchor + line if anchor.endswith("\n") else line + anchor)
 open(sys.argv[2], "w").write(real)
 PYEND
 CHECK="${CHECK:-$REAL/scripts/check-edge-auth.sh}"
@@ -457,7 +459,7 @@ echo
 echo "=== check-edge-auth.sh heitan: placeholder audiences and its backends' readers (SERV-268) ==="
 
 # The raw compose carries heitan's placeholder; the realised one carries a synthetic tag and
-# both backends reading it. Every case here is one mutation of one of the two.
+# every backend reading it. Every case here is one mutation of one of the two.
 HT_HOST="heitan.zerogravity.industries"
 PH="__HEITAN_ACCESS_AUD__"
 HT_AUD="$(sed -n 's/^ *- HEITAN_CF_ACCESS_AUD=\(.*\)$/\1/p' "$REAL/docker-compose.yml")"
@@ -466,7 +468,7 @@ HT_AUD="$(sed -n 's/^ *- HEITAN_CF_ACCESS_AUD=\(.*\)$/\1/p' "$REAL/docker-compos
 PLANT_COMPOSE="$REPO/docker-compose.yml"
 world; planted
 run_planted "the real compose as shipped -> green, no placeholder, both backends read heitan's tag" 0 \
-  "ok    2 backend reader(s) accept heitan's own audience"
+  "ok    3 backend reader(s) accept heitan's own audience"
 if printf '%s' "$OUT" | grep -q 'PEND  placeholder'; then bad "the shipped compose still carries a placeholder"; fi
 
 PLANT_COMPOSE="$RAW_COMPOSE"
@@ -485,10 +487,10 @@ run_planted_live "a deploy (live) on the placeholder -> red, naming both places"
 PLANT_COMPOSE="$REAL/docker-compose.yml"
 world; planted
 run_planted_live "a deploy (live) once both are replaced and the backends read it -> green" 0 \
-  "ok    2 backend reader(s) accept heitan's own audience" "ok    edge: $HT_HOST is gated by Access"
+  "ok    3 backend reader(s) accept heitan's own audience" "ok    edge: $HT_HOST is gated by Access"
 
 world; planted
-run_planted "no placeholder anywhere -> no PEND" 0 "ok    2 backend reader(s) accept heitan's own audience"
+run_planted "no placeholder anywhere -> no PEND" 0 "ok    3 backend reader(s) accept heitan's own audience"
 if printf '%s' "$OUT" | grep -q 'PEND  placeholder'; then bad "a real audience was reported as a placeholder"; fi
 
 # Only the map entry replaced: the map says one thing and the service another.
@@ -508,6 +510,12 @@ run_planted "real audience, switchyard-mcp does not read it -> red, naming the r
 world; planted; subst docker-compose.yml "      - CF_ACCESS_GATEWAY_AUD=$HT_AUD"$'\n'"      - CF_ACCESS_MCP_AUD=" "      - CF_ACCESS_MCP_AUD="
 run_planted "real audience, the Switchyard API does not read it -> red (the one that 401s at the exchange)" 1 \
   "FAIL  heitan forwards to switchyard but switchyard carries no CF_ACCESS_GATEWAY_AUD"
+
+# Commonplace (COOK-52): cook_book is the one reader for that backend, and its listener is off
+# without the tag. The line sits after PUBLIC_ORIGIN in the fixture.
+world; planted; subst docker-compose.yml "      - PUBLIC_ORIGIN=https://commonplace.zerogravity.industries"$'\n'"      - CF_ACCESS_GATEWAY_AUD=$HT_AUD"$'\n' "      - PUBLIC_ORIGIN=https://commonplace.zerogravity.industries"$'\n'
+run_planted "real audience, cook_book does not read it -> red, naming the reader" 1 \
+  "FAIL  heitan forwards to commonplace but cook_book carries no CF_ACCESS_GATEWAY_AUD"
 
 world; planted; subst docker-compose.yml "      - CF_ACCESS_GATEWAY_AUD=$HT_AUD"$'\n'"      - CF_ACCESS_MCP_AUD=" "      - CF_ACCESS_GATEWAY_AUD=$OTHER_AUD"$'\n'"      - CF_ACCESS_MCP_AUD="
 run_planted "the API reads a different tag than heitan presents -> red, both shown" 1 \

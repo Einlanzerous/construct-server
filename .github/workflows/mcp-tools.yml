@@ -12,9 +12,9 @@ name: MCP tools
 # summary, and only a service that cannot be measured fails the run. Per-bundle
 # budgets belong to SERV-267 (see check_budgets() in the script).
 #
-# Hosted runner: it needs two source checkouts and no estate resources. Switchyard
-# is private, so it is read with WIKI_DOCS_TOKEN, the same private-capable token
-# base-images.yml uses; GITHUB_TOKEN cannot read another repository.
+# Hosted runner: it needs three source checkouts and no estate resources. Switchyard
+# and cook_book (COOK-52) are private, so they are read with WIKI_DOCS_TOKEN, the same
+# private-capable token base-images.yml uses; GITHUB_TOKEN cannot read another repository.
 
 on:
   pull_request:
@@ -55,6 +55,13 @@ jobs:
           repository: Einlanzerous/chronicle
           path: src/chronicle
 
+      - uses: actions/checkout@v4
+        with:
+          repository: Einlanzerous/cook_book
+          path: src/cook_book
+          token: ${{ secrets.WIKI_DOCS_TOKEN }}
+          persist-credentials: false
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: src/switchyard/package.json
@@ -64,8 +71,13 @@ jobs:
           go-version-file: src/chronicle/go.mod
           cache: false
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Measure tools/list and compare with the baseline
         env:
           MCP_SRC_SWITCHYARD: ${{ github.workspace }}/src/switchyard
           MCP_SRC_CHRONICLE: ${{ github.workspace }}/src/chronicle
+          MCP_SRC_COMMONPLACE: ${{ github.workspace }}/src/cook_book
         run: ./scripts/measure-mcp-tools.py --check
