@@ -759,14 +759,14 @@ if gw_readers:
 #
 # Which services must read the audience for a backend is a fact about that backend (its MCP
 # container AND the API the MCP exchanges at), so it is a table here. A backend heitan is
-# configured for that is not in the table FAILS: adding one (Chronicle with SERV-231,
-# Commonplace with COOK-52) means adding its readers here, in the same change.
+# configured for that is not in the table FAILS: adding one (Chronicle with SERV-231;
+# Commonplace was COOK-52) means adding its readers here, in the same change.
 #
 # While heitan's own audience is still a __PLACEHOLDER__ it is not serving anything, so a
 # missing reader is a NOTE, not a FAIL. With a real audience it is a FAIL.
 GW_SVC = "heitan"
 GW_OWN_KEY = "HEITAN_CF_ACCESS_AUD"
-GW_READERS = {"SWITCHYARD": ("switchyard-mcp", "switchyard")}
+GW_READERS = {"SWITCHYARD": ("switchyard-mcp", "switchyard"), "COMMONPLACE": ("cook_book",)}
 PLACEHOLDER = re.compile(r"^__[A-Z0-9_]+__$")
 if GW_SVC in (compose_doc.get("services") or {}):
     gw_env = service_env(GW_SVC)

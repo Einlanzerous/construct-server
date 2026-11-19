@@ -75,6 +75,23 @@
         "email": "measure@invalid",
         "is_owner": false
       }
+    },
+    "commonplace": {
+      "src_env": "MCP_SRC_COMMONPLACE",
+      "src_default": "../cook_book",
+      "prepare": [
+        "npm",
+        "ci",
+        "--omit=dev",
+        "--ignore-scripts",
+        "--prefix",
+        "{src}/backend"
+      ],
+      "command": [
+        "node",
+        "{src}/backend/src/mcp/stdio.js"
+      ],
+      "env": {}
     }
   }
 }

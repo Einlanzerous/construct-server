@@ -467,12 +467,12 @@ Three places read heitan's audience, and the last two fail silently:
 |---|---|---|
 | heitan | `HEITAN_CF_ACCESS_AUD` | its own audience: callers' assertions must carry it. Named `*CF_ACCESS_AUD` so check 4 compares it with the map entry for heitan's own host |
 | cf-access-guard | the `heitan.zerogravity.industries` entry in `CF_ACCESS_AUD_MAP` | the origin guard on the router |
-| `switchyard-mcp` **and** `switchyard` | `CF_ACCESS_GATEWAY_AUD` (SERV-266, switchyard 4.59+) | the backend must accept heitan's audience, or every forwarded call 401s at the exchange while everything else is green |
+| `switchyard-mcp` **and** `switchyard`, and `cook_book` (COOK-52, cook_book 2.4+) | `CF_ACCESS_GATEWAY_AUD` (SERV-266, switchyard 4.59+) | the backend must accept heitan's audience, or every forwarded call 401s at the exchange while everything else is green |
 
 Never name heitan's own audience `*CF_ACCESS_GATEWAY_AUD`: that suffix is how check 5b finds the
 **backends** reading it, and it would fail heitan for reading its own host's tag.
 Chronicle's reader (`CHRONICLE_CF_ACCESS_GATEWAY_AUD`) and `HEITAN_BACKEND_CHRONICLE_URL` come with
-SERV-231, Commonplace's with COOK-52; until then the chronicle bundle shows `unavailable`.
+SERV-231. Commonplace's (`CF_ACCESS_GATEWAY_AUD` on `cook_book`, `HEITAN_BACKEND_COMMONPLACE_URL` on heitan) came with COOK-52, and `cook_book` publishes no MCP port and has no router for it; until SERV-231 the chronicle bundle shows `unavailable`.
 Each of those changes also adds its readers to `GW_READERS` in `check-edge-auth.sh`.
 
 **The owner's steps, in this order.** The Access policy goes on before the hostname is routed, or
