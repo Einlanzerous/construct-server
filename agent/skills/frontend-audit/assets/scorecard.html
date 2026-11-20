@@ -34,13 +34,13 @@
 <div class="fq" data-read lang="en">
   <header id="top">
     <h1>Estate frontend quality audit</h1>
-    <p class="muted">November 2026 · 17 frontends · source read against Chrome's Modern Web Guidance, scored for Firefox as the primary browser</p>
+    <p class="muted">November 2026 · [N] frontends · source read against Chrome's Modern Web Guidance, scored for Firefox as the primary browser</p>
     <p class="lede">The median frontend scores <b data-draw="median" data-source="summary" data-field="median" data-row="0">—</b>/100. <b data-draw="topname" data-source="summary" data-field="top" data-row="0">—</b> is at the top and <b data-draw="bottomname" data-source="summary" data-field="bottom" data-row="0">—</b> at the bottom. Nothing in the estate is broken in Firefox, but the same three gaps show up almost everywhere: no declared browser baseline, motion that ignores reduced-motion, and hand-built div modals in place of <code>&lt;dialog&gt;</code>.</p>
   </header>
 
   <section class="tiles" id="tiles">
     <div class="card"><div class="muted">Median overall score</div><div class="big" data-draw="median2" data-source="summary" data-field="median" data-row="0">—</div><div class="muted">out of 100</div></div>
-    <div class="card"><div class="muted">Score 3 or lower on baseline posture</div><div class="big" data-draw="baselow" data-source="summary" data-field="baselineLow" data-row="0">—</div><div class="muted">of 17. None states a Firefox target</div></div>
+    <div class="card"><div class="muted">Score 3 or lower on baseline posture</div><div class="big" data-draw="baselow" data-source="summary" data-field="baselineLow" data-row="0">—</div><div class="muted">of [N]. None states a Firefox target</div></div>
     <div class="card"><div class="muted">Score 4 or lower on motion</div><div class="big" data-draw="motionlow" data-source="summary" data-field="motionLow" data-row="0">—</div><div class="muted">reduced-motion missing or partial</div></div>
     <div class="card"><div class="muted">Score 4 or lower on overlays</div><div class="big" data-draw="overlaylow" data-source="summary" data-field="overlayLow" data-row="0">—</div><div class="muted">div modals without focus handling (N/A excluded)</div></div>
   </section>
@@ -85,7 +85,7 @@
   <section id="firefox">
     <details>
       <summary>Firefox notes per frontend</summary>
-      <p class="muted">Nothing found is Chromium-only and broken. The real Firefox defects are small: webkit-only scrollbar styling (Genzo, Centrifuge), a missing <code>color-scheme</code> that leaves native controls light-themed in dark UIs (Plimsoll, Chronicle), and <code>crypto.subtle</code> called over plain-http LAN hosts (Sextant, all browsers).</p>
+      <p class="muted">Nothing found is Chromium-only and broken. [REWRITE FROM THIS RUN: list the real Firefox defects found, generically for any target from the local targets file. Last run: webkit-only scrollbar styling, missing <code>color-scheme</code> on dark UIs, <code>crypto.subtle</code> over plain-http LAN hosts.]</p>
       <div class="scroll">
         <table data-source="ffrisks" data-row-key="frontend,risk">
           <thead><tr><th data-field="frontend">Frontend</th><th data-field="risk">Note</th></tr></thead>
@@ -96,39 +96,13 @@
   </section>
 
   <section id="recommendation">
-    <h2>Should this become a skill?</h2>
-    <div class="rec">
-      <div class="card verdict">
-        <h3>Yes: a quarterly audit skill</h3>
-        <p>Package this run as an estate skill (<code>frontend-audit</code>). It holds the rubric, the Firefox-first rule, the fan-out across active Switchyard projects plus the extra targets file, and a refresh of this page. Run it each quarter as a scheduled routine. It should file one ticket per high-priority fix in the owning project and record the scores, so the next run shows movement. The guidance itself changes slowly, so quarterly is often enough.</p>
-      </div>
-      <div class="card verdict">
-        <h3>For UI PRs: a checklist, not a skill</h3>
-        <p>A full audit per PR costs too much and reads too broadly. Instead, add a short "Frontend" block to each frontend repo's <code>REVIEW.md</code> for the CI reviewer to apply to diffs that touch <code>.vue</code> or <code>.css</code>:</p>
-        <ul>
-          <li>Motion gated on <code>prefers-reduced-motion</code></li>
-          <li>Modals on <code>&lt;dialog&gt;</code>/<code>showModal()</code>, not a div scrim</li>
-          <li>Enter handlers guard <code>isComposing</code></li>
-          <li>No <code>outline: none</code> without a <code>:focus-visible</code> ring</li>
-          <li>New CSS features are in Firefox, or behind <code>@supports</code></li>
-          <li>No <code>::-webkit-</code> rule without its standard property</li>
-        </ul>
-      </div>
-      <div class="card">
-        <h3>Do first, once, everywhere</h3>
-        <ul>
-          <li>Add a Baseline line to every frontend's <code>CLAUDE.md</code>: <i>"Firefox is the primary browser; target Baseline Widely available plus current Firefox ESR."</i> This one line steers every future agent edit.</li>
-          <li>A global reduced-motion reset in each app's base CSS.</li>
-          <li>A Firefox project in Playwright where e2e already exists.</li>
-          <li>Self-host Google Fonts (Catenary, Drydock, Interlock, Centrifuge).</li>
-        </ul>
-      </div>
-    </div>
+    <h2>Recommendations</h2>
+    <p class="muted">[REWRITE FROM THIS RUN: the cross-estate gaps, the one-time fixes, and the REVIEW.md Frontend block (references/review-checklist.md).]</p>
   </section>
 
   <details id="method">
     <summary>How this was scored, and what it missed</summary>
-    <p class="muted">The rubric comes from developer.chrome.com/docs/modern-web-guidance: the hub, getting started, the modernization workflow, and the guide catalog. Individual guide pages were not read. Six reviewer agents read each frontend's source, CLAUDE.md and build config, and grepped for the guidance's legacy patterns. None ran a browser, Lighthouse, or the guidance's own <code>legacy-scan</code> CLI. Its install was blocked in this session (replace with the run's actual legacy-scan outcome), so the legacy column is a manual approximation. Scores are judgment calls, not measurements. Plimsoll was audited from code alone, and no data was read.  Targets with no persistent checkout were read from a fresh clone of main.</p>
+    <p class="muted">The rubric comes from developer.chrome.com/docs/modern-web-guidance: the hub, getting started, the modernization workflow, and the guide catalog. Individual guide pages were not read. [N] reviewer agents read each frontend's source, CLAUDE.md and build config, and grepped for the guidance's legacy patterns. None ran a browser, Lighthouse, or the guidance's own <code>legacy-scan</code> CLI. Its install was blocked in this session (replace with the run's actual legacy-scan outcome), so the legacy column is a manual approximation. Scores are judgment calls, not measurements. Frontends holding health or personal data were audited from code alone, and no data was read.  Targets with no persistent checkout were read from a fresh clone of main.</p>
   </details>
 </div>
 

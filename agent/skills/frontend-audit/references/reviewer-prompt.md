@@ -1,16 +1,16 @@
 # Reviewer subagent prompt
 
-Launch one subagent per ~3 frontends, in parallel, read-only. Fill the
+Launch one subagent per ~3 frontends, in parallel, read-only. Clone any `git:` targets first. Fill the
 placeholders and send:
 
 > You are auditing frontends read-only. Do not edit, install, build or run
 > anything in the checkouts; your only write is one JSON file per frontend.
 >
 > Frontends: `<KEY | NAME | path to web dir>` for each.
-> Rubric: read `~/construct-server/agent/skills/frontend-audit/references/rubric.md`
+> Rubric: read `~/.claude/skills/frontend-audit/references/rubric.md`
 > and follow it exactly, including the Firefox-primary rule.
-> Output schema: `references/result-schema.md` in the same directory; write
-> `<scratchpad>/results/<key>.json` for each.
+> Output schema: `~/.claude/skills/frontend-audit/references/result-schema.md` (example: `assets/example-result.json` there); write
+> `<absolute results dir>/<key>.json` for each.
 > Legacy scan: `<legacy-scan JSON for this frontend, or "denied: grep for the
 > rubric's legacy patterns by hand">`.
 >

@@ -30,12 +30,21 @@ each frontend repo's `REVIEW.md`.
   no builds, no edits in a checkout.
 - The audit reads source. It runs no browser or Lighthouse; say so on the page.
 
+## 0. Setup
+
+Ask the operator to confirm the target list before fanning out, then create `<scratchpad>/results/`. Subagents get that absolute path in their prompt; the scratchpad is per-session.
+
 ## 1. Targets
 
 Build the list from two places:
 
 1. Every non-archived Switchyard project (`list_projects`) whose repo has a
-   frontend. Find the repo checkout under `~/projects` and its web directory.
+   frontend. Find the checkout under `~/projects` (repo name usually matches
+   the project) and its web directory (`web/`, `apps/web/`, `client/`, or the
+   directory holding `vite.config.*` / `nuxt.config.*`; a repo with several
+   gets one target per directory). A project whose description says it is
+   private or must stay off the board is audited from code alone, listed on
+   the page only generically.
 2. The extra targets file `~/.config/frontend-audit/targets`: local,
    untracked, one `KEY | NAME | SOURCE | WEB_DIR` line each. Read it. If it is
    missing, create it with the header comment from
@@ -48,7 +57,7 @@ Build the list from two places:
 Reviewers score against `references/rubric.md`: nine categories 0-10 (N/A
 allowed) and an overall 0-100.
 
-Try `npx modern-web-guidance legacy-scan` on each web directory and hand its
+Try `npx modern-web-guidance legacy-scan` on each web directory (it prints JSON; save it to `<scratchpad>/legacy/<key>.json`) and hand its
 JSON to that frontend's reviewer. The session's permission classifier may
 block it. If it is denied, do not work around it (no alternate install, no
 vendored copy): the reviewers grep for the legacy patterns by hand, and the
@@ -64,7 +73,8 @@ each file parses and carries all nine category keys before merging.
 
 ## 4. Merge and publish
 
-Follow `references/scorecard.md`: merge the results into `scores.json`,
+Before replacing anything, read the previous run's `scores.json` from the
+live scorecard. Then follow `references/scorecard.md`: merge the results into `scores.json`,
 `fixes.json` and `ffrisks.json`, upload them to the scorecard artifact,
 repoint its datasets, and republish the page from `assets/scorecard.html`
 after rewriting its run-specific prose. When a previous run's scores exist,
@@ -80,5 +90,6 @@ optionally drive them with the worker brief in
 ## Report
 
 Tell the operator the scorecard URL, the median and who moved since last run,
-whether `legacy-scan` ran, the ticket keys filed, and which targets could not
-be read.
+whether `legacy-scan` ran, the ticket keys filed, and how many targets could
+not be read. Do not name targets from the local file in anything shared; give
+those names to the operator in the terminal only.

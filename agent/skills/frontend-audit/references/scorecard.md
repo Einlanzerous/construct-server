@@ -23,7 +23,8 @@ From `results/*.json` write three JSON arrays:
 
 Read the previous `scores.json` (`read_asset` on the live artifact's dataset
 file, before replacing it). Report overall movement per frontend and any
-category that moved 2+ points. Treat under 5 overall points as noise.
+category that moved 2+ points. Treat under 5 overall points as noise, so
+name only overall moves of 5 or more.
 
 ## Refresh
 
@@ -40,9 +41,13 @@ category that moved 2+ points. Treat under 5 overall points as noise.
 4. Read the artifact's `check` and `runs` documents (`data/users/me`) and fix
    any fault before handing over.
 
-`assets/scorecard.html` is the page source from the 2026-11-19 run, with
-private target names removed from its prose. Keep prose generic about targets
-that came from the local targets file.
+`assets/scorecard.html` is the page source from the 2026-11-19 run. Run-specific
+prose is replaced with `[N]` and `[REWRITE ...]` markers: fill every one from
+the new results (counts, lede, Firefox notes, recommendations, method note).
+Keep prose generic about targets from the local targets file; a target's name
+still appears in the data tables, so for a target that must not be shown, use
+a neutral label (for example "Extra target 1") in its result `name` and
+tell the operator the mapping in the terminal only.
 
 ## If the artifact is gone
 
