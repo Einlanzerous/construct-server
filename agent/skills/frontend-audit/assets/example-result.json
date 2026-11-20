@@ -1,7 +1,7 @@
 {
  "name": "Genzo",
  "key": "GENZO",
- "path": "/home/magos/projects/genzo/web",
+ "path": "~/projects/<repo>/web",
  "stack": "Vue 3 + Vite 7 + vue-router, TypeScript, Vitest; bundled fontsource fonts; no UI/chart libs",
  "overall": 71,
  "categories": {
