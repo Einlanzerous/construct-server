@@ -1,0 +1,320 @@
+<meta name="dash-one-writer">
+<style>
+.fq { font-family: var(--font-anthropic-sans); color: var(--color-fg); display: flex; flex-direction: column; gap: var(--cds-gap-xl); }
+.fq h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; }
+.fq h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0 0 var(--cds-gap-sm); }
+.fq .muted { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.fq .lede { font-size: var(--cds-font-size-body); max-width: 70ch; margin: var(--cds-gap-sm) 0 0; }
+.fq .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--cds-gap-md); }
+.fq .card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); }
+.fq .big { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: 2.2rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.fq .chartbox { position: relative; min-height: 420px; }
+.fq .tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); box-shadow: var(--cds-shadow-popover); border-radius: var(--cds-radius); padding: var(--cds-pad-sm); font-size: var(--cds-font-size-caption); max-width: 280px; }
+.fq .scroll { overflow-x: auto; }
+.fq table { border-collapse: collapse; width: 100%; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+.fq th, .fq td { padding: 6px 8px; border-bottom: 1px solid var(--color-border-line); text-align: left; vertical-align: top; }
+.fq th { font-weight: var(--cds-font-weight-medium); color: var(--color-fg-muted); white-space: nowrap; }
+.fq td.num { text-align: center; }
+.fq .heat td.num { font-weight: var(--cds-font-weight-medium); }
+.fq .controls { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); margin-bottom: var(--cds-gap-sm); align-items: center; }
+.fq .pill { display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: var(--cds-font-size-caption); border: 1px solid var(--color-border-line); white-space: nowrap; }
+.fq .p-high { color: var(--color-bad); border-color: var(--color-bad); }
+.fq .p-med { color: var(--color-warn); border-color: var(--color-warn); }
+.fq .p-low { color: var(--color-fg-muted); }
+.fq .rec { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--cds-gap-md); }
+.fq .rec h3 { margin: 0 0 var(--cds-gap-xs); font-size: var(--cds-font-size-body); font-weight: var(--cds-font-weight-medium); }
+.fq .rec p, .fq .rec li { font-size: var(--cds-font-size-body); line-height: 1.5; }
+.fq .rec ul { padding-left: 1.1em; margin: 0; }
+.fq .verdict { border-left: 3px solid var(--color-ok); }
+.fq details summary { cursor: pointer; font-weight: var(--cds-font-weight-medium); }
+.fq .axis text { fill: var(--cds-text-secondary); font-size: var(--cds-font-size-caption); }
+.fq .axis path, .fq .axis line { stroke: var(--cds-chart-axis); }
+</style>
+
+<div class="fq" data-read lang="en">
+  <header id="top">
+    <h1>Estate frontend quality audit</h1>
+    <p class="muted">November 2026 · 17 frontends · source read against Chrome's Modern Web Guidance, scored for Firefox as the primary browser</p>
+    <p class="lede">The median frontend scores <b data-draw="median" data-source="summary" data-field="median" data-row="0">—</b>/100. <b data-draw="topname" data-source="summary" data-field="top" data-row="0">—</b> is at the top and <b data-draw="bottomname" data-source="summary" data-field="bottom" data-row="0">—</b> at the bottom. Nothing in the estate is broken in Firefox, but the same three gaps show up almost everywhere: no declared browser baseline, motion that ignores reduced-motion, and hand-built div modals in place of <code>&lt;dialog&gt;</code>.</p>
+  </header>
+
+  <section class="tiles" id="tiles">
+    <div class="card"><div class="muted">Median overall score</div><div class="big" data-draw="median2" data-source="summary" data-field="median" data-row="0">—</div><div class="muted">out of 100</div></div>
+    <div class="card"><div class="muted">Score 3 or lower on baseline posture</div><div class="big" data-draw="baselow" data-source="summary" data-field="baselineLow" data-row="0">—</div><div class="muted">of 17. None states a Firefox target</div></div>
+    <div class="card"><div class="muted">Score 4 or lower on motion</div><div class="big" data-draw="motionlow" data-source="summary" data-field="motionLow" data-row="0">—</div><div class="muted">reduced-motion missing or partial</div></div>
+    <div class="card"><div class="muted">Score 4 or lower on overlays</div><div class="big" data-draw="overlaylow" data-source="summary" data-field="overlayLow" data-row="0">—</div><div class="muted">div modals without focus handling (N/A excluded)</div></div>
+  </section>
+
+  <section id="overall">
+    <h2>Overall score by frontend</h2>
+    <p class="muted">Rough, single-pass scores from one reviewer agent per frontend. Treat a gap of 5 points as noise. About 60–70 is a solid, unremarkable SPA.</p>
+    <div class="chartbox" data-draw="bars" data-source="scores"></div>
+  </section>
+
+  <section id="heatmap">
+    <h2>Category scores (0–10)</h2>
+    <p class="muted">Blank means the category does not apply, such as no dialogs or no forms.</p>
+    <div class="scroll">
+      <table class="heat" data-source="scores" data-row-key="frontend">
+        <thead><tr>
+          <th data-field="frontend">Frontend</th><th data-field="overall">Overall</th><th data-field="baseline">Baseline</th><th data-field="legacy">Legacy</th><th data-field="overlays">Overlays</th><th data-field="css">CSS</th><th data-field="motion">Motion</th><th data-field="forms">Forms</th><th data-field="a11y">A11y</th><th data-field="perf">Perf</th><th data-field="security">Security</th><th data-field="top_fix">Top fix</th>
+        </tr></thead>
+        <tbody data-draw="heat"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="fixes">
+    <h2>Suggested fixes</h2>
+    <p class="muted">Each fix cites the file and line the reviewer saw. The Firefox column gives support for any newer feature a fix uses. Anything Firefox lacks is listed only as an enhancement, with a fallback.</p>
+    <div class="controls">
+      <select class="dash-select" data-draw="fefilter" aria-label="Frontend" data-source="scores"></select>
+      <select class="dash-select" id="prifilter" aria-label="Priority">
+        <option value="">All priorities</option><option value="high">High</option><option value="med">Medium</option><option value="low">Low</option>
+      </select>
+      <span class="muted"><span data-draw="fixcount">—</span> fixes shown</span>
+    </div>
+    <div class="scroll">
+      <table data-source="fixes" data-row-key="frontend,title">
+        <thead><tr><th data-field="frontend">Frontend</th><th data-field="priority">Priority</th><th data-field="title">Fix</th><th data-field="detail">Where and what</th><th data-field="firefox">Firefox</th><th data-field="effort">Effort</th></tr></thead>
+        <tbody data-draw="fixrows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="firefox">
+    <details>
+      <summary>Firefox notes per frontend</summary>
+      <p class="muted">Nothing found is Chromium-only and broken. The real Firefox defects are small: webkit-only scrollbar styling (Genzo, Centrifuge), a missing <code>color-scheme</code> that leaves native controls light-themed in dark UIs (Plimsoll, Chronicle), and <code>crypto.subtle</code> called over plain-http LAN hosts (Sextant, all browsers).</p>
+      <div class="scroll">
+        <table data-source="ffrisks" data-row-key="frontend,risk">
+          <thead><tr><th data-field="frontend">Frontend</th><th data-field="risk">Note</th></tr></thead>
+          <tbody data-draw="ffrows"></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="recommendation">
+    <h2>Should this become a skill?</h2>
+    <div class="rec">
+      <div class="card verdict">
+        <h3>Yes: a quarterly audit skill</h3>
+        <p>Package this run as an estate skill (<code>frontend-audit</code>). It holds the rubric, the Firefox-first rule, the fan-out across active Switchyard projects plus the extra targets file, and a refresh of this page. Run it each quarter as a scheduled routine. It should file one ticket per high-priority fix in the owning project and record the scores, so the next run shows movement. The guidance itself changes slowly, so quarterly is often enough.</p>
+      </div>
+      <div class="card verdict">
+        <h3>For UI PRs: a checklist, not a skill</h3>
+        <p>A full audit per PR costs too much and reads too broadly. Instead, add a short "Frontend" block to each frontend repo's <code>REVIEW.md</code> for the CI reviewer to apply to diffs that touch <code>.vue</code> or <code>.css</code>:</p>
+        <ul>
+          <li>Motion gated on <code>prefers-reduced-motion</code></li>
+          <li>Modals on <code>&lt;dialog&gt;</code>/<code>showModal()</code>, not a div scrim</li>
+          <li>Enter handlers guard <code>isComposing</code></li>
+          <li>No <code>outline: none</code> without a <code>:focus-visible</code> ring</li>
+          <li>New CSS features are in Firefox, or behind <code>@supports</code></li>
+          <li>No <code>::-webkit-</code> rule without its standard property</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Do first, once, everywhere</h3>
+        <ul>
+          <li>Add a Baseline line to every frontend's <code>CLAUDE.md</code>: <i>"Firefox is the primary browser; target Baseline Widely available plus current Firefox ESR."</i> This one line steers every future agent edit.</li>
+          <li>A global reduced-motion reset in each app's base CSS.</li>
+          <li>A Firefox project in Playwright where e2e already exists.</li>
+          <li>Self-host Google Fonts (Catenary, Drydock, Interlock, Centrifuge).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <details id="method">
+    <summary>How this was scored, and what it missed</summary>
+    <p class="muted">The rubric comes from developer.chrome.com/docs/modern-web-guidance: the hub, getting started, the modernization workflow, and the guide catalog. Individual guide pages were not read. Six reviewer agents read each frontend's source, CLAUDE.md and build config, and grepped for the guidance's legacy patterns. None ran a browser, Lighthouse, or the guidance's own <code>legacy-scan</code> CLI. Its install was blocked in this session (replace with the run's actual legacy-scan outcome), so the legacy column is a manual approximation. Scores are judgment calls, not measurements. Plimsoll was audited from code alone, and no data was read.  Targets with no persistent checkout were read from a fresh clone of main.</p>
+  </details>
+</div>
+
+<script>
+const CATS = ['overall','baseline','legacy','overlays','css','motion','forms','a11y','perf','security'];
+window.fqState = { fe: '', pri: '' };
+
+dash.calc('summary', {
+  title: 'Audit summary',
+  description: 'Median overall score, top and bottom frontends, and counts of frontends scoring low on baseline, motion and overlays.',
+  inputs: ['scores'],
+  fn: (scores) => {
+    const s = scores.map(r => ({ ...r, overall: +r.overall }));
+    const sorted = [...s].sort((a, b) => b.overall - a.overall);
+    const vals = sorted.map(r => r.overall).sort((a, b) => a - b);
+    const n = vals.length;
+    const median = n ? (n % 2 ? vals[(n - 1) / 2] : (vals[n / 2 - 1] + vals[n / 2]) / 2) : null;
+    const low = (k, t) => s.filter(r => r[k] !== null && r[k] !== '' && +r[k] <= t).length;
+    return [{
+      median,
+      top: n ? sorted[0].frontend : null,
+      bottom: n ? sorted[n - 1].frontend : null,
+      baselineLow: low('baseline', 3),
+      motionLow: low('motion', 4),
+      overlayLow: low('overlays', 4)
+    }];
+  }
+});
+
+function sumField(el, f) {
+  const d = dash.data('summary');
+  el.textContent = d.status === 'ok' && d.data[0] && d.data[0][f] !== null ? String(d.data[0][f]) : '—';
+}
+dash.draw('median', el => sumField(el, 'median'));
+dash.draw('median2', el => sumField(el, 'median'));
+dash.draw('topname', el => sumField(el, 'top'));
+dash.draw('bottomname', el => sumField(el, 'bottom'));
+dash.draw('baselow', el => sumField(el, 'baselineLow'));
+dash.draw('motionlow', el => sumField(el, 'motionLow'));
+dash.draw('overlaylow', el => sumField(el, 'overlayLow'));
+
+function heatColor(v) {
+  if (v === null || v === undefined || v === '') return null;
+  return +v >= 7 ? 'var(--color-ok)' : +v >= 5 ? 'var(--color-warn)' : 'var(--color-bad)';
+}
+
+dash.draw('bars', {
+  mount: (el) => {
+    el.replaceChildren();
+    const tip = document.createElement('div');
+    tip.className = 'tip'; tip.hidden = true;
+    el.appendChild(tip);
+    return { tip, played: false };
+  },
+  update: (el, made) => {
+    const d = dash.data('scores');
+    d3.select(el).selectAll('svg,.msg').remove();
+    if (d.status !== 'ok') {
+      if (d.status === 'error') d3.select(el).append('p').attr('class', 'msg muted').text('Failed to load');
+      return;
+    }
+    const rows = [...d.data].map(r => ({ ...r, overall: +r.overall })).sort((a, b) => b.overall - a.overall);
+    const W = el.clientWidth || 600, rowH = 24, top = 6, bottom = 24;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('role', 'img')
+      .attr('aria-label', 'Horizontal bar chart of overall quality score per frontend, out of 100');
+    const probe = svg.append('text').attr('class', 'axis').style('font-size', 'var(--cds-font-size-caption)');
+    let lw = 0;
+    rows.forEach(r => { probe.text(r.frontend); lw = Math.max(lw, probe.node().getComputedTextLength()); });
+    probe.remove();
+    const left = Math.ceil(lw) + 12, right = 36;
+    const H = top + rows.length * rowH + bottom;
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const x = d3.scaleLinear().domain([0, 100]).range([left, W - right]);
+    const y = d3.scaleBand().domain(rows.map(r => r.frontend)).range([top, top + rows.length * rowH]).padding(0.25);
+    svg.append('g').selectAll('line').data([25, 50, 75, 100]).join('line')
+      .attr('x1', v => x(v)).attr('x2', v => x(v)).attr('y1', top).attr('y2', H - bottom)
+      .style('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').attr('class', 'axis').attr('transform', `translate(0,${H - bottom})`)
+      .call(d3.axisBottom(x).tickValues([0, 25, 50, 75, 100]).tickSizeOuter(0));
+    svg.append('g').attr('class', 'axis').selectAll('text').data(rows).join('text')
+      .attr('x', left - 8).attr('y', r => y(r.frontend) + y.bandwidth() / 2).attr('dy', '0.35em')
+      .attr('text-anchor', 'end').text(r => r.frontend)
+      .style('fill', 'var(--color-fg)').style('font-size', 'var(--cds-font-size-caption)');
+    const reduce = !window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
+    const bars = svg.append('g').selectAll('rect').data(rows).join('rect')
+      .attr('x', x(0)).attr('y', r => y(r.frontend)).attr('height', y.bandwidth()).attr('rx', 2)
+      .style('fill', dash.colors[0])
+      .attr('width', (!made.played && !reduce) ? 0 : r => x(r.overall) - x(0));
+    if (!made.played && !reduce) bars.transition().duration(500).attr('width', r => x(r.overall) - x(0));
+    made.played = true;
+    svg.append('g').selectAll('text').data(rows).join('text')
+      .attr('x', r => x(r.overall) + 4).attr('y', r => y(r.frontend) + y.bandwidth() / 2).attr('dy', '0.35em')
+      .text(r => r.overall).style('fill', 'var(--cds-text-secondary)').style('font-size', 'var(--cds-font-size-caption)')
+      .style('font-variant-numeric', 'tabular-nums');
+    const tip = made.tip;
+    svg.append('g').selectAll('rect').data(rows).join('rect')
+      .attr('x', 0).attr('width', W).attr('y', r => y(r.frontend) - y.step() * y.paddingInner() / 2).attr('height', y.step())
+      .style('fill', 'transparent')
+      .on('pointermove', (ev, r) => {
+        tip.hidden = false;
+        tip.replaceChildren();
+        const b = document.createElement('b'); b.textContent = `${r.frontend} · ${r.overall}/100`;
+        const s = document.createElement('div'); s.className = 'muted'; s.textContent = r.stack || '';
+        const f = document.createElement('div'); f.textContent = 'Top fix: ' + (r.top_fix || '');
+        tip.append(b, s, f);
+        const [mx, my] = d3.pointer(ev, el);
+        const tw = tip.offsetWidth;
+        tip.style.left = Math.max(0, Math.min(mx + 12, el.clientWidth - tw)) + 'px';
+        tip.style.top = (my + 14) + 'px';
+      })
+      .on('pointerleave', () => { tip.hidden = true; });
+  }
+});
+
+dash.draw('heat', (tb) => {
+  const d = dash.data('scores');
+  tb.replaceChildren();
+  if (d.status !== 'ok') return;
+  const rows = [...d.data].sort((a, b) => +b.overall - +a.overall);
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    const name = document.createElement('td'); name.textContent = r.frontend; tr.appendChild(name);
+    CATS.forEach(k => {
+      const td = document.createElement('td'); td.className = 'num';
+      const v = r[k];
+      td.textContent = (v === null || v === undefined || v === '') ? '' : String(v);
+      const c = k === 'overall' ? null : heatColor(v);
+      if (c) td.style.color = c;
+      tr.appendChild(td);
+    });
+    const fx = document.createElement('td'); fx.textContent = r.top_fix || ''; tr.appendChild(fx);
+    tb.appendChild(tr);
+  });
+});
+
+dash.draw('fefilter', (sel) => {
+  const d = dash.data('scores');
+  const names = d.status === 'ok' ? [...d.data].map(r => r.frontend).sort() : [];
+  sel.replaceChildren(new Option('All frontends', ''), ...names.map(n => new Option(n)));
+  sel.value = window.fqState.fe;
+  sel.onchange = () => { window.fqState.fe = sel.value; dash.draw('fixrows'); dash.draw('fixcount'); };
+});
+
+document.querySelectorAll('#prifilter').forEach(sel => {
+  sel.addEventListener('change', () => { window.fqState.pri = sel.value; dash.draw('fixrows'); dash.draw('fixcount'); });
+});
+
+const PRI = { high: 0, med: 1, low: 2 };
+function filteredFixes() {
+  const d = dash.data('fixes');
+  if (d.status !== 'ok') return null;
+  const { fe, pri } = window.fqState;
+  return d.data.filter(r => (!fe || r.frontend === fe) && (!pri || r.priority === pri))
+    .sort((a, b) => (PRI[a.priority] ?? 3) - (PRI[b.priority] ?? 3) || a.frontend.localeCompare(b.frontend));
+}
+
+dash.draw('fixcount', (el) => {
+  const rows = filteredFixes();
+  el.textContent = rows ? String(rows.length) : '—';
+});
+
+dash.draw('fixrows', (tb) => {
+  tb.replaceChildren();
+  const rows = filteredFixes();
+  if (!rows) return;
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.dataset.key = encodeURIComponent(r.frontend) + ',' + encodeURIComponent(r.title);
+    const c = (t, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = t ?? ''; tr.appendChild(td); return td; };
+    c(r.frontend);
+    const p = c(''); const sp = document.createElement('span'); sp.className = 'pill p-' + r.priority; sp.textContent = r.priority; p.appendChild(sp);
+    c(r.title); c(r.detail); c(r.firefox); c(r.effort, 'num');
+    tb.appendChild(tr);
+  });
+});
+
+dash.draw('ffrows', (tb) => {
+  tb.replaceChildren();
+  const d = dash.data('ffrisks');
+  if (d.status !== 'ok') return;
+  d.data.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.dataset.key = encodeURIComponent(r.frontend) + ',' + encodeURIComponent(r.risk);
+    const a = document.createElement('td'); a.textContent = r.frontend;
+    const b = document.createElement('td'); b.textContent = r.risk;
+    tr.append(a, b); tb.appendChild(tr);
+  });
+});
+</script>
