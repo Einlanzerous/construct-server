@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.45.0](https://github.com/Einlanzerous/construct-server/compare/v4.44.0...v4.45.0) (2026-11-21)
+
+
+### Features
+
+* **cook_book:** MCP gateway audience and heitan backend (COOK-52) ([#312](https://github.com/Einlanzerous/construct-server/issues/312)) ([a9b277a](https://github.com/Einlanzerous/construct-server/commit/a9b277aef6f29c24618600e27cc5df7988f47086))
+
 ## [4.44.0](https://github.com/Einlanzerous/construct-server/compare/v4.43.0...v4.44.0) (2026-11-16)
 
 
