@@ -1,0 +1,83 @@
+{
+ "name": "Genzo",
+ "key": "GENZO",
+ "path": "~/projects/<repo>/web",
+ "stack": "Vue 3 + Vite 7 + vue-router, TypeScript, Vitest; bundled fontsource fonts; no UI/chart libs",
+ "overall": 71,
+ "categories": {
+  "baseline": 2,
+  "legacy": 8,
+  "overlays": 6,
+  "css": 7,
+  "motion": 9,
+  "forms": 6,
+  "a11y": 8,
+  "perf": 8,
+  "security": 9
+ },
+ "strengths": [
+  "Excellent motion discipline: global prefers-reduced-motion reset (src/styles/base.css:77) plus token-level duration zeroing (tokens.css:177) and FrameView.vue:1224",
+  "Strong a11y plumbing: skip link and route announcer (App.vue:63-74), inert shell under overlays (App.vue:62), overlay stack with focus restore (composables/useOverlays.ts), role=alert/status for async states, focus-visible ring (base.css:55)",
+  "Tokens in oklch with color-scheme per theme (tokens.css:17,32); theme explicit, no prefers-color-scheme duplication",
+  "Lazy routes, loading=lazy and fetchpriority on images (RollsView.vue:206,276), visibilitychange-aware polling (useLibraryRefresh.ts:39), no v-html/innerHTML, zero runtime deps beyond Vue",
+  "IME guard on key handler (useKeyboardNav.ts:70, FrameView.vue:307)",
+  "Firefox-safe by construction: no anchor positioning, field-sizing, interpolate-size, closedby or other Chromium-only features found"
+ ],
+ "firefox_risks": [
+  "Scrollbar styled only via ::-webkit-scrollbar (src/styles/base.css:41-48) with no scrollbar-width/scrollbar-color: Firefox, the primary browser, shows default OS scrollbars, so the design's thin themed scrollbar never appears there",
+  "oklch() tokens used with no fallback (tokens.css:18+): fine on Firefox 113+, but no @supports guard declared as a floor",
+  "100vh shell height (App.vue:79, sheet/YearRail.vue:63) ignores dynamic viewport on mobile browsers"
+ ],
+ "fixes": [
+  {
+   "priority": "high",
+   "title": "Add standard scrollbar theming alongside the webkit pseudo-elements",
+   "detail": "base.css:41-48: add `* { scrollbar-width: thin; scrollbar-color: var(--line) transparent }` (or on the scroll roots). Keep ::-webkit-scrollbar only where it does not override the standard props (Chromium 121+ ignores webkit pseudo when standard props set, so move webkit rules into @supports not (scrollbar-color: auto)).",
+   "firefox": "shipped - scrollbar-color/width in Firefox 64+",
+   "effort": "S"
+  },
+  {
+   "priority": "high",
+   "title": "Declare a browser baseline",
+   "detail": "No CLAUDE.md/browserslist/build.target statement. Add to CLAUDE.md and vite.config.ts build.target (e.g. firefox115/baseline-widely-available via esbuild target list) so Firefox-first floor is explicit and oklch/inert/:focus-visible are documented as required.",
+   "firefox": "shipped",
+   "effort": "S"
+  },
+  {
+   "priority": "med",
+   "title": "Convert the Add-to-roll picker to native popover/dialog semantics",
+   "detail": "detail/RollPicker.vue:113 is a div role=dialog popover with a hand-rolled blur-close (l.99). Use the popover attribute (light dismiss, top layer) with popovertarget on the opener; keep the current logic as fallback. Do NOT use anchor positioning unguarded.",
+   "firefox": "shipped - popover Firefox 125+; anchor positioning is NOT in Firefox stable, so keep existing positioning",
+   "effort": "M"
+  },
+  {
+   "priority": "med",
+   "title": "IME guard on picker Enter",
+   "detail": "RollPicker.vue:80 handles e.key==='Enter' with no e.isComposing check (the global handlers do guard it); add `if (e.isComposing) return`.",
+   "firefox": "shipped",
+   "effort": "S"
+  },
+  {
+   "priority": "med",
+   "title": "Use dvh with vh fallback for full-height shell",
+   "detail": "App.vue:79 and sheet/YearRail.vue:63: `height: 100vh; height: 100dvh;`.",
+   "firefox": "shipped - dvh Firefox 101+",
+   "effort": "S"
+  },
+  {
+   "priority": "low",
+   "title": "Use :user-invalid for the jump-date input instead of aria-invalid class plumbing where possible",
+   "detail": "views/SheetView.vue:289-300 drives invalid state in JS; fine, but a native pattern + :user-invalid style would reduce code.",
+   "firefox": "shipped - :user-invalid Firefox 88+",
+   "effort": "S"
+  },
+  {
+   "priority": "low",
+   "title": "Add text-wrap: balance/pretty to captions and headings",
+   "detail": "No text-wrap use anywhere in src (grep). Apply to roll titles/notices in RollsView.vue and FrameView.vue.",
+   "firefox": "shipped - balance 121+, pretty 126+ (progressive enhancement, harmless if ignored)",
+   "effort": "S"
+  }
+ ],
+ "notes": "A careful, polished SPA with unusually good a11y and motion handling and nothing Chromium-only. Main gaps are no declared baseline and Chromium-only scrollbar styling that Firefox ignores; overlays are hand-built (inert plus focus stack) rather than native dialog, but done well."
+}
