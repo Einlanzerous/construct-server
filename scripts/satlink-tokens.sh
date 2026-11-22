@@ -5,8 +5,8 @@
 #   satlink-tokens.sh list     [argosy|lyceum|both]   live tokens per service (no hashes, no values)
 #   satlink-tokens.sh mint     [argosy|lyceum|both]   first token: mint, probe 200, store in Signet
 #   satlink-tokens.sh deliver                         add-key to PROD_ENV_FILE, sync, assert --vault
-#   satlink-tokens.sh rotate   [argosy|lyceum|both]   mint new, store, sync, pause for the Satlink
-#                                                     recreate, then revoke the old ids by id
+#   satlink-tokens.sh rotate   [argosy|lyceum|both]   mint new, store, sync, pause for a deploy.yml
+#                                                     run, revoke old ids once Satlink switched
 #   satlink-tokens.sh rehearse [argosy|lyceum|both]   scratch token: 200, revoke, 401, no restart
 #
 #   --dev   use argosy-dev / lyceum-dev (127.0.0.1:18096 / :14005). Only `list` and
@@ -127,29 +127,75 @@ do_mint() {
   TOKEN=
 }
 
-do_rotate() {
+# Rotation is two passes so one deploy covers every service rotated:
+#   1. per service: note the live ids, mint a new token, probe it, store it.
+#   2. sync once, then a deploy.yml run. `signet sync` updates only the PROD_ENV_FILE
+#      GitHub secret; /opt/construct-server/.env is written by deploy.yml alone
+#      (render-env.sh), so `make recreate` would keep the OLD token.
+#   3. per service: revoke the old ids only once the database shows Satlink switched:
+#      the new id used by someone other than this script, and the old ids idle across
+#      two collector intervals. A probe by this script cannot prove what Satlink holds.
+declare -A ROT_OLD ROT_NEW ROT_TOKEN ROT_PROBED
+
+rotate_prepare() {
   check_version
   local old; old=$(live_ids "$LABEL")
   [[ -n $old ]] || die "$SVC has no live '$LABEL' token to rotate. Use mint."
   say "$SVC: live '$LABEL' ids before rotation: $(echo $old)"
   mint_one "$LABEL"
-  local new_id=$TOKEN_ID
   expect 200 "$TOKEN" "new token on $PATH_"
+  ROT_PROBED[$SVC]=$(date -u +%s)
   store
-  signet sync --secret "$PROJECT/$SECRET"
-  echo
-  echo "Now recreate Satlink so it reads the new $SECRET: make recreate svc=satlink."
-  echo "Satlink then uses only the new token; the old one(s) stay live until you continue."
-  confirm "Satlink recreated and its $SVC reading healthy?" || {
-    echo "Stopped. Both tokens are live. Re-run 'list' and revoke by id when ready." >&2; TOKEN=; exit 1; }
-  local id
+  ROT_OLD[$SVC]=$old; ROT_NEW[$SVC]=$TOKEN_ID; ROT_TOKEN[$SVC]=$TOKEN
+  TOKEN=
+}
+
+# LAST USED for one id ("-" if never), RFC3339 UTC, so it compares as a string.
+last_used() { cli list | awk -v i="$1" 'NR>1 && $1==i {print $5}'; }
+
+rotate_finish() {
+  local new=${ROT_NEW[$SVC]} old=${ROT_OLD[$SVC]} id t
+  # last_used_at is stamped at most once a minute, and this script's probe stamped the
+  # new id, so only a stamp past probe + 61 s can be Satlink's (it polls every 60 s).
+  local after; after=$(date -u -d "@$(( ${ROT_PROBED[$SVC]} + 61 ))" +%Y-%m-%dT%H:%M:%SZ)
+  say "$SVC: waiting for Satlink to use the new id $new (LAST USED after $after, up to 6 min)"
+  local deadline=$(( SECONDS + 360 ))
+  while :; do
+    t=$(last_used "$new")
+    [[ $t != - && ! $t < $after ]] && break
+    (( SECONDS < deadline )) || die "$SVC: new id $new not used by Satlink (LAST USED $t). Nothing revoked. Did deploy.yml run and recreate satlink?"
+    sleep 15
+  done
+  say "$SVC: new id $new last used $t: Satlink has it"
+  declare -A before
+  for id in $old; do before[$id]=$(last_used "$id"); done
+  say "$SVC: checking the old id(s) stay idle for 150 s (two collector intervals plus the stamp floor)"
+  sleep 150
   for id in $old; do
-    [[ $id == "$new_id" ]] && continue
+    t=$(last_used "$id")
+    [[ $t == "${before[$id]}" ]] || die "$SVC: old id $id was used at $t during the check: something still holds it. Nothing revoked."
+  done
+  for id in $old; do
+    [[ $id == "$new" ]] && continue
     cli revoke -id "$id" >&2
   done
-  expect 200 "$TOKEN" "new token after revoking the old id(s), no $SVC restart"
-  TOKEN=
+  expect 200 "${ROT_TOKEN[$SVC]}" "new token after revoking the old id(s), no $SVC restart"
+  ROT_TOKEN[$SVC]=
   cli list >&2
+}
+
+do_rotate() {  # do_rotate <services...>
+  local s
+  for s in "$@"; do svc_set "$s"; rotate_prepare; done
+  for s in "$@"; do svc_set "$s"; signet sync --secret "$PROJECT/$SECRET"; done
+  echo
+  echo "The vault and PROD_ENV_FILE hold the new token(s); the host .env does not yet."
+  echo "Run a prod deploy, which renders .env and recreates satlink on the changed env:"
+  echo "  gh workflow run deploy.yml --repo Einlanzerous/construct-server"
+  echo "and wait for it to succeed. The old token(s) stay live until the checks below pass."
+  confirm "deploy.yml finished successfully?" || {
+    echo "Stopped. Old and new tokens are both live; re-run 'list' and revoke by id later." >&2; exit 1; }
+  for s in "$@"; do svc_set "$s"; rotate_finish; done
 }
 
 # Proves revocation is live with no restart: the same token flips 200 -> 401.
@@ -181,15 +227,16 @@ main() {
   for a in "$@"; do [[ $a == --dev ]] && DEV=1 || args+=("$a"); done
   set -- "${args[@]+"${args[@]}"}"
   local cmd=${1:-} which=${2:-both}
-  [[ -n $cmd ]] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+  [[ -n $cmd ]] || { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
   ((DEV)) && [[ $cmd != list && $cmd != rehearse ]] && die "--dev is only for list and rehearse"
   [[ $cmd == deliver ]] && { do_deliver; return; }
   local services; [[ $which == both ]] && services="argosy lyceum" || services=$which
+  [[ $cmd == rotate ]] && { do_rotate $services; return; }
   local s
   for s in $services; do
     svc_set "$s"
     case "$cmd" in
-      list) do_list ;; mint) do_mint ;; rotate) do_rotate ;; rehearse) do_rehearse ;;
+      list) do_list ;; mint) do_mint ;; rehearse) do_rehearse ;;
       *) die "unknown command: $cmd" ;;
     esac
   done
