@@ -108,6 +108,7 @@ jobs:
             -e HOME=/tmp \
             -e npm_config_cache=/tmp/.npm \
             -e WIKI_BUILD_REF="${GITHUB_SHA:0:7}" \
+            -e WIKI_BUILD_SHA="$GITHUB_SHA" \
             -e WIKI_DOCS_TOKEN \
             -e GITHUB_TOKEN \
             -v "$PWD:/repo" -w /repo/wiki \
