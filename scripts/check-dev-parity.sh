@@ -77,7 +77,6 @@ LYCEUM_SMTP_USERNAME:no outbound mail from dev
 LYCEUM_SMTP_PASSWORD:no outbound mail from dev
 LYCEUM_SMTP_FROM:no outbound mail from dev
 LYCEUM_KINDLE_ADDR:no outbound mail from dev
-LYCEUM_API_TOKENS:no delivery tokens in dev
 LYCEUM_BINDERY_BASE_URL:no bindery in dev
 OPEN_SUBTITLES_API_KEY:no subtitle fetch in dev
 OPEN_SUBTITLES_USERNAME:no subtitle fetch in dev

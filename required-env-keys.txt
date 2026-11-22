@@ -164,6 +164,10 @@ SATLINK_ACCESS_ALLOWED_EMAILS
 SATLINK_SWITCHYARD_TOKEN
 SATLINK_PG_MONITOR_URL
 SATLINK_PRACTICES_GH_TOKEN
+# SATL-31 / SERV-347: Satlink's Argosy and Lyceum database service tokens
+# (scripts/satlink-tokens.sh). Both were in the vault and synced before this line landed.
+SATLINK_ARGOSY_TOKEN
+SATLINK_LYCEUM_TOKEN
 
 # --- genzo and trestle-genzo (GENZO-8) ---
 # Vault first (see the ORDER OF OPERATIONS above): until `signet sync` has run and

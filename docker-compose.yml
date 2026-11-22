@@ -1272,9 +1272,9 @@ services:
       # CORS for cross-origin native shells (Wails desktop). Blank => same-origin
       # web build only, which sends no Origin.
       - LYCEUM_CORS_ORIGINS=${LYCEUM_CORS_ORIGINS:-}
-      # Optional Eidolon/delivery API tokens + Send-to-Kindle SMTP (LYCM-40x).
-      # Unset => those features stay disabled.
-      - LYCEUM_API_TOKENS=${LYCEUM_API_TOKENS:-}
+      # Optional Send-to-Kindle SMTP (LYCM-40x). Unset => delivery stays disabled.
+      # Service tokens (Eidolon, delivery, Satlink) live in lyceum's database since
+      # LYCM-140, minted with `lyceum service-token mint`; there is no env token table.
       - LYCEUM_SMTP_HOST=${LYCEUM_SMTP_HOST:-}
       - LYCEUM_SMTP_PORT=${LYCEUM_SMTP_PORT:-587}
       - LYCEUM_SMTP_USERNAME=${LYCEUM_SMTP_USERNAME:-}
@@ -1761,8 +1761,8 @@ services:
       - PURSER_CF_ZONE_ID=${PURSER_CF_ZONE_ID:-}
       - PURSER_CF_TUNNEL_ID=${PURSER_CF_TUNNEL_ID:-}
       # Lyceum connector (SERV-42). OWNER_TOKEN must be an owner *session* token:
-      # redeem a `lyceum mint-token` invite via POST /auth/session — a
-      # LYCEUM_API_TOKENS entry can't reach /admin. The lyceum service must also
+      # redeem a `lyceum mint-token` invite via POST /auth/session — a service
+      # token (LYCM-140) can't reach /admin. The lyceum service must also
       # run with LYCEUM_AUTH=true. Unset => connector registers as Unavailable.
       - PURSER_LYCEUM_BASE_URL=http://lyceum:4005
       - PURSER_LYCEUM_OWNER_TOKEN=${PURSER_LYCEUM_OWNER_TOKEN:-}
@@ -2927,6 +2927,18 @@ services:
       - SWITCHYARD_TOKEN=${SATLINK_SWITCHYARD_TOKEN}
       # Fine-grained read-only GitHub token for the practices scan, this consumer alone.
       - PRACTICES_GITHUB_TOKEN=${SATLINK_PRACTICES_GH_TOKEN}
+      # Active-users counts (SATL-31, SATL-107). Each token is a database service token
+      # scoped to one count-only route, for this consumer alone: Argosy `sessions:summary`
+      # (GET /api/v1/sessions/summary), Lyceum `admin:read` (GET /admin/users/active).
+      # Minted and rotated with scripts/satlink-tokens.sh. Cleartext http is accepted for
+      # exactly the one host named per source (Satlink invariant 8): the bearer stays on
+      # construct_net.
+      - ARGOSY_URL=http://argosy:8096
+      - ARGOSY_ALLOW_HTTP_HOST=argosy
+      - SATLINK_ARGOSY_TOKEN=${SATLINK_ARGOSY_TOKEN}
+      - LYCEUM_URL=http://lyceum:4005
+      - LYCEUM_ALLOW_HTTP_HOST=lyceum
+      - SATLINK_LYCEUM_TOKEN=${SATLINK_LYCEUM_TOKEN}
       # The traefik_access_logs volume, mounted read-only below. The rotated file is
       # left to its default of <path>.1.
       - TRAEFIK_ACCESS_LOG_PATH=/var/log/traefik/access.log
