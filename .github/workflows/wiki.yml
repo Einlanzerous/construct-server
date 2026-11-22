@@ -29,6 +29,9 @@ on:
     branches: ["main"]
     paths:
       - 'wiki/**'
+      # The conf carries the healthz version the generator checks (SERV-343); a
+      # conf-only edit must run that check on its own commit.
+      - 'config/wiki/**'
       - 'docs/**'
       - 'docker-compose.yml'
       - 'docker-compose.dev.yml'
