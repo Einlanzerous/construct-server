@@ -48,7 +48,7 @@ judgment; a gap under 5 overall points is noise.
 
 The Chrome guidance is a quality bar, not the target. The floor is the
 "Browser floor" rule in `~/construct-server/PRINCIPLES.md`; read the version
-there. A feature newer than the floor is progressive enhancement only. For every suggested fix,
+there (or the run's `<floor>` if the prompt gives one, as during a bump). A feature newer than the floor is progressive enhancement only. For every suggested fix,
 state Firefox support: shipped (with the version, and whether the floor already has it), behind a flag, not
 supported, or "unsure" when unsure (check MDN, do not guess). A fix that
 relies on a feature Firefox lacks may only be suggested as progressive

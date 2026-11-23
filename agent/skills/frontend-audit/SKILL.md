@@ -17,8 +17,7 @@ each frontend repo's `REVIEW.md`.
 - **Firefox is the primary browser, at the estate floor.** The floor is the
   "Browser floor" rule in `~/construct-server/PRINCIPLES.md` (§2). Read it
   from there at the start of every run; this skill and its references never
-  hard-code the number.
-- **Firefox is the primary browser.** The guidance is a quality bar, not the
+  hard-code the number. The guidance is a quality bar, not the
   target. Every fix states its Firefox support; a Chromium-only feature with
   no fallback is a defect, not a suggestion.
 - **construct-server is public.** This skill, its references and its PR name
@@ -50,10 +49,14 @@ raise unlocks). On approval:
 
 1. Edit the PRINCIPLES "Browser floor" section to the new number and the
    `firefoxNNN` build target, in a `chore(principles):` PR with a ticket.
+   That PR needs the owner's approval to merge.
 2. File one bump ticket per frontend project (see
-   `references/ticket-workflow.md`): set `build.target` to the new
-   `firefoxNNN` and update the floor line in its `CLAUDE.md`.
-3. Score the rest of the run against the new floor.
+   `references/ticket-workflow.md`) once that PR has merged, or link each
+   ticket to it: set `build.target` to the new `firefoxNNN` and update the
+   floor line in its `CLAUDE.md`.
+3. Until the PRINCIPLES PR merges, PRINCIPLES still holds the old number, so
+   the run's `<floor>` is the proposed one and prompts must say so; reviewers
+   and workers use `<floor>` from their prompt over the file.
 
 If the release is not ahead, say so in the report and change nothing. Never
 raise the floor without the operator's say.
