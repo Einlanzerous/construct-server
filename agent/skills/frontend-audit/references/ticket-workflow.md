@@ -2,6 +2,10 @@
 
 ## Filing: one ticket per project
 
+A floor bump (SKILL.md, "Quarterly floor bump") files its own ticket per
+project, separate from the quality-pass ticket: new `build.target`, and the
+floor line in the project's `CLAUDE.md`. Cite PRINCIPLES, not a bare number.
+
 For each project with at least one `high` fix, create one ticket in that
 project (`create_ticket`) titled for the sweep, for example
 `Frontend quality pass: <n> high-priority fixes (<month year>)`. The body

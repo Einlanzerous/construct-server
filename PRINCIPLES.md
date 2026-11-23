@@ -76,6 +76,21 @@ default is a common-but-wrong instinct worth pushing back on explicitly.
 When deviating, say so out loud and explain why — usually the deviation is the
 right call, but it should be visible.
 
+### Browser floor: Firefox 160
+
+Firefox is the estate's primary browser, and the floor is **Firefox 160**
+(owner decision 2026-11-22). The floor is a pinned number, not "latest": a
+build target needs a version, and a moving target would build the same commit
+differently on different days.
+
+- Every frontend sets `firefox160` in its Vite/esbuild `build.target` and
+  states the floor in its own `CLAUDE.md`.
+- Anything newer than the floor is progressive enhancement behind `@supports`
+  or feature detection, with a working fallback.
+- The quarterly `frontend-audit` run (`agent/skills/frontend-audit/`) raises
+  the floor to the Firefox release current at that time, edits this section
+  and files the per-project bump tickets. Nothing else raises it.
+
 ## 3. Release discipline
 
 **All repos follow Conventional Commits + release-please.** New repos go on this
