@@ -14,7 +14,10 @@ each frontend repo's `REVIEW.md`.
 
 ## Hard rules
 
-- **Firefox is the primary browser.** The guidance is a quality bar, not the
+- **Firefox is the primary browser, at the estate floor.** The floor is the
+  "Browser floor" rule in `~/construct-server/PRINCIPLES.md` (§2). Read it
+  from there at the start of every run; this skill and its references never
+  hard-code the number. The guidance is a quality bar, not the
   target. Every fix states its Firefox support; a Chromium-only feature with
   no fallback is a defect, not a suggestion.
 - **construct-server is public.** This skill, its references and its PR name
@@ -33,6 +36,34 @@ each frontend repo's `REVIEW.md`.
 ## 0. Setup
 
 Ask the operator to confirm the target list before fanning out, then create `<scratchpad>/results/`. Subagents get that absolute path in their prompt; the scratchpad is per-session.
+
+Read the current floor from PRINCIPLES (the "Browser floor" section) and keep
+it as `<floor>` for the run. Put it in every reviewer and worker prompt.
+
+### Quarterly floor bump
+
+Fetch `https://product-details.mozilla.org/1.0/firefox_versions.json` and read
+`LATEST_FIREFOX_VERSION`. Compare its major version with `<floor>`. If it is
+ahead, propose the raise to the operator (current release, new floor, what the
+raise unlocks). On approval:
+
+1. Edit the PRINCIPLES "Browser floor" section to the new number and the
+   `firefoxNNN` build target, in a `chore(principles):` PR with a ticket.
+   That PR needs the owner's approval to merge.
+2. File one bump ticket per frontend project (see
+   `references/ticket-workflow.md`) once that PR has merged, or link each
+   ticket to it: set `build.target` to the new `firefoxNNN` and update the
+   floor line in its `CLAUDE.md`.
+3. Until the PRINCIPLES PR merges, PRINCIPLES still holds the old number, so
+   the run's `<floor>` is the proposed one and prompts must say so; reviewers
+   and workers use `<floor>` from their prompt over the file.
+
+If the release is not ahead, say so in the report and change nothing. Never
+raise the floor without the operator's say.
+
+Playwright's bundled Firefox works on this box. Workers use it for any
+behavioural check (dialogs, popovers, focus, scroll lock); reviewers do not,
+since they are read-only.
 
 ## 1. Targets
 

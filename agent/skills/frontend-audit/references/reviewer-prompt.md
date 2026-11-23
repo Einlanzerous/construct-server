@@ -8,7 +8,8 @@ placeholders and send:
 >
 > Frontends: `<KEY | NAME | path to web dir>` for each.
 > Rubric: read `~/.claude/skills/frontend-audit/references/rubric.md`
-> and follow it exactly, including the Firefox-primary rule.
+> and follow it exactly, including the Firefox-primary rule and the floor
+> in `~/construct-server/PRINCIPLES.md` ("Browser floor"; the run's floor is `<floor>`).
 > Output schema: `~/.claude/skills/frontend-audit/references/result-schema.md` (example: `assets/example-result.json` there); write
 > `<absolute results dir>/<key>.json` for each.
 > Legacy scan: `<legacy-scan JSON for this frontend, or "denied: grep for the

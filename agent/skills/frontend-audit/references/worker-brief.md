@@ -1,7 +1,7 @@
 # Worker brief: frontend quality tickets
 
 Hand this to each subagent that implements ONE audit ticket. Fill in the
-ticket key and repo. The repo's own CLAUDE.md and REVIEW.md outrank it.
+ticket key, repo and `<floor>`. The repo's own CLAUDE.md and REVIEW.md outrank it.
 
 You implement one Switchyard ticket end to end. The ticket says what to do;
 this brief says how the estate wants it done.
@@ -13,9 +13,13 @@ this brief says how the estate wants it done.
 - Read the ticket with the Switchyard MCP `get_ticket`. Check `review_mode`:
   `evidence` means you finish it alone, including the merge. Anything else:
   stop and report.
-- Firefox is the primary browser. Never introduce a feature Firefox lacks
-  unless it is progressive enhancement with a working fallback. Check MDN
-  rather than guessing.
+- Firefox is the primary browser. The floor is the "Browser floor" rule in
+  `~/construct-server/PRINCIPLES.md`; use the floor `<floor>` filled in
+  here, or read the version there if none is given. Never introduce
+  a feature the floor lacks unless it is progressive enhancement with a
+  working fallback. Check MDN rather than guessing.
+- Playwright's bundled Firefox works on this box. Use it for anything
+  behavioural (dialogs, popovers, focus, scroll lock).
 
 ## Workspace
 - Do not touch the main checkout. Create a worktree from an up-to-date
