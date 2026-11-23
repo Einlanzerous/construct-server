@@ -29,6 +29,9 @@ on:
     branches: ["main"]
     paths:
       - 'wiki/**'
+      # The conf carries the healthz version the generator checks (SERV-343); a
+      # conf-only edit must run that check on its own commit.
+      - 'config/wiki/**'
       - 'docs/**'
       - 'docker-compose.yml'
       - 'docker-compose.dev.yml'
@@ -108,6 +111,7 @@ jobs:
             -e HOME=/tmp \
             -e npm_config_cache=/tmp/.npm \
             -e WIKI_BUILD_REF="${GITHUB_SHA:0:7}" \
+            -e WIKI_BUILD_SHA="$GITHUB_SHA" \
             -e WIKI_DOCS_TOKEN \
             -e GITHUB_TOKEN \
             -v "$PWD:/repo" -w /repo/wiki \

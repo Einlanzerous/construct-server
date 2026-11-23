@@ -26,6 +26,7 @@ import { emitServices } from "./emit/services.ts";
 import { emitTopology } from "./emit/topology.ts";
 import { emitVersions } from "./emit/versions.ts";
 import { buildSidebar } from "./emit/sidebar.ts";
+import { checkHealthzConf, writeHealthz } from "./lib/healthz.ts";
 import type { Page } from "./emit/page.ts";
 
 const WIKI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -70,6 +71,10 @@ function main(): void {
   // maps land in docs/public/, which cleanDocs() has just emptied, and the repo
   // pages need to know which of them rendered.
   cleanDocs();
+  // Before any output, so a drifted conf fails the build rather than ships.
+  checkHealthzConf(join(REPO_ROOT, "config", "wiki", "nginx.conf"));
+  mkdirSync(join(DOCS_DIR, "public"), { recursive: true });
+  writeHealthz(join(DOCS_DIR, "public"), process.env.WIKI_BUILD_SHA);
   const diagrams = renderArchitecture(estate, DOCS_DIR);
 
   const pages: Page[] = [

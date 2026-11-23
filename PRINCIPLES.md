@@ -196,6 +196,16 @@ tier-A service, and ship `org.opencontainers.image.version` +
 Do not try to give a static bundle a `/healthz`. See drydock's `dry-91` decision
 doc for a worked label-only example.
 
+**One recorded exception: the estate wiki (SERV-343).** A static bundle may answer
+a probe for a consumer that is not the delivery ledger (Satlink). The wiki's
+`/healthz` returns the three-field shape with `version` the fixed sentinel
+`static` (never a release, never semver) and `sha` the full build commit or
+`null`; on an empty or incomplete mount it is a JSON 503 with the same keys. The
+wiki is **never registered in Switchyard's inventory**: it is not an image, so
+no version could ever match a label and the row would be `claimed_not_confirmed`
+for ever. Nothing else in this section is relaxed, and a second static bundle
+does not inherit the exception without its own ruling.
+
 **A frontend that ships from its backend's release does not need its own row.**
 They pin to the same tag, so the backend's row already says what release the pair
 is on.
