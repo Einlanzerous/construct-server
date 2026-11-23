@@ -340,9 +340,13 @@ to `docs/plan-review.md` (CANT-150, `d0971cd`), because catenary's
 `pr-review.yml` feeds `REVIEW.md` to the PR reviewer whole. Either satisfies the
 standard — the pass's `doctrine.sh` (switchyard's `.github/scripts/plan-review/`,
 SWY-419) follows a single-link pointer section. Prefer inline, unless `REVIEW.md`
-is the PR reviewer's prompt verbatim. **construct-server's own `REVIEW.md` has no
-such section today**: SERV is not yet in the pass's list, and writing the section
-is a SERV ticket filed when it joins.
+is the PR reviewer's prompt verbatim. **construct-server's own `REVIEW.md` is the
+PR reviewer's prompt**, so it follows catenary's shape: a single-link pointer
+section, `## Reviewing a plan`, to `docs/plan-review.md` (SERV-349), which holds
+the doctrine; `doctrine.sh` reads `doctrine=found` against it. Landing the
+doctrine is the first half of joining; the second is the pass rule's project
+list, which the operator edits after the merge, and this file does not claim
+it has happened.
 
 **Where the loop's runs land — measured 2026-09-28, rulings as of 2026-09-29.**
 The pass runs on `self-hosted` in the switchyard repo, so it lands only on the
