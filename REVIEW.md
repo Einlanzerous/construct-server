@@ -112,3 +112,7 @@ when nothing Important came up. Then ticket fidelity in a sentence. Then the
 findings, most severe first.
 
 If the diff is clean, say so in one line and stop. Do not pad.
+
+## Reviewing a plan
+
+Everything above is for a **diff**. Switchyard's adversarial plan pass reviews a **plan**, the document, before any code, against a checkout of this repository, and what a SERV plan has to get right is written for it in [`docs/plan-review.md`](docs/plan-review.md): the checks it performs from this tree plus the plan JSON alone, its standing (advisory on a passing check, blocking only for a hole a person would bounce, never a pick), its posture toward rulings, and the exit condition the automatic loop reads. It lives in its own file because this one is the PR reviewer's prompt, and a plan doctrine here would ride along on every diff review.
