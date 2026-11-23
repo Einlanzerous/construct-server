@@ -54,8 +54,9 @@ checking happened.
 ## Checks
 
 Each is stated with what makes it blocking and how to perform it here. Checks
-2 to 14 are this repository's invariants restated for a plan; a plan that
-violates one is bounced, not advised.
+2 to 12 and 14 are this repository's invariants restated for a plan; a plan that
+violates one is bounced, not advised. This file is read whole up to 32 KiB by
+`doctrine.sh`, so keep it under that: the Exit condition is at the end.
 
 ### 1. Every cited path, symbol, line and count exists in this checkout
 
@@ -89,8 +90,8 @@ A plan leans on the tree it describes. `Glob` the path, `Grep` the symbol,
 
 ### 2. A plan that edits a workflow keeps the permission model — blocking
 
-Workflow permissions are set **per job**, not per step. `CLAUDE.md` § Deploy
-path and runner; the shapes are in `.github/workflows/` (`promote.yml`'s
+Workflow permissions are set **per job**, not per step. `REVIEW.md` § Always
+check (*Workflow permissions*); the shapes are in `.github/workflows/` (`promote.yml`'s
 `repoint` job is the one `contents: write` holder besides `release.yml`;
 `deploy-dev.yml`, `base-images.yml`, `wiki.yml` and most others declare
 `permissions: contents: read` at the top).
@@ -293,9 +294,8 @@ stack's versioning hangs from.
   PR title (squash and rebase are both enabled), as `type(scope): subject (SERV-N)`
   with the key in the subject and never a bare `SERV-N:` prefix; the branch is
   `{type}/{slug}-{key}`.
-- A change to anything in `deploy.yml`'s `paths:` list (compose, `config/**`,
-  `db/**`, `scripts/**`, `versions.env`, `required-env-keys.txt`,
-  `services/cf-access-guard/**`, `pkg/cfaccess/**`) typed `chore:` is blocking:
+- A change to any path in the `paths:` list at the top of `deploy.yml` (read it
+  from the file; do not rely on a copy) typed `chore:` is blocking:
   it silently does not release and a reader of the plan would assume it shipped.
   `docs/`-only and `REVIEW.md`-only changes are legitimately `chore:`. The
   plan that adds a published artefact or a new script behaviour is `feat:`;
@@ -400,8 +400,8 @@ builds on the other side is blocking:
 - Docker computes health and acts on none of it: `restart: unless-stopped`
   ignores unhealthy, so a plan that leans on auto-restart for an unhealthy
   container is wrong; `scripts/assert-healthy.sh` is the gate;
-- `cf-access-guard` is the one first-party image built on the box; a plan that
-  serialises reviews or sets a per-runner `HOME` is re-opening SERV-190.
+- `cf-access-guard` is the one first-party image built on the box.
+- A plan that serialises reviews or sets a per-runner `HOME` is re-opening SERV-190 (`CLAUDE.md` § Deploy path and runner).
 
 ### 15. Ticket hygiene and `review_mode`
 
@@ -410,11 +410,7 @@ builds on the other side is blocking:
   carries an image (`PRINCIPLES.md` §5 *Show, don't describe*); a PR that
   changes only config says what command shows it works.
 - A plan may raise a ticket's `review_mode` to `decision` or `full`; it never
-  lowers one (`~/.claude/CLAUDE.md`). A `work_breakdown` row that edits the
-  deploy path, the edge auth, a Signet-owned secret or `db/init-db.sh` says
-  `review_mode: full` and gives the reason (it can reach prod, widen who can
-  reach something, or blank a role); so does a row that gives a job `contents: write`; a row for those left at `evidence` is
-  blocking. A row claiming `full` for a docs edit is advisory.
+  lowers one (`~/.claude/CLAUDE.md`). No merged document sets a per-row mode rule here, so this is advisory only: a `work_breakdown` row that edits the edge auth, a Signet-owned secret, `db/init-db.sh` or gives a job `contents: write` should say whether it is `full`, and why (it can widen who reaches something, or blank a role). Never blocking.
 - A ticket needing more than one PR is split first, and `depends_on` orders the
   deploy: a row that deploys a consumer before the producer it needs is
   blocking.
@@ -493,7 +489,7 @@ plus `plan.json`:
    contract.
 5. **The work breakdown exists on a `decision` ticket**, every approved
    criterion is in some row's `Done when`, rows that reach prod, the edge or
-   the vault say `review_mode: full`, and `depends_on` orders the deploy.
+   the vault say whether they are `full` (advisory), and `depends_on` orders the deploy.
 6. **Every citation the argument rests on has been verified here**, and every
    neighbouring-repository, host or vault claim is marked `unverified`.
 
