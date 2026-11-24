@@ -26,6 +26,8 @@ the pointer is on the rule. Cross-service delivery design is `docs/delivery-pipe
 - `ansible/` — host-level ops, not container config. Includes the `delivery_prober`
   role. The runner is registered by hand; ansible has no role for it.
 - `scripts/` — deploy gates and checks; each `make` target below names its script.
+- `tools/` — standalone programs (Go, and `tools/base-images`, TypeScript). Not synced to the
+  deploy root and not in `deploy.yml`'s `paths:`, so changing one deploys nothing.
 - `services/` — first-party source that has not graduated to its own repo
   (`cf-access-guard`, `comfyui`).
 - `pkg/cfaccess/` — the estate's Cloudflare Access JWT verifier (nested `CLAUDE.md`).
@@ -140,6 +142,8 @@ is in `docs/stack-service-notes.md`. Safety rules for them:
 - Every first-party Dockerfile `FROM` names a supported cycle to cycle precision
   (`alpine:3.23`, never `alpine:3` or `latest`). `base-images.yml` checks it weekly and is
   not a deploy gate; `cf-access-guard`'s `golang:` pin is this repo's to keep current.
+  The check, its CI wrapper and its publisher are one TypeScript program,
+  `tools/base-images/` (Node 24, no runtime dependency; was bash until SERV-357).
   `docs/base-images.md`. The sweep's result is also published as `base-images.json` on
   the `estate-results` branch for Satlink: public repos only, schema 1, shape and the
   stability promise in `docs/base-images.md` "Machine-readable output".
@@ -246,9 +250,11 @@ configures still come up". Per-check notes (when, why, failure modes):
   `PROMOTE_DISPATCH_TOKEN`; cancel the run `dispatch=1` creates. See
   `docs/delivery-pipeline.md`.
 - `make chronicle-upstream-check` after minting or rotating `CHRONICLE_SWITCHYARD_TOKEN`.
-- `make base-images-check [dir=~/projects]` after editing any Dockerfile in any estate repo;
-  `make base-images-test` proves it can fail. Fix `UNMAPPED` by extending `PRODUCT_MAP`,
-  never by an exemption.
+- `make base-images-check [dir=~/projects]` after editing any Dockerfile in any estate repo
+  (from a checkout: `tools/base-images/` is not synced to the deploy root);
+  `make base-images-test` proves it can fail and `make base-images-typecheck` checks the types.
+  Fix `UNMAPPED` by extending `PRODUCT_MAP` in `tools/base-images/src/ref.ts`, never by an
+  exemption.
 - `gh workflow run verify.yml -f ticket=<key>` after touching the verifier, against a ticket
   whose answer you know: it goes green on `not_met`, so read the verdict, not the colour.
 - `make lint-gate` / `make lint-gate-test` / `make lint-gate-install` / `make

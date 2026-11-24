@@ -213,7 +213,7 @@ Bounce a plan that:
   `make force-recreate`.
 - **A first-party Dockerfile `FROM` names a supported cycle to cycle precision**
   (`alpine:3.23`, never `alpine:3` or `latest`; `docs/base-images.md`,
-  `scripts/check-base-images.sh`). `cf-access-guard`'s `golang:` pin is this
+  `tools/base-images/`). `cf-access-guard`'s `golang:` pin is this
   repo's to keep.
 
 ### 6. Recreate, not restart; scope, not cascade — blocking

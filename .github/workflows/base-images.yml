@@ -19,7 +19,7 @@ name: Base Images
 # docker-compose.yml (verify-tag.sh, the wiki) and one sweep with one policy is the
 # SERV-111 shape — many per-repo checks with their own copies of the rule would drift
 # the same way the Dockerfiles did. On a schedule, because a base image goes EOL with
-# no commit anywhere. On ubuntu-latest, because it needs only curl, jq and gh, has no
+# no commit anywhere. On ubuntu-latest, because it needs only Node and gh, has no
 # reason to touch the stack, and should still report when the box is busy or down.
 #
 # ── WHAT A RED RUN MEANS ─────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ name: Base Images
 # stale base image is a rotation-class problem and not a "stop the deploy" one.
 #
 # A run that cannot reach endoflife.date fails too (exit 2). "Could not check" must never
-# come out green — see the note in scripts/check-base-images.sh.
+# come out green — see the note in tools/base-images/src/usage.ts (`--help`).
 #
 # ── THE PUBLISHED RESULT (SERV-294) ──────────────────────────────────────────────────
 #
@@ -52,6 +52,11 @@ name: Base Images
 # A week WITH findings must still publish: the sweep step exits 1, so the upload step and
 # the publish job both run on `!cancelled()` and not on the default success(). A red sweep
 # means findings; a red publish job means the file is stale.
+#
+# The program is TypeScript under tools/base-images/ (SERV-357), run by Node directly with no
+# build step and no runtime dependency; setup-node pins the major so a runner image change
+# cannot move it. Its only dependencies are the type checker's, installed with scripts off in
+# a step that holds no secret.
 
 on:
   schedule:
@@ -59,19 +64,17 @@ on:
     - cron: '0 7 * * 1'
   pull_request:
     paths:
-      - 'scripts/check-base-images.sh'
-      - 'scripts/base-images-sweep.sh'
-      - 'scripts/publish-base-images.sh'
-      - 'scripts/test/**'
+      - 'tools/base-images/**'
+      # The tests assert that this directory still holds only docker and tailscale.
+      - 'scripts/test/mock-bin/**'
       - 'Makefile'
       - '.github/workflows/base-images.yml'
   push:
     branches: ["main"]
     paths:
-      - 'scripts/check-base-images.sh'
-      - 'scripts/base-images-sweep.sh'
-      - 'scripts/publish-base-images.sh'
-      - 'scripts/test/**'
+      - 'tools/base-images/**'
+      # The tests assert that this directory still holds only docker and tailscale.
+      - 'scripts/test/mock-bin/**'
       - 'Makefile'
       - '.github/workflows/base-images.yml'
       - 'docker-compose.yml'
@@ -88,11 +91,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Scripts off: the type checker is the only thing installed, and the sweep's tokens are
+      # not in this step's environment.
+      - name: Type-check the program
+        run: make base-images-typecheck
+
       # A guard that fails closed is only worth having if it is known to fail at all,
       # and the fixture run is the only way to see that without an EOL image in the
       # estate. It runs first so a broken script reads as "the script is broken" and
-      # not as "the estate is clean". `make base-images-test` runs the script's self-test
-      # and the publish and sweep scripts' test, so CI covers both.
+      # not as "the estate is clean". `make base-images-test` runs the program's whole test
+      # suite: the check, the publisher and the sweep wrapper.
       - name: Prove the check can fail
         run: make base-images-test
 
@@ -113,7 +125,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WIKI_DOCS_TOKEN || secrets.GITHUB_TOKEN }}
           PRIVACY_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/base-images-sweep.sh
+        run: node tools/base-images/src/sweep.ts
 
       # `!cancelled()`, not the default success(), or a sweep that exits 1 (findings) would
       # skip this and the file would go stale in exactly the weeks with findings. The
@@ -144,7 +156,7 @@ jobs:
             echo "a token that can read the private repos."
             echo
             echo "An \`UNMAPPED\` row means the image's product is not in \`PRODUCT_MAP\` in"
-            echo "\`scripts/check-base-images.sh\` — add the mapping rather than an exemption."
+            echo "\`tools/base-images/src/ref.ts\` — add the mapping rather than an exemption."
             echo "An \`UNRESOLVED\` row on a whole repo means the token could not read it."
             echo
             echo "Locally: \`make base-images-check\` (this sweep) or"
@@ -172,6 +184,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Download the public-only document
         uses: actions/download-artifact@v4
         with:
@@ -181,4 +197,4 @@ jobs:
       - name: Publish to estate-results
         env:
           PUBLISH_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/publish-base-images.sh "$RUNNER_TEMP/in/base-images.json"
+        run: node tools/base-images/src/publish.ts "$RUNNER_TEMP/in/base-images.json"

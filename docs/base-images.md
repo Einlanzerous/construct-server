@@ -63,7 +63,13 @@ the row says so; without it the guard would go straight from OK to EOL for Go.
 
 ## The guard
 
-`scripts/check-base-images.sh` — one script, three modes, one policy source.
+`tools/base-images/` — one TypeScript program, three modes, one policy source. It is run by
+Node 24 directly (no build step, no runtime dependency): `node tools/base-images/src/check.ts`
+is the check, `sweep.ts` the CI wrapper and `publish.ts` the publisher. It was a bash script
+until SERV-357 (PRINCIPLES section 1: a script with real control flow, data structures and
+tests wants a language); the CLI, the exit codes and the document are unchanged. It is under
+`tools/`, not `scripts/`, so it is not synced to the deploy root and a change to it does not
+trigger a stack deploy; run `make base-images-check` from a checkout.
 
 - `--estate` reads every Dockerfile on every first-party repo's **default branch**
   through `gh api`, so it sees what is merged rather than what is checked out. The repo
@@ -73,10 +79,12 @@ the row says so; without it the guard would go straight from OK to EOL for Go.
   derivation that matches nothing is exit 2 rather than a sweep of `EXTRA_REPOS` alone.
 - `--dir ~/projects` does the same for local checkouts — the form to run before pushing
   a Dockerfile change.
-- `--self-test` proves the script can **fail**: fixture policy, fixture Dockerfiles, and
+- `--self-test` proves the program can **fail**: it runs the test suite (fixture policy, fixture Dockerfiles, and
   an assertion that an EOL tag, a floating tag, an unmapped image and an unreachable
-  policy source each produce the non-zero exit they should. A guard that cannot fail is
-  indistinguishable from a clean estate, which is the SERV-58 lesson applied here.
+  policy source each produce the non-zero exit they should; the same suite proves the privacy
+  filter, the redaction, the publisher's refusals and lease, and the sweep wrapper's exit
+  handling). A guard that cannot fail is indistinguishable from a clean estate, which is the
+  SERV-58 lesson applied here.
 
 It **refuses rather than guesses**. An image whose product is not in `PRODUCT_MAP` is a
 finding, not a skip; so is a version endoflife.date does not list, a `FROM ${VAR}` with
@@ -86,10 +94,10 @@ estate it had only half examined. And when endoflife.date is unreachable it exit
 never 0: "could not check" must not come out the same colour as "checked and fine".
 
 `.github/workflows/base-images.yml` runs it **every Monday**, on `ubuntu-latest`, plus on
-any PR that touches the script or the workflow. On a schedule because a base image goes
+any PR that touches the program or the workflow. On a schedule because a base image goes
 EOL with no commit anywhere — a check on the service repos' own CI would run exactly when
 nobody is looking at the base image. Not on the self-hosted runner because it needs only
-`curl`, `jq` and `gh`, and should still report when the box is busy or down. It is
+Node and `gh`, and should still report when the box is busy or down. It is
 deliberately **not a deploy gate**: a stale base image is a rotation-class problem, not a
 "stop the deploy" one, and a red prod deploy is the wrong way to learn that Alpine cut a
 release.
@@ -99,8 +107,8 @@ bump the tag to the newest supported cycle the row names, build, release, and re
 the Actions tab.
 
 Locally: `make base-images-check` (the estate), `make base-images-check dir=~/projects`
-(your checkouts), `make base-images-test` (the self-test, and the publish and sweep
-scripts' test; CI runs it before every sweep).
+(your checkouts), `make base-images-test` (the whole suite: the check, the publisher and
+the sweep wrapper; CI runs it before every sweep) and `make base-images-typecheck`.
 
 ## Machine-readable output
 
@@ -126,13 +134,13 @@ document is exit 2, never 1.
 - **One object per `FROM` line** in `images[]`, the same lines the human output reports.
   A repo or a file that could not be read is never a row (and never a fake `line 0`);
   `repos[]` carries it.
-- **Nothing is coalesced.** A field the script cannot determine is `null`, never `""` or
+- **Nothing is coalesced.** A field the program cannot determine is `null`, never `""` or
   `0`. `eolDate: null` with `status: "OK"` is legitimate: Go and nginx publish no date,
   and `status` is what says whether the image is fine. `eolDateEstimated` is `true` when
-  the date is the script's estimate (see "The rule"). `withheldRepos` and
+  the date is the program's estimate (see "The rule"). `withheldRepos` and
   `visibilityUnreadable` are `null` when `scope` is `unfiltered` (not measured), never 0.
   `generatedAt` is the real clock; `today` is the policy date (`BASE_IMAGE_TODAY`).
-- **`status` is the script's seven statuses, verbatim**: `OK`, `SOON` (inside the warning
+- **`status` is the program's seven statuses, verbatim**: `OK`, `SOON` (inside the warning
   window, not a finding), and the findings `EOL`, `FLOATING`, `UNKNOWN`, `UNMAPPED`,
   `UNRESOLVED` (a `FROM ${VAR}` with no default). `cycle` is `null` unless the tag named one
   that endoflife.date lists, so a `FLOATING`, `UNKNOWN` or `UNMAPPED` row has no cycle.
@@ -152,7 +160,7 @@ document is exit 2, never 1.
 
 Everything published is world-readable (the repository is public, and so are the data
 branch and workflow artifacts), and the sweep also reads private repos. So the filter runs
-in the script, before any file exists: `--public-only` (estate mode only) publishes a repo
+in the program, before any file exists: `--public-only` (estate mode only) publishes a repo
 only when `GET repos/<owner>/<repo>` made with `PRIVACY_GH_TOKEN` exits 0 and `.private` is
 exactly `false`. That token is the workflow's own `GITHUB_TOKEN`, which cannot read private
 repos: a 404 is its answer for them, and a 200 `false` is itself the proof the repo is
@@ -176,7 +184,7 @@ exit 2.
 ### Redaction in the run log (SERV-350)
 
 The run log, the GitHub Actions annotations and the step summary are as public as the
-document, and the sweep reads private repos. So under redaction `check-base-images.sh
+document, and the sweep reads private repos. So under redaction `check.ts
 --estate` asks the same privacy question as `--public-only` (same `PRIVACY_GH_TOKEN`, same
 fail-closed rule: a 404, an error or anything but exactly `private: false` is private) and
 prints a row, an annotation or a summary line only for a repo that answered public. A
@@ -252,8 +260,8 @@ every consumer refuse a `schema` they do not know.
 The ticket asked for a recommendation on whether to build a service for this or adopt
 one. The answer has two halves, because there are two jobs.
 
-**The policy check stays as it is — a script and a schedule, not a service.** It is a
-few hundred lines of bash with no state, no port and no consumer other than a red run.
+**The policy check stays as it is — a program and a schedule, not a service.** It is a
+small TypeScript program (it was bash until SERV-357) with no state, no port and no consumer other than a red run.
 The estate's own rule (SERV-111) is that a producer with nothing to store is a cron and
 not a container, and a "base image monitor" service would be a fourth thing rendering
 the same endoflife.date JSON. It also should not become a Switchyard instrument or a
@@ -288,8 +296,8 @@ on an EOL base" is Monday's run, not another survey.
 
 ## Adding a product
 
-A `FROM` on an image the script has never seen fails as `UNMAPPED`. Add the image
-repository to `PRODUCT_MAP` in the script, keyed as written in the Dockerfile with
+A `FROM` on an image the program has never seen fails as `UNMAPPED`. Add the image
+repository to `PRODUCT_MAP` in `tools/base-images/src/ref.ts`, keyed as written in the Dockerfile with
 `docker.io/library/` stripped, valued with the endoflife.date product slug
 (`https://endoflife.date/api/v1/products/<slug>`). Do not add an exemption instead: an
 image the policy cannot evaluate is the case the guard exists to make loud.

@@ -1,0 +1,18 @@
+{
+  "name": "@construct/base-images",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The base-image sweep, its CI wrapper and its publisher (SERV-170, SERV-294, SERV-357). Zero runtime dependencies; Node runs the TypeScript directly.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test --test-reporter=spec \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  }
+}

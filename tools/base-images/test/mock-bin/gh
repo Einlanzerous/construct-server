@@ -12,7 +12,8 @@
 #   <repo>/fail/<path>     present: that file's read fails
 #
 # This directory is not scripts/test/mock-bin: backup-test.sh prepends that whole directory
-# to PATH, and a `gh` there would shadow the real one for it.
+# to PATH, and a `gh` there would shadow the real one for it. The tests put this directory
+# on PATH for the child processes they spawn and for nothing else.
 set -u
 [ "${1:-}" = api ] || { echo "mock gh: only 'api' is supported" >&2; exit 1; }
 d="${MOCK_GH_DIR:?mock gh: MOCK_GH_DIR is not set}"

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# A PATH shim over the real git for test-publish-base-images.sh. Inert unless SHIM_LOG is
-# set. With it, every argv is appended to that file, one argument per line, so the test can
+# A PATH shim over the real git for publish.test.ts. Inert unless a variable below is set.
+# With SHIM_LOG, every argv is appended to that file, one argument per line, so the test can
 # prove a token never reaches a command line. With SHIM_RACE_FROM (a repo) and
 # SHIM_RACE_TO (a remote) set, a `push` first lets a competing publisher create the branch,
-# which is the race the first-publish lease exists for.
+# which is the race the first-publish lease exists for. SHIM_RACE_FORCE=1 makes that competing
+# push a force push, so it can also move a branch that already exists (the later-publish lease).
 self="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 real=""
 IFS=: read -ra dirs <<<"$PATH"
@@ -18,7 +19,9 @@ fi
 if [ -n "${SHIM_RACE_FROM:-}" ] && [ -n "${SHIM_RACE_TO:-}" ]; then
   for a in "$@"; do
     if [ "$a" = push ]; then
-      "$real" -C "$SHIM_RACE_FROM" push -q "$SHIM_RACE_TO" HEAD:refs/heads/estate-results
+      force=()
+      [ "${SHIM_RACE_FORCE:-}" = 1 ] && force=(--force)
+      "$real" -C "$SHIM_RACE_FROM" push -q "${force[@]}" "$SHIM_RACE_TO" HEAD:refs/heads/estate-results
       break
     fi
   done
