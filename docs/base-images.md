@@ -197,6 +197,8 @@ private finding. A repo whose privacy lookup failed is also one finding on its o
   `CI=false`. Detection errs toward withholding so a runner that is not recognised does not
   print private detail; the explicit flag is what a workflow should rely on. There is no
   flag to turn it off.
+- **Redaction implies `--public-only`** for `--estate`, so `--json` and `--json-out` carry
+  only public repos even when nobody passed the flag; a document is output too.
 - **Redaction needs the token.** `--estate` under redaction without `PRIVACY_GH_TOKEN` is
   exit 2, and file and `--dir` modes (which know no repo, so cannot tell a private path)
   refuse with exit 2.

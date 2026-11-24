@@ -103,7 +103,8 @@
 # locally (`make base-images-check`), where redaction is off. Redaction is on when --redact is
 # given (the workflow passes it) or when GITHUB_ACTIONS, CI or GITHUB_STEP_SUMMARY is set to
 # anything: an unrecognised CI that sets none of those is the only way to get detail, which
-# is why the explicit flag exists. File and --dir modes have no privacy lookup, so they
+# is why the explicit flag exists. Redaction also implies --public-only for the estate, so
+# --json and --json-out never carry a private repo into a log or an artifact. File and --dir modes have no privacy lookup, so they
 # refuse (exit 2) under redaction rather than print paths.
 #
 # DEVIATION (SERV-294). A script with this much control flow wants a real language
@@ -914,6 +915,17 @@ FROM nginx:1.30-alpine'
   red clean GITHUB_ACTIONS=true CI=true
   if [ "$rc" = 0 ] && grep -qF '0 repo(s) withheld' "$t/clean.out"; then ok "redact: a clean public estate still exits 0"; else bad "redact: clean estate exit $rc"; fi
 
+  # --json without --public-only in CI used to print the unfiltered document to the log.
+  compose="$(compose_for redact5 fx-rpub fx-rpriv fx-rvis)"
+  red jsonleak GITHUB_ACTIONS=true CI=true -- --json
+  if [ "$rc" = 1 ] && ! grep -qE "$leak" "$t/jsonleak.out" "$t/jsonleak.err" && jq -e '.scope == "public-only"' "$t/jsonleak.out" >/dev/null 2>&1; then
+    ok "redact: --json alone in CI prints the public-only document, no private repo"
+  else bad "redact: --json in CI leaked or was unfiltered (exit $rc, scope $(jq -r .scope "$t/jsonleak.out" 2>/dev/null))"; fi
+  red jsonout GITHUB_ACTIONS=true CI=true -- --json-out "$t/jsonout.json"
+  if [ "$rc" = 1 ] && ! grep -qE "$leak" "$t/jsonout.json" && jq -e '.scope == "public-only"' "$t/jsonout.json" >/dev/null 2>&1; then
+    ok "redact: --json-out alone in CI writes the public-only document, no private repo"
+  else bad "redact: --json-out in CI leaked or was unfiltered (exit $rc)"; fi
+
   # No privacy token under redaction is exit 2, never a guess; file modes refuse too.
   compose="$(compose_for redact4 fx-pub)"
   rc=0; child env -u PRIVACY_GH_TOKEN GITHUB_ACTIONS=true CI=true PATH="$mock:$PATH" MOCK_GH_DIR="$gh" GH_TOKEN=sweep-token "$0" --estate "$compose" >"$t/nt.out" 2>/dev/null || rc=$?
@@ -1122,6 +1134,10 @@ fi
 # environment that is not recognised errs towards withholding. --self-test is the one mode
 # that never reads a repo, and its children clear these on purpose.
 if [ -n "${GITHUB_ACTIONS:-}${CI:-}${GITHUB_STEP_SUMMARY:-}" ]; then REDACT=1; fi
+# A document is output too: --json prints it to stdout (the run log) and --json-out writes a
+# file a workflow may upload, so under redaction an estate document is always the public-only
+# one. Otherwise `--estate --json` in CI would name every private repo in the log.
+if [ "$REDACT" = 1 ] && [ "${1:-}" = "--estate" ]; then PUBLIC_ONLY=1; fi
 if [ "$PUBLIC_ONLY" = 1 ]; then
   [ "${1:-}" = "--estate" ] || die "--public-only applies to --estate only"
 fi
