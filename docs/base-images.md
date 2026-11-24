@@ -170,8 +170,43 @@ exit 2.
   process exit is whole-sweep). **`exit: 0` in the document therefore means the public view
   is clean and says nothing about the estate: never render it as estate-green.** The
   document can never say whether a withheld repo is healthy.
-- The run log and the step summary still print every row, private repos included. That is
-  existing behaviour this change does not touch (SERV-350).
+- The run log and the step summary are covered by redaction (next section), not by this
+  filter.
+
+### Redaction in the run log (SERV-350)
+
+The run log, the GitHub Actions annotations and the step summary are as public as the
+document, and the sweep reads private repos. So under redaction `check-base-images.sh
+--estate` asks the same privacy question as `--public-only` (same `PRIVACY_GH_TOKEN`, same
+fail-closed rule: a 404, an error or anything but exactly `private: false` is private) and
+prints a row, an annotation or a summary line only for a repo that answered public. A
+private repo, or one whose privacy could not be read, contributes counts and nothing else:
+
+```
+2 repo(s) withheld (private or privacy unknown): 1 finding(s), 0 warning(s)
+```
+
+No name, path, image or detail reaches stdout, stderr, an annotation or the summary file;
+`gh`'s own error text is held back for those repos too. A withheld repo's findings still
+count toward the process exit and the footer, so the Monday alarm still goes red on a
+private finding. A repo whose privacy lookup failed is also one finding on its own (same as
+`--public-only`).
+
+- **The switch.** Redaction is on when `--redact` is given (the sweep wrapper always passes
+  it) or when `GITHUB_ACTIONS`, `CI` or `GITHUB_STEP_SUMMARY` is set to anything, even
+  `CI=false`. Detection errs toward withholding so a runner that is not recognised does not
+  print private detail; the explicit flag is what a workflow should rely on. There is no
+  flag to turn it off.
+- **Redaction implies `--public-only`** for `--estate`, so `--json` and `--json-out` carry
+  only public repos even when nobody passed the flag; a document is output too.
+- **Redaction needs the token.** `--estate` under redaction without `PRIVACY_GH_TOKEN` is
+  exit 2, and file and `--dir` modes (which know no repo, so cannot tell a private path)
+  refuse with exit 2.
+- **Getting the private detail.** Run it where redaction is off, on the box or a checkout with
+  a token that can read the private repos and none of those variables set:
+  `make base-images-check`. Outside CI nothing is withheld and the output is unchanged. The
+  Monday failure summary says so, because the fix list for a private repo is no longer in
+  the log.
 
 ### Where it is published, and how fresh it is
 

@@ -94,6 +94,8 @@ workflow-size:
 # `gh api` and checks each FROM against endoflife.date — the same thing base-images.yml
 # does every Monday. `dir=` checks local checkouts instead, which is the form to run
 # before pushing a Dockerfile change. Exit 2 (not 0) when endoflife.date is unreachable.
+# Run here, outside CI, it prints every repo in full; in CI the log is public, so private repos
+# are counts only (SERV-350) and this is how the operator gets the detail.
 # Usage: make base-images-check                (the estate, as GitHub has it)
 #        make base-images-check dir=~/projects (every Dockerfile under a tree)
 base-images-check:
