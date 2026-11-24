@@ -24,8 +24,9 @@ name: Base Images
 #
 # ── WHAT A RED RUN MEANS ─────────────────────────────────────────────────────────────
 #
-# Read the step summary: one row per FROM line, with the repo path, the cycle, when it
-# ended, and the newest supported cycle. Fix it in the service repo (bump the tag, build,
+# Read the step summary: one row per FROM line of a PUBLIC repo, with the repo path, the
+# cycle, when it ended, and the newest supported cycle; private repos are counts only (the
+# log is public). Run `make base-images-check` locally for those. Fix it in the service repo (bump the tag, build,
 # release), then re-run this from the Actions tab. A scheduled run that fails emails the
 # repo owner; that is the alarm, and it is deliberately not gated on any deploy, since a
 # stale base image is a rotation-class problem and not a "stop the deploy" one.
@@ -41,7 +42,12 @@ name: Base Images
 # hold public data: this repo is public, and an artifact, a log and a data branch are all
 # world-readable. The `publish` job force-pushes that one file as a single orphan commit.
 # It is the only job with contents: write, never runs for a pull request, and only for a
-# ref that is main. The run log and step summary still print every row (SERV-350).
+# ref that is main.
+#
+# The run log, annotations and step summary are world-readable too, so the sweep runs with
+# --redact (SERV-350): a public repo gets a full row, a private one (or one whose privacy
+# could not be read) is a count. The sweep still goes red on a private finding; to see which
+# repo and line, run `make base-images-check` locally, where nothing is withheld.
 #
 # A week WITH findings must still publish: the sweep step exits 1, so the upload step and
 # the publish job both run on `!cancelled()` and not on the default success(). A red sweep
@@ -131,6 +137,11 @@ jobs:
             echo "Each row above names the repo, file and line. The fix lives in that repo:"
             echo "bump the tag to the newest supported cycle the row names, build, and release."
             echo "Then re-run this workflow from the Actions tab."
+            echo
+            echo "This log is public, so a private repo (or one whose privacy could not be read)"
+            echo "shows only as a count of withheld repos, findings and warnings. For the repo,"
+            echo "file and line, run \`make base-images-check\` on the box or a checkout with"
+            echo "a token that can read the private repos."
             echo
             echo "An \`UNMAPPED\` row means the image's product is not in \`PRODUCT_MAP\` in"
             echo "\`scripts/check-base-images.sh\` — add the mapping rather than an exemption."

@@ -10,7 +10,10 @@
 # 1 with the file present). The job still fails on findings, so the Monday email still comes.
 #
 # The sweep is --public-only: the file this writes is already filtered, so the artifact and
-# the branch downstream never hold private data. See docs/base-images.md.
+# the branch downstream never hold private data. It is also --redact (SERV-350), passed
+# explicitly even though GITHUB_ACTIONS implies it: the run log and step summary of a public
+# repo's workflow are world-readable, so a private repo is reported as counts only there. The
+# flag is the contract; the environment detection is the backstop. See docs/base-images.md.
 #
 # ENV
 #   RUNNER_TEMP        where the document is written ($RUNNER_TEMP/out/base-images.json)
@@ -37,7 +40,7 @@ mkdir -p "$out_dir" || die "cannot create $out_dir"
 rm -f -- "$out"
 
 rc=0
-"$check" --estate "$REPO_ROOT/docker-compose.yml" --json-out "$out" --public-only || rc=$?
+"$check" --estate "$REPO_ROOT/docker-compose.yml" --json-out "$out" --public-only --redact || rc=$?
 
 if [ "$rc" -le 1 ] && [ -s "$out" ]; then
   echo "published=true" >>"$GITHUB_OUTPUT"

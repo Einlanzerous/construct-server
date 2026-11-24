@@ -56,13 +56,16 @@
 #   --json-out FILE        write the same document to FILE (the human output stays on stdout)
 #   --public-only          --estate only: publish only repos the PRIVACY_GH_TOKEN can see as
 #                          public (see MACHINE-READABLE OUTPUT)
+#   --redact               --estate only: print detail only for public repos (see REDACTION).
+#                          Implied by GITHUB_ACTIONS, CI or GITHUB_STEP_SUMMARY being set to
+#                          anything; there is no flag to turn it off, unset those instead.
 #
 # ENV
 #   BASE_IMAGE_WARN_DAYS   warn when EOL is within this many days (default 90)
 #   BASE_IMAGE_POLICY_DIR  read <product>.json from here instead of the API
 #   BASE_IMAGE_TODAY       YYYY-MM-DD, overrides the clock (self-test)
 #   GH_TOKEN / GITHUB_TOKEN  what `gh api` authenticates with in --estate mode
-#   PRIVACY_GH_TOKEN       --public-only: the token that decides which repos are public. It must
+#   PRIVACY_GH_TOKEN       --public-only and --redact: the token that decides which repos are public. It must
 #                          be one that cannot read private repos (a 404 is the answer for them);
 #                          there is no fallback to GH_TOKEN, which can read them
 #
@@ -85,9 +88,23 @@
 # PRIVACY_GH_TOKEN exits 0 and prints exactly `false`. A 404 or `true` withholds it (counted in
 # summary.withheldRepos); any other answer withholds it and is itself a finding
 # (summary.visibilityUnreadable), because "could not tell" must be loud. Withheld repos are
-# still swept, so they still count toward the PROCESS exit and still appear in the human log
-# (SERV-350); the document's summary and exit describe only what it publishes, so `exit: 0`
-# means the public view is clean and says nothing about the estate.
+# still swept, so they still count toward the PROCESS exit and, outside CI, still appear in the
+# human log (see REDACTION). The document's summary and exit describe only what it publishes,
+# so `exit: 0` means the public view is clean and says nothing about the estate.
+#
+# REDACTION (SERV-350). This repo is public, so a CI run log, its annotations and its step
+# summary are world-readable, and the sweep token can read private repos. Under redaction a
+# repo is shown in full only when the privacy lookup above (the same one --public-only uses,
+# same fail-closed rule) says public. A private repo, or one whose privacy could not be
+# determined, prints nothing about itself: no name, path, image or detail, in stdout, stderr,
+# annotations or the step summary. Only a count prints, e.g. "2 repo(s) withheld (private or
+# privacy unknown): 1 finding(s), 0 warning(s)". Findings in a withheld repo still count
+# toward the process exit, so the Monday alarm still goes red; to see what to fix, run it
+# locally (`make base-images-check`), where redaction is off. Redaction is on when --redact is
+# given (the workflow passes it) or when GITHUB_ACTIONS, CI or GITHUB_STEP_SUMMARY is set to
+# anything: an unrecognised CI that sets none of those is the only way to get detail, which
+# is why the explicit flag exists. File and --dir modes have no privacy lookup, so they
+# refuse (exit 2) under redaction rather than print paths.
 #
 # DEVIATION (SERV-294). A script with this much control flow wants a real language
 # (PRINCIPLES section 1). The JSON mode extends the bash anyway, deliberately; the port is
@@ -270,6 +287,8 @@ ROWS_FILE="$WORK/rows"         # every published repo's rows
 REPOS_FILE="$WORK/repos"       # every published repo's state
 : >"$ROWS_BUF"; : >"$ROWS_FILE"; : >"$REPOS_FILE"
 CUR_REPO=""; CUR_PATH=""
+CUR_REDACT=0                   # 1 while sweeping a repo whose detail must not be printed
+RED_REPOS=0; RED_FIND=0; RED_WARN=0
 R_LINE=""; R_REF=""; R_IMAGE=""; R_TAG=""; R_DIGEST=""; R_PRODUCT=""
 R_CYCLE=""; R_EOL=""; R_EST="false"; R_NEWEST=""
 WITHHELD=0; VISUNREAD=0
@@ -293,12 +312,16 @@ flush_repo() {
 # images[] row (and never a fake `line 0`); repos[] carries it.
 emit() {
   local status="$1" where="$2" image="$3" detail="$4"
-  ROWS+=("$status	$where	$image	$detail")
   case "$status" in
     EOL|FLOATING|UNMAPPED|UNKNOWN|UNRESOLVED) ERRORS=$((ERRORS + 1));;
     SOON) WARNINGS=$((WARNINGS + 1));;
     OK) OKS=$((OKS + 1));;
   esac
+  # A withheld repo is counted above (the exit and the footer still see it) and goes no
+  # further: not the table, the summary, the annotations nor the log. Everything that can
+  # name it is below this line.
+  [ "$CUR_REDACT" = 1 ] && return 0
+  ROWS+=("$status	$where	$image	$detail")
   if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
     local file="${where%%:*}" line="${where##*:}" level=notice
     case "$status" in SOON) level=warning;; OK) level=;; *) level=error;; esac
@@ -491,17 +514,24 @@ check_estate() {
   [ -f "$compose" ] || die "no compose file at $compose"
   command -v gh >/dev/null 2>&1 || die "required dependency 'gh' not found in PATH (needed for --estate)"
   local repo paths path body n=0 published state failed ok_files unreadable_paths
+  local vis err0 warn0 gherr="$WORK/gh.err"
   while read -r repo; do
-    # Withheld repos are still swept below, so they still count toward the process exit
-    # and still appear in the human log; only the document omits them.
-    published=1
-    if [ "$PUBLIC_ONLY" = 1 ]; then
-      case "$(repo_visibility "$repo")" in
+    # Withheld repos are still swept below, so they still count toward the process exit;
+    # --public-only omits them from the document and --redact from the printed output.
+    published=1; CUR_REDACT=0
+    if [ "$PUBLIC_ONLY" = 1 ] || [ "$REDACT" = 1 ]; then
+      vis="$(repo_visibility "$repo")"
+      case "$vis" in
         public) ;;
-        private) published=0; WITHHELD=$((WITHHELD + 1));;
-        *) published=0; VISUNREAD=$((VISUNREAD + 1));;
+        private)
+          if [ "$PUBLIC_ONLY" = 1 ]; then published=0; WITHHELD=$((WITHHELD + 1)); fi
+          CUR_REDACT="$REDACT";;
+        *)
+          if [ "$PUBLIC_ONLY" = 1 ]; then published=0; fi
+          VISUNREAD=$((VISUNREAD + 1)); CUR_REDACT="$REDACT";;
       esac
     fi
+    err0="$ERRORS"; warn0="$WARNINGS"
     CUR_REPO="$repo"; CUR_PATH=""
     failed=0; ok_files=0; unreadable_paths=""
     # HEAD on the trees API is the default branch. A repo that cannot be read is a
@@ -512,12 +542,15 @@ check_estate() {
       emit UNRESOLVED "$repo:0" "$repo" "could not read the repo tree via gh api (${paths//$'\n'/ }) — does the token have access?"
       state=unreadable
     elif [ -z "$paths" ]; then
-      printf '%-10s %-50s %s\n' "-" "$repo" "no Dockerfile"
+      [ "$CUR_REDACT" = 1 ] || printf '%-10s %-50s %s\n' "-" "$repo" "no Dockerfile"
       state=no_dockerfile
     else
       while read -r path; do
         CUR_PATH="$path"
-        if ! body="$(gh api "repos/$GITHUB_OWNER/$repo/contents/$path" -H 'Accept: application/vnd.github.raw+json')"; then
+        # gh's own error text may carry the repo or path, so it is held back and only
+        # replayed for a repo whose detail is allowed out.
+        if ! body="$(gh api "repos/$GITHUB_OWNER/$repo/contents/$path" -H 'Accept: application/vnd.github.raw+json' 2>"$gherr")"; then
+          [ "$CUR_REDACT" = 1 ] || cat "$gherr" >&2
           emit UNRESOLVED "$repo/$path:0" "$path" "could not read the file via gh api"
           failed=$((failed + 1)); unreadable_paths="${unreadable_paths:+$unreadable_paths$PATH_SEP}$path"
           continue
@@ -534,20 +567,31 @@ check_estate() {
       printf '%s\n' "$repo$RECORD_SEP$state$RECORD_SEP$unreadable_paths" >>"$REPOS_FILE"
     fi
     flush_repo "$published"
+    if [ "$CUR_REDACT" = 1 ]; then
+      RED_REPOS=$((RED_REPOS + 1)); RED_FIND=$((RED_FIND + ERRORS - err0)); RED_WARN=$((RED_WARN + WARNINGS - warn0))
+    fi
+    CUR_REDACT=0
   done < <(estate_repos "$compose")
   [ "$n" -gt 0 ] || die "no Dockerfiles found across the estate — that is not a clean result"
+  # Counts only, never a name: this reaches the world-readable log.
   if [ "$PUBLIC_ONLY" = 1 ]; then
-    # Counts only, never a name: this reaches the world-readable log.
     err "WITHHELD $WITHHELD repo(s) from the published document (not public)"
-    if [ "$VISUNREAD" -gt 0 ]; then
-      err "$VISUNREAD repo(s) with unreadable visibility, withheld and counted as findings"
-      ERRORS=$((ERRORS + VISUNREAD))
-    fi
   fi
+  if [ "$VISUNREAD" -gt 0 ]; then
+    err "$VISUNREAD repo(s) with unreadable visibility, withheld and counted as findings"
+    ERRORS=$((ERRORS + VISUNREAD))
+  fi
+}
+
+# File and --dir modes know no repo, so they cannot tell a private path from a public one.
+# Under redaction that is "privacy unknown", which is withheld, so they do not run at all.
+redact_refuse() {
+  [ "$REDACT" != 1 ] || die "file and --dir modes print local paths and cannot tell whether they are private; refusing under redaction (CI, GITHUB_STEP_SUMMARY or --redact). Run it locally."
 }
 
 check_files() {
   local f
+  redact_refuse
   [ $# -gt 0 ] || die "no Dockerfiles given"
   for f in "$@"; do
     [ -f "$f" ] || die "no such file: $f"
@@ -559,6 +603,7 @@ check_files() {
 
 check_dir() {
   local root="$1"
+  redact_refuse
   [ -d "$root" ] || die "no such directory: $root"
   local files
   mapfile -t files < <(find "$root" -type d \( -name node_modules -o -name vendor -o -name .git \) -prune -o \
@@ -584,7 +629,7 @@ self_test_json() {
     if jq -e "$3" "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1: jq filter false: $3"; fi
   }
   # child ENV... -- ARGS: a run of this script with the fixture policy and clock.
-  child() { env GITHUB_ACTIONS= GITHUB_STEP_SUMMARY= BASE_IMAGE_POLICY_DIR="$t/policy" BASE_IMAGE_TODAY=2026-09-11 "$@"; }
+  child() { env GITHUB_ACTIONS= CI= GITHUB_STEP_SUMMARY= BASE_IMAGE_POLICY_DIR="$t/policy" BASE_IMAGE_TODAY=2026-09-11 "$@"; }
 
   echo "self-test: the document"
 
@@ -661,7 +706,7 @@ EOF
 
   # Exit 2 prints nothing to stdout and leaves no file, even over a stale one.
   echo stale >"$t/stale.json"
-  rc=0; env GITHUB_ACTIONS= GITHUB_STEP_SUMMARY= BASE_IMAGE_POLICY_DIR="$t/nowhere" "$0" --json --json-out "$t/stale.json" "$t/clean.Dockerfile" >"$t/x.out" 2>/dev/null || rc=$?
+  rc=0; env GITHUB_ACTIONS= CI= GITHUB_STEP_SUMMARY= BASE_IMAGE_POLICY_DIR="$t/nowhere" "$0" --json --json-out "$t/stale.json" "$t/clean.Dockerfile" >"$t/x.out" 2>/dev/null || rc=$?
   if [ "$rc" = 2 ] && [ ! -s "$t/x.out" ] && [ ! -e "$t/stale.json" ]; then ok "policy unreachable: exit 2, empty stdout, stale --json-out removed"
   else bad "policy unreachable: exit $rc, stdout bytes $(wc -c <"$t/x.out"), file present: $([ -e "$t/stale.json" ] && echo yes || echo no)"; fi
 
@@ -783,6 +828,99 @@ JSON
   rc=0; child env PRIVACY_GH_TOKEN=public-token "$0" --public-only "$t/clean.Dockerfile" >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 2 ]; then ok "--public-only outside --estate: exit 2"; else bad "--public-only on files: exit $rc"; fi
 
+  echo "self-test: redaction in CI output (mock gh)"
+  # A public repo with findings, and three repos that must not be named anywhere a CI log
+  # reaches: private (404 for the low-privilege token) with an EOL and a SOON row, one whose
+  # privacy lookup fails (500) with a floating tag, and private:true with no Dockerfile. A
+  # private repo whose file read fails, and a public one that does the same as the control
+  # that gh's own error text is only held back for the private one.
+  mk fx-rpub false 'pubpath/Dockerfile=FROM golang:1.25'
+  mk fx-rpriv none 'secretpath/Dockerfile=FROM alpine:3.20
+FROM nginx:1.30-alpine'
+  mk fx-rvis 500 'vispath/Dockerfile=FROM nginx:alpine'
+  mk fx-rflag true
+  MK_FAIL_PATHS='failpath/Dockerfile' mk fx-rfail none 'failpath/Dockerfile=FROM alpine:3.23'
+  MK_FAIL_PATHS='failpubpath/Dockerfile' mk fx-rpubfail false 'failpubpath/Dockerfile=FROM alpine:3.23'
+  local leak='fx-rpriv|fx-rvis|fx-rflag|fx-rfail|secretpath|vispath|failpath|3\.20|nginx'
+  compose="$(compose_for redact fx-rpub fx-rpriv fx-rvis fx-rflag fx-rfail fx-rpubfail)"
+  # red NAME [env...] -- [flags...]: the redaction fixture with the given CI environment;
+  # stdout, stderr, the step summary file and the exit are kept under $t/NAME.
+  red() {
+    local n="$1" ev=() fl=(); shift
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do ev+=("$1"); shift; done
+    [ $# -eq 0 ] || shift; fl=("$@")
+    : >"$t/$n.sum"
+    rc=0; child env PATH="$mock:$PATH" MOCK_GH_DIR="$gh" GH_TOKEN=sweep-token PRIVACY_GH_TOKEN=public-token \
+      "${ev[@]+"${ev[@]}"}" "$0" "${fl[@]+"${fl[@]}"}" --estate "$compose" >"$t/$n.out" 2>"$t/$n.err" || rc=$?
+  }
+  red ci GITHUB_ACTIONS=true CI=true GITHUB_STEP_SUMMARY="$t/ci.sum"
+  if [ "$rc" = 1 ]; then ok "redact: a CI run exits 1 on the withheld findings (the alarm still goes red)"; else bad "redact: CI exit $rc, expected 1"; fi
+  if ! grep -qE "$leak" "$t/ci.out" "$t/ci.err" "$t/ci.sum"; then
+    ok "redact: no withheld name, path or image in stdout, stderr, annotations or the step summary"
+  else bad "redact: a withheld repo leaked: $(grep -hoE "$leak" "$t/ci.out" "$t/ci.err" "$t/ci.sum" | sort -u | tr '\n' ' ')"; fi
+  if ! grep -E '^::' "$t/ci.out" | grep -qE "$leak"; then ok "redact: no annotation names a withheld repo"; else bad "redact: an annotation leaked"; fi
+  if grep -qE '^::error file=fx-rpub/pubpath/Dockerfile,line=1::EOL golang:1\.25' "$t/ci.out" \
+     && grep -qE '^EOL +fx-rpub/pubpath/Dockerfile:1 +golang:1\.25' "$t/ci.out" \
+     && grep -qF '`fx-rpub/pubpath/Dockerfile:1`' "$t/ci.sum"; then
+    ok "redact: the public repo is shown in full (log row, annotation and step summary row)"
+  else bad "redact: the public repo's detail is missing from the log, annotation or summary"; fi
+  if grep -q 'failpubpath' "$t/ci.out" && grep -q 'HTTP 502' "$t/ci.err"; then
+    ok "redact: a public repo's gh error text is still replayed (control for the private one)"
+  else bad "redact: control lost: public file-read failure not shown"; fi
+  # 4 withheld repos: rpriv (EOL + SOON), rvis (FLOATING), rflag (nothing), rfail (UNRESOLVED).
+  local summary_line='4 repo(s) withheld (private or privacy unknown): 3 finding(s), 1 warning(s)'
+  if grep -qF "$summary_line" "$t/ci.out" && grep -qF "$summary_line" "$t/ci.sum"; then
+    ok "redact: the log and the step summary carry the withheld counts and nothing else"
+  else bad "redact: expected '$summary_line' in the log and summary: $(grep -h 'withheld' "$t/ci.out" "$t/ci.sum" | tr '\n' '|')"; fi
+  # The footer still counts the whole estate: public EOL + public UNRESOLVED + 3 withheld + 1 unreadable visibility.
+  if grep -q '^base images: 6 finding(s), 1 warning(s)' "$t/ci.out"; then ok "redact: the footer still counts the whole estate"
+  else bad "redact: footer: $(grep '^base images' "$t/ci.out")"; fi
+
+  # The same estate outside CI is unchanged: everything shown, and the same exit.
+  local ci_rc=1
+  red local
+  if [ "$rc" = "$ci_rc" ]; then ok "local: the exit is the same as the CI run's (1)"; else bad "local: exit $rc, CI exit $ci_rc"; fi
+  local missing=""
+  for w in fx-rpriv/secretpath/Dockerfile:1 fx-rpriv/secretpath/Dockerfile:2 fx-rvis/vispath/Dockerfile:1 'fx-rflag +no Dockerfile' 'fx-rfail/failpath/Dockerfile:0' alpine:3.20 nginx:alpine nginx:1.30-alpine fx-rpub/pubpath/Dockerfile:1; do
+    grep -qE "$w" "$t/local.out" || missing="$missing [$w]"
+  done
+  if [ -z "$missing" ]; then ok "local: every repo, path and image is shown in full"; else bad "local: missing from the local run:$missing"; fi
+  if ! grep -q 'withheld' "$t/local.out"; then ok "local: no withheld line"; else bad "local: a withheld line printed outside CI"; fi
+
+  # Fail safe: anything that looks like a hosted run, or the explicit flag, redacts on its own.
+  red ci-only CI=1
+  if [ "$rc" = 1 ] && ! grep -qE "$leak" "$t/ci-only.out" "$t/ci-only.err"; then ok "redact: CI alone (an unrecognised CI) withholds"; else bad "redact: CI=1 alone leaked or exit $rc"; fi
+  red flag -- --redact
+  if [ "$rc" = 1 ] && ! grep -qE "$leak" "$t/flag.out" "$t/flag.err"; then ok "redact: --redact alone withholds, with no CI variable"; else bad "redact: --redact alone leaked or exit $rc"; fi
+  red sumvar GITHUB_STEP_SUMMARY="$t/sumvar.sum"
+  if [ "$rc" = 1 ] && ! grep -qE "$leak" "$t/sumvar.out" "$t/sumvar.err" "$t/sumvar.sum"; then ok "redact: GITHUB_STEP_SUMMARY alone withholds"; else bad "redact: step summary var alone leaked or exit $rc"; fi
+  red falsy CI=false
+  if [ "$rc" = 1 ] && ! grep -qE "$leak" "$t/falsy.out" "$t/falsy.err"; then ok "redact: CI=false still withholds (set to anything is on)"; else bad "redact: CI=false leaked or exit $rc"; fi
+
+  # Redaction composes with the filter exactly as the sweep wrapper runs them.
+  red both GITHUB_ACTIONS=true CI=true -- --json --public-only --redact
+  if [ "$rc" = 1 ] && ! grep -qE "$leak" "$t/both.out" "$t/both.err" && jq -e '.scope == "public-only"' "$t/both.out" >/dev/null 2>&1; then
+    ok "redact: with --json --public-only, the document and the log are both clean"
+  else bad "redact: --json --public-only --redact leaked or exit $rc"; fi
+
+  # A private repo's finding alone, next to a clean public one: red process, counts only.
+  compose="$(compose_for redact2 fx-pub fx-priv404)"
+  red only GITHUB_ACTIONS=true CI=true
+  if [ "$rc" = 1 ] && ! grep -qE 'fx-priv404|hiddenpath|3\.20' "$t/only.out" "$t/only.err" \
+     && grep -qF '1 repo(s) withheld (private or privacy unknown): 1 finding(s), 0 warning(s)' "$t/only.out"; then
+    ok "redact: only a private finding: exit 1, one withheld repo, one finding, no detail"
+  else bad "redact: private-only finding: exit $rc, $(grep -h withheld "$t/only.out" | tr '\n' '|')"; fi
+  compose="$(compose_for redact3 fx-pub)"
+  red clean GITHUB_ACTIONS=true CI=true
+  if [ "$rc" = 0 ] && grep -qF '0 repo(s) withheld' "$t/clean.out"; then ok "redact: a clean public estate still exits 0"; else bad "redact: clean estate exit $rc"; fi
+
+  # No privacy token under redaction is exit 2, never a guess; file modes refuse too.
+  compose="$(compose_for redact4 fx-pub)"
+  rc=0; child env -u PRIVACY_GH_TOKEN GITHUB_ACTIONS=true CI=true PATH="$mock:$PATH" MOCK_GH_DIR="$gh" GH_TOKEN=sweep-token "$0" --estate "$compose" >"$t/nt.out" 2>/dev/null || rc=$?
+  if [ "$rc" = 2 ] && [ ! -s "$t/nt.out" ]; then ok "redact: no PRIVACY_GH_TOKEN in CI: exit 2, nothing printed"; else bad "redact: no token in CI: exit $rc"; fi
+  rc=0; child env GITHUB_ACTIONS=true CI=true "$0" "$t/matrix.Dockerfile" >"$t/rf.out" 2>/dev/null || rc=$?
+  if [ "$rc" = 2 ] && [ ! -s "$t/rf.out" ]; then ok "redact: file mode in CI refuses (exit 2): it cannot tell a private path"; else bad "redact: file mode in CI: exit $rc"; fi
+
   return "$fails"
 }
 
@@ -822,11 +960,11 @@ JSON
     set +e
     # GITHUB_STEP_SUMMARY is cleared as well as GITHUB_ACTIONS: the children would
     # otherwise append eleven fixture tables above the real sweep's in the run summary.
-    out="$(BASE_IMAGE_POLICY_DIR="$t/policy" BASE_IMAGE_TODAY=2026-09-11 GITHUB_ACTIONS= GITHUB_STEP_SUMMARY= "$0" "$file" 2>&1)"; rc=$?
+    out="$(BASE_IMAGE_POLICY_DIR="$t/policy" BASE_IMAGE_TODAY=2026-09-11 GITHUB_ACTIONS= CI= GITHUB_STEP_SUMMARY= "$0" "$file" 2>&1)"; rc=$?
     set -e
     # The same fixture under --json: same process exit, and stdout alone is the document.
     local jrc=0
-    BASE_IMAGE_POLICY_DIR="$t/policy" BASE_IMAGE_TODAY=2026-09-11 GITHUB_ACTIONS= GITHUB_STEP_SUMMARY= "$0" --json "$file" >"$t/$name.json" 2>/dev/null || jrc=$?
+    BASE_IMAGE_POLICY_DIR="$t/policy" BASE_IMAGE_TODAY=2026-09-11 GITHUB_ACTIONS= CI= GITHUB_STEP_SUMMARY= "$0" --json "$file" >"$t/$name.json" 2>/dev/null || jrc=$?
     if [ "$jrc" != "$rc" ]; then
       printf '  FAIL  %-28s --json exit %s differs from plain exit %s\n' "$name" "$jrc" "$rc"; fails=$((fails + 1))
     elif ! jq -e '.schema == 1 and (.images | type == "array")' "$t/$name.json" >/dev/null 2>&1; then
@@ -897,7 +1035,7 @@ FROM --platform=linux/amd64 alpine:3.23@sha256:000000000000000000000000000000000
 EOF
   # Missing policy must be exit 2, never 0.
   set +e
-  BASE_IMAGE_POLICY_DIR="$t/nowhere" GITHUB_ACTIONS= GITHUB_STEP_SUMMARY= "$0" "$t/clean.Dockerfile" >/dev/null 2>&1; rc=$?
+  BASE_IMAGE_POLICY_DIR="$t/nowhere" GITHUB_ACTIONS= CI= GITHUB_STEP_SUMMARY= "$0" "$t/clean.Dockerfile" >/dev/null 2>&1; rc=$?
   set -e
   if [ "$rc" = 2 ]; then printf '  ok    %-28s exit 2\n' "policy-unavailable"; else printf '  FAIL  policy-unavailable expected exit 2, got %s\n' "$rc"; fails=$((fails + 1)); fi
 
@@ -955,7 +1093,7 @@ write_document() {
 
 # ── main ─────────────────────────────────────────────────────────────────────────────
 
-JSON=0; JSON_OUT=""; PUBLIC_ONLY=0; MODE=files
+JSON=0; JSON_OUT=""; PUBLIC_ONLY=0; REDACT=0; MODE=files
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -964,6 +1102,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] && [ -n "$2" ] || die "--json-out needs a file"
       JSON_OUT="$2"; shift;;
     --public-only) PUBLIC_ONLY=1;;
+    --redact) REDACT=1;;
     *) ARGS+=("$1");;
   esac
   shift
@@ -978,9 +1117,16 @@ if [ -n "$JSON_OUT" ]; then
   rm -f -- "$JSON_OUT"
   [ -d "$(dirname -- "$JSON_OUT")" ] || die "no such directory for --json-out: $(dirname -- "$JSON_OUT")"
 fi
+# Redaction is on whenever this looks like a hosted run, whatever it is called: the
+# variables are tested for being set to anything at all (CI=false still redacts), so an
+# environment that is not recognised errs towards withholding. --self-test is the one mode
+# that never reads a repo, and its children clear these on purpose.
+if [ -n "${GITHUB_ACTIONS:-}${CI:-}${GITHUB_STEP_SUMMARY:-}" ]; then REDACT=1; fi
 if [ "$PUBLIC_ONLY" = 1 ]; then
   [ "${1:-}" = "--estate" ] || die "--public-only applies to --estate only"
-  [ -n "${PRIVACY_GH_TOKEN:-}" ] || die "--public-only needs PRIVACY_GH_TOKEN (a token that cannot read private repos); there is no fallback to GH_TOKEN"
+fi
+if [ "${1:-}" = "--estate" ] && { [ "$PUBLIC_ONLY" = 1 ] || [ "$REDACT" = 1 ]; }; then
+  [ -n "${PRIVACY_GH_TOKEN:-}" ] || die "--public-only and redaction need PRIVACY_GH_TOKEN (a token that cannot read private repos); there is no fallback to GH_TOKEN"
 fi
 
 case "${1:-}" in
@@ -995,6 +1141,9 @@ if [ -n "$JSON_OUT" ] || [ "$JSON" = 1 ]; then write_document; fi
 
 echo
 if [ "$POLICY_FROM_API" = 1 ]; then policy_src="$API"; else policy_src="$POLICY_DIR"; fi
+if [ "$REDACT" = 1 ]; then
+  echo "$RED_REPOS repo(s) withheld (private or privacy unknown): $RED_FIND finding(s), $RED_WARN warning(s) — run make base-images-check locally for the detail"
+fi
 echo "base images: $ERRORS finding(s), $WARNINGS warning(s), $OKS ok (policy: $policy_src, today: $TODAY)"
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -1003,6 +1152,10 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo
     if [ "$PUBLIC_ONLY" = 1 ]; then
       echo "Withheld from the published file: $WITHHELD repo(s) not public, $VISUNREAD repo(s) with unreadable visibility."
+      echo
+    fi
+    if [ "$REDACT" = 1 ]; then
+      echo "$RED_REPOS repo(s) withheld (private or privacy unknown): $RED_FIND finding(s), $RED_WARN warning(s). Their detail is not printed here because this log is public; run \`make base-images-check\` locally."
       echo
     fi
     echo "| status | where | image | detail |"

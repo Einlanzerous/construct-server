@@ -131,7 +131,7 @@ if [ "$rc" = 2 ] && [ ! -s "$SWEEP_OUT" ] && [ ! -e "$RUNNER_TEMP/out/base-image
 sweep 2 1
 if [ "$rc" = 2 ] && [ ! -s "$SWEEP_OUT" ]; then ok "exit 2 is never published even if a file appeared"; else bad "exit 2 with file: rc $rc, output '$(cat "$SWEEP_OUT")'"; fi
 sweep 0 1
-if grep -qx -e --public-only "$T/fake.argv" && grep -qx -e --json-out "$T/fake.argv" && grep -qx -e --estate "$T/fake.argv"; then ok "the wrapper runs the estate sweep with --json-out and --public-only"; else bad "wrapper argv: $(tr '\n' ' ' <"$T/fake.argv")"; fi
+if grep -qx -e --public-only "$T/fake.argv" && grep -qx -e --json-out "$T/fake.argv" && grep -qx -e --estate "$T/fake.argv" && grep -qx -e --redact "$T/fake.argv"; then ok "the wrapper runs the estate sweep with --json-out, --public-only and --redact (SERV-350)"; else bad "wrapper argv: $(tr '\n' ' ' <"$T/fake.argv")"; fi
 
 echo "test-publish-base-images: base-images.yml structure"
 # The workflow without its comment lines: prose that names `always()` or `contents: write`
