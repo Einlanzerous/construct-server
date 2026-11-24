@@ -36,6 +36,9 @@ describe("the guard must be able to fail", () => {
     ["no-date-newest-ok", 0, "OK", "FROM nginx:1.31-alpine\n"],
     ["arg-resolved", 0, "OK", "ARG UBUNTU=24.04\nFROM ubuntu:${UBUNTU} AS sdk\n"],
     ["arg-unresolved", 1, "UNRESOLVED", "FROM ubuntu:${UBUNTU}\n"],
+    // A FROM that names no image cannot be judged, so it is a finding and not a skip.
+    ["from-flags-only", 1, "UNRESOLVED", "FROM --platform=linux/amd64\nFROM alpine:3.23\n"],
+    ["from-nothing", 1, "UNRESOLVED", "FROM \nFROM alpine:3.23\n"],
     ["platform-flag-and-digest", 0, "OK", `FROM --platform=linux/amd64 alpine:3.23@sha256:${D} AS x\n`],
   ];
 

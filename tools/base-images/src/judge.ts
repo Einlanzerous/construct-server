@@ -84,7 +84,13 @@ export async function checkDockerfile(
       }
     }
 
-    if (ref === "" || ref === "scratch") continue;
+    // A FROM with only flags names no image. Skipping it would turn "could not read this line"
+    // into "nothing to report"; it is a finding, like any other line the guard cannot judge.
+    if (ref === "") {
+      run.report("UNRESOLVED", where, f, ref, "FROM names no image");
+      continue;
+    }
+    if (ref === "scratch") continue;
     if (stages.has(ref)) continue; // FROM <earlier stage>
 
     const { repo, tag, digest } = splitRef(ref);
