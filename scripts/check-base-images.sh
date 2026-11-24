@@ -377,7 +377,9 @@ check_dockerfile() {
 
     local cycle pf newest
     pf="$(policy_file "$product")"
-    newest="$(jq -r '[.result.releases[] | select(.isEol == false)] | first | .name' "$pf")"
+    # `// empty`: with no supported cycle left `first` is null, which -r would print as the
+    # string "null" and the document would carry it as a value.
+    newest="$(jq -r '[.result.releases[] | select(.isEol == false)] | first | .name // empty' "$pf")"
     R_PRODUCT="$product"; R_NEWEST="$newest"
     if [ -n "$forced" ]; then cycle="$forced"; else cycle="$(tag_cycle "$product" "$tag")"; fi
     case "$cycle" in
@@ -432,7 +434,7 @@ check_dockerfile() {
     if [ -z "$eol_from" ] && [ -n "$est_eol" ]; then R_EST=true; fi
 
     if [ "$is_eol" = "true" ] || { [ -n "$eol_from" ] && [ "$(days_until "$eol_from")" -lt 0 ]; }; then
-      report EOL "$where" "$ref" "$product $cycle reached end-of-life ${eol_from:-(unknown date)}; newest supported is $newest"
+      report EOL "$where" "$ref" "$product $cycle reached end-of-life ${eol_from:-(unknown date)}; newest supported is ${newest:-none}"
     elif [ -n "$eol_from" ] && [ "$(days_until "$eol_from")" -le "$WARN_DAYS" ]; then
       report SOON "$where" "$ref" "$product $cycle reaches end-of-life $eol_from ($(days_until "$eol_from") days); newest supported is $newest"
     elif [ -n "$est_eol" ] && [ "$(days_until "$est_eol")" -le "$WARN_DAYS" ]; then
@@ -670,6 +672,15 @@ EOF
   rc=0; child env PATH="$mock:$PATH" "$0" --json --json-out "$t/j2.json" "$t/matrix.Dockerfile" >"$t/j2.out" 2>/dev/null || rc=$?
   if [ "$rc" = 1 ] && [ -s "$t/j2.json" ]; then ok "jq shim is invisible without the variable (control)"
   else bad "jq shim control: exit $rc"; fi
+
+  # A product with no supported cycle left: newestSupported is null, not the string "null".
+  cat >"$t/policy/python.json" <<'JSON'
+{"result":{"name":"python","releases":[{"name":"3.8","codename":null,"isEol":true,"eolFrom":"2024-10-07"}]}}
+JSON
+  printf 'FROM python:3.8\n' >"$t/allyeol.Dockerfile"
+  rc=0; child "$0" --json "$t/allyeol.Dockerfile" >"$t/alleol.out.json" 2>/dev/null || rc=$?
+  assert "all cycles EOL: newestSupported is JSON null, not the string \"null\"" "$t/alleol.out.json" \
+    '.images[0] | .status == "EOL" and .newestSupported == null and (.detail | contains("newest supported is null") | not)'
 
   echo "self-test: estate states (mock gh)"
   local gh="$t/gh" compose
