@@ -102,9 +102,11 @@ base-images-check:
 
 # Prove the base-image check still FAILS on an EOL tag, a floating tag and an unmapped
 # image, against a fixture policy. A guard that cannot fail is indistinguishable from a
-# clean estate; base-images.yml runs this before the real sweep for the same reason.
+# clean estate; base-images.yml runs this before the real sweep for the same reason. It
+# also runs the sweep wrapper's and the publish script's failing tests (SERV-294).
 base-images-test:
 	@./scripts/check-base-images.sh --self-test
+	@./scripts/test/test-publish-base-images.sh
 
 # Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
 # Usage: make drift-check            (check every service)

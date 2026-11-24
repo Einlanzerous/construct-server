@@ -40,7 +40,12 @@ Two conditions, per `FROM` line, in every first-party repo:
    `alpine:3`, `nginx:alpine`, `node:latest` do not. A floating tag changes underneath a
    rebuild with nothing in the diff to show it, and it cannot be evaluated by rule 1
    either. A digest (`@sha256:…`) satisfies this rule on its own — the tag is provenance,
-   the digest is the pin, the SERV-105 shape.
+   the digest is the pin, the SERV-105 shape. It does not satisfy rule 1: a
+   digest-pinned ref whose tag names no cycle (`FROM alpine@sha256:…`) is `UNKNOWN`, a
+   finding (exit 1). The pin is real, but nothing says whether the image behind it is
+   still supported, and "could not tell" is loud here. A digest on a tag that does name
+   a cycle (`alpine:3.23@sha256:…`) is checked like any other ref. (SERV-294 settled this;
+   the header and the FLOATING branch used to disagree.)
 
 Cycle precision comes from the data: Alpine and Go cycles are `major.minor`, Node and
 Debian are `major`, so `node:24` is pinned and `alpine:3` is not. Bun's only cycle is `1`,
@@ -75,8 +80,8 @@ the row says so; without it the guard would go straight from OK to EOL for Go.
 
 It **refuses rather than guesses**. An image whose product is not in `PRODUCT_MAP` is a
 finding, not a skip; so is a version endoflife.date does not list, a `FROM ${VAR}` with
-no `ARG` default earlier in the file, and — in estate mode — a repo whose tree the token
-could not read. A sweep that silently skipped the private repos would be green on an
+no `ARG` default earlier in the file, a digest-pinned ref whose tag names no cycle, and —
+in estate mode — a repo whose tree the token could not read. A sweep that silently skipped the private repos would be green on an
 estate it had only half examined. And when endoflife.date is unreachable it exits **2**,
 never 0: "could not check" must not come out the same colour as "checked and fine".
 
@@ -94,7 +99,99 @@ bump the tag to the newest supported cycle the row names, build, release, and re
 the Actions tab.
 
 Locally: `make base-images-check` (the estate), `make base-images-check dir=~/projects`
-(your checkouts), `make base-images-test` (the self-test).
+(your checkouts), `make base-images-test` (the self-test, and the publish and sweep
+scripts' test; CI runs it before every sweep).
+
+## Machine-readable output
+
+Satlink's Practices board needs the per-repo result and must not re-derive the rule (the
+SERV-111 lesson: one definition of each rule). `--json` prints the result as one JSON
+document; `--json-out FILE` writes the same document to a file. Exit codes are unchanged
+(0 clean, 1 findings, 2 usage or policy unreachable); under `--json` the human table, the
+footer and `gh`'s noise go to stderr so stdout is the document alone. A run that exits 2
+prints no document and removes a stale `--json-out` file. A failure while assembling the
+document is exit 2, never 1.
+
+```
+{ schema: 1, scope: "public-only" | "unfiltered", generatedAt, today,
+  policy: { source, warnDays }, mode: "estate" | "dir" | "files",
+  exit: 0 | 1,
+  summary: { findings, warnings, ok, unreadableRepos, withheldRepos|null, visibilityUnreadable|null },
+  repos: [ { repo, state, unreadablePaths|null } ],        // estate mode, else null
+  images: [ { repo|null, path, line, ref, image, tag|null, digest|null, product|null,
+              cycle|null, eolDate|null, eolDateEstimated, newestSupported|null,
+              status, detail } ] }
+```
+
+- **One object per `FROM` line** in `images[]`, the same lines the human output reports.
+  A repo or a file that could not be read is never a row (and never a fake `line 0`);
+  `repos[]` carries it.
+- **Nothing is coalesced.** A field the script cannot determine is `null`, never `""` or
+  `0`. `eolDate: null` with `status: "OK"` is legitimate: Go and nginx publish no date,
+  and `status` is what says whether the image is fine. `eolDateEstimated` is `true` when
+  the date is the script's estimate (see "The rule"). `withheldRepos` and
+  `visibilityUnreadable` are `null` when `scope` is `unfiltered` (not measured), never 0.
+  `generatedAt` is the real clock; `today` is the policy date (`BASE_IMAGE_TODAY`).
+- **`status` is the script's seven statuses, verbatim**: `OK`, `SOON` (inside the warning
+  window, not a finding), and the findings `EOL`, `FLOATING`, `UNKNOWN`, `UNMAPPED`,
+  `UNRESOLVED` (a `FROM ${VAR}` with no default). `cycle` is `null` unless the tag named one
+  that endoflife.date lists, so a `FLOATING`, `UNKNOWN` or `UNMAPPED` row has no cycle.
+- **`repos[].state`**: `read` (tree read, every Dockerfile read); `partial` (tree read, at
+  least one Dockerfile read and at least one not: `unreadablePaths` names the failed ones
+  and the readable files' rows stay in `images[]`); `unreadable` (the tree could not be
+  read, or it read but no Dockerfile could); `no_dockerfile`.
+- **`summary`** is computed from the rows the document publishes and nowhere else:
+  `findings` is the `images[]` rows with a finding status plus `unreadableRepos` (repos in
+  state `unreadable` or `partial`), so it reconciles against `images[]` and `repos[]`.
+  This is not the human footer's count, which also counts every unreadable file.
+- **`exit`** is 1 when `summary.findings > 0` or `visibilityUnreadable > 0`, else 0. It
+  describes the published view only and can never exceed the process exit.
+- **`detail` is free text** for a person. It is not part of the contract: do not parse it.
+
+### Scope: public repos only
+
+Everything published is world-readable (the repository is public, and so are the data
+branch and workflow artifacts), and the sweep also reads private repos. So the filter runs
+in the script, before any file exists: `--public-only` (estate mode only) publishes a repo
+only when `GET repos/<owner>/<repo>` made with `PRIVACY_GH_TOKEN` exits 0 and `.private` is
+exactly `false`. That token is the workflow's own `GITHUB_TOKEN`, which cannot read private
+repos: a 404 is its answer for them, and a 200 `false` is itself the proof the repo is
+public. It is deliberately not the sweep token, which can read private repos and would
+answer 200 for them. There is no fallback: `--public-only` without `PRIVACY_GH_TOKEN` is
+exit 2.
+
+- A repo answering `private: true` or 404 is **withheld**, counted in `withheldRepos`, with
+  no row, no name and no path anywhere in the document.
+- Any other answer (5xx, rate limit, network, odd output) is withheld too, counted in
+  `visibilityUnreadable`, and is itself a finding (process and document exit 1). Such a
+  repo may be public: a consumer must treat a repo absent from `repos[]` as **unreadable**,
+  never as clean, whenever `visibilityUnreadable` is above 0.
+- Withheld repos are still swept, so a finding in one still turns the Monday run red (the
+  process exit is whole-sweep). **`exit: 0` in the document therefore means the public view
+  is clean and says nothing about the estate: never render it as estate-green.** The
+  document can never say whether a withheld repo is healthy.
+- The run log and the step summary still print every row, private repos included. That is
+  existing behaviour this change does not touch (SERV-350).
+
+### Where it is published, and how fresh it is
+
+`base-images.yml` writes `base-images.json` to the `estate-results` branch of this repo,
+as a single orphan commit force-pushed each run (no history; the file is a current
+reading, not a ledger). Read it with `GET repos/Einlanzerous/construct-server/contents/base-images.json?ref=estate-results`.
+Only the sweep's scheduled, `main`-push and `main`-dispatch runs publish; a pull request
+never does. The publish job refuses a document that is not `scope: "public-only"`, that
+does not parse, whose `schema` is not 1, or that is older than the branch's `generatedAt`.
+
+The sweep is weekly, so a document up to 7 days old is normal. **Treat a `generatedAt`
+older than 9 days as unreadable.** A 404 on the file (no branch, no file) is `unreadable`,
+not an empty estate. A red sweep means findings; a red publish job means the file is stale.
+
+### Stability
+
+`schema` is an integer. A change that adds a field, or a value to a closed set, is
+compatible and does not bump it; a consumer must ignore fields it does not know. Removing
+or renaming a field, or changing what one means, bumps `schema`, and the publish job and
+every consumer refuse a `schema` they do not know.
 
 ## What the guard does not cover, deliberately
 

@@ -32,6 +32,20 @@ name: Base Images
 #
 # A run that cannot reach endoflife.date fails too (exit 2). "Could not check" must never
 # come out green — see the note in scripts/check-base-images.sh.
+#
+# ── THE PUBLISHED RESULT (SERV-294) ──────────────────────────────────────────────────
+#
+# Satlink's Practices board reads the sweep's result instead of re-deriving the rule. The
+# sweep writes a JSON document (schema in docs/base-images.md) already filtered to PUBLIC
+# repos inside the script, so the artifact below and the `estate-results` branch only ever
+# hold public data: this repo is public, and an artifact, a log and a data branch are all
+# world-readable. The `publish` job force-pushes that one file as a single orphan commit.
+# It is the only job with contents: write, never runs for a pull request, and only for a
+# ref that is main. The run log and step summary still print every row (SERV-350).
+#
+# A week WITH findings must still publish: the sweep step exits 1, so the upload step and
+# the publish job both run on `!cancelled()` and not on the default success(). A red sweep
+# means findings; a red publish job means the file is stale.
 
 on:
   schedule:
@@ -40,11 +54,19 @@ on:
   pull_request:
     paths:
       - 'scripts/check-base-images.sh'
+      - 'scripts/base-images-sweep.sh'
+      - 'scripts/publish-base-images.sh'
+      - 'scripts/test/**'
+      - 'Makefile'
       - '.github/workflows/base-images.yml'
   push:
     branches: ["main"]
     paths:
       - 'scripts/check-base-images.sh'
+      - 'scripts/base-images-sweep.sh'
+      - 'scripts/publish-base-images.sh'
+      - 'scripts/test/**'
+      - 'Makefile'
       - '.github/workflows/base-images.yml'
       - 'docker-compose.yml'
   workflow_dispatch:
@@ -55,25 +77,50 @@ permissions:
 jobs:
   sweep:
     runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.sweep.outputs.published }}
     steps:
       - uses: actions/checkout@v4
 
       # A guard that fails closed is only worth having if it is known to fail at all,
       # and the fixture run is the only way to see that without an EOL image in the
       # estate. It runs first so a broken script reads as "the script is broken" and
-      # not as "the estate is clean".
+      # not as "the estate is clean". `make base-images-test` runs the script's self-test
+      # and the publish and sweep scripts' test, so CI covers both.
       - name: Prove the check can fail
-        run: ./scripts/check-base-images.sh --self-test
+        run: make base-images-test
 
       # Two tokens, same split as wiki.yml. GITHUB_TOKEN reads the public repos, which
       # is most of them. WIKI_DOCS_TOKEN reads the private ones (amber, switchyard);
       # without it those two are reported as UNREADABLE and the run fails, because a
       # sweep that silently skipped repos would be green on an estate it only half
       # examined. The script prefers GH_TOKEN, so the private-capable one goes there.
+      #
+      # PRIVACY_GH_TOKEN is the OTHER token, on purpose: GITHUB_TOKEN cannot read private
+      # repos, so a 404 from it means private and a 200 `private: false` proves a repo is
+      # world-readable. WIKI_DOCS_TOKEN would answer 200 for a private repo and prove
+      # nothing. The wrapper is a script so its exit handling can fail in a test: it
+      # re-raises the exit code (a red sweep means findings) and sets `published` whenever
+      # a document exists, exit 0 or 1.
       - name: Sweep every first-party Dockerfile
+        id: sweep
         env:
           GH_TOKEN: ${{ secrets.WIKI_DOCS_TOKEN || secrets.GITHUB_TOKEN }}
-        run: ./scripts/check-base-images.sh --estate docker-compose.yml
+          PRIVACY_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/base-images-sweep.sh
+
+      # `!cancelled()`, not the default success(), or a sweep that exits 1 (findings) would
+      # skip this and the file would go stale in exactly the weeks with findings. The
+      # event and ref gate keeps a pull request's own copy of the script, which holds
+      # WIKI_DOCS_TOKEN, from ever uploading anything.
+      - name: Upload the public-only document
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.sweep.outputs.published == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-images-json
+          path: ${{ runner.temp }}/out/base-images.json
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Explain a failure
         if: failure()
@@ -93,3 +140,34 @@ jobs:
             echo "\`make base-images-check dir=~/projects\` (your checkouts)."
             echo "Design of record: \`docs/base-images.md\`."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The only job that can write, and only the one ref. A cancelled run publishes nothing
+  # (`!cancelled()`, not always()), and a queued run waits for the one before it rather
+  # than cancelling it; the script also refuses a document older than the branch's, since
+  # GitHub keeps only the newest pending run per group.
+  publish:
+    needs: sweep
+    if: ${{ !cancelled() && needs.sweep.outputs.published == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: base-images-publish
+      cancel-in-progress: false
+    steps:
+      # The checkout is only for the scripts: no credential is persisted, and the push
+      # credential comes solely from PUBLISH_GH_TOKEN, handed to git through its environment.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download the public-only document
+        uses: actions/download-artifact@v4
+        with:
+          name: base-images-json
+          path: ${{ runner.temp }}/in
+
+      - name: Publish to estate-results
+        env:
+          PUBLISH_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/publish-base-images.sh "$RUNNER_TEMP/in/base-images.json"

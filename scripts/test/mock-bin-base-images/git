@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# A PATH shim over the real git for test-publish-base-images.sh. Inert unless SHIM_LOG is
+# set. With it, every argv is appended to that file, one argument per line, so the test can
+# prove a token never reaches a command line. With SHIM_RACE_FROM (a repo) and
+# SHIM_RACE_TO (a remote) set, a `push` first lets a competing publisher create the branch,
+# which is the race the first-publish lease exists for.
+self="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+real=""
+IFS=: read -ra dirs <<<"$PATH"
+for dir in "${dirs[@]}"; do
+  [ "$(cd -- "$dir" 2>/dev/null && pwd)" = "$self" ] && continue
+  [ -x "$dir/git" ] && { real="$dir/git"; break; }
+done
+[ -n "$real" ] || { echo "mock git: no real git on PATH" >&2; exit 127; }
+if [ -n "${SHIM_LOG:-}" ]; then
+  { printf -- '--- git\n'; printf '%s\n' "$@"; } >>"$SHIM_LOG"
+fi
+if [ -n "${SHIM_RACE_FROM:-}" ] && [ -n "${SHIM_RACE_TO:-}" ]; then
+  for a in "$@"; do
+    if [ "$a" = push ]; then
+      "$real" -C "$SHIM_RACE_FROM" push -q "$SHIM_RACE_TO" HEAD:refs/heads/estate-results
+      break
+    fi
+  done
+fi
+exec "$real" "$@"
