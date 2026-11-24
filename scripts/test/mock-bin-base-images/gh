@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Mock `gh api` for the base-images tests. Answers from the fixture tree in $MOCK_GH_DIR and
+# ignores --jq / -H: the fixtures hold what gh would print AFTER its own filtering.
+#
+#   <repo>/vis.<token>     what `repos/<owner>/<repo>` says to the caller whose GH_TOKEN is
+#                          <token>: false | true | 404 | any other number (a server error).
+#                          No file is a 404, which is what GitHub says to a token that cannot
+#                          see a private repo.
+#   <repo>/tree            the Dockerfile paths, one per line (empty: no Dockerfile)
+#   <repo>/tree.fail       present: the tree read fails
+#   <repo>/files/<path>    the file's body
+#   <repo>/fail/<path>     present: that file's read fails
+#
+# This directory is not scripts/test/mock-bin: backup-test.sh prepends that whole directory
+# to PATH, and a `gh` there would shadow the real one for it.
+set -u
+[ "${1:-}" = api ] || { echo "mock gh: only 'api' is supported" >&2; exit 1; }
+d="${MOCK_GH_DIR:?mock gh: MOCK_GH_DIR is not set}"
+rest="${2#repos/*/}"
+repo="${rest%%/*}"
+sub="${rest#"$repo"}"; sub="${sub#/}"
+notfound() { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+case "$sub" in
+  "")
+    f="$d/$repo/vis.${GH_TOKEN:-}"
+    [ -f "$f" ] || notfound
+    v="$(cat "$f")"
+    case "$v" in
+      false|true) echo "$v";;
+      404) notfound;;
+      *) echo "gh: Server Error (HTTP $v)" >&2; exit 1;;
+    esac;;
+  git/trees/*)
+    [ -d "$d/$repo" ] && [ ! -f "$d/$repo/tree.fail" ] || notfound
+    [ -s "$d/$repo/tree" ] && cat "$d/$repo/tree"
+    exit 0;;
+  contents/*)
+    path="${sub#contents/}"
+    [ ! -e "$d/$repo/fail/$path" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }
+    [ -f "$d/$repo/files/$path" ] || notfound
+    cat "$d/$repo/files/$path";;
+  *) notfound;;
+esac
