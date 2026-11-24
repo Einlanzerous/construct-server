@@ -140,7 +140,9 @@ is in `docs/stack-service-notes.md`. Safety rules for them:
 - Every first-party Dockerfile `FROM` names a supported cycle to cycle precision
   (`alpine:3.23`, never `alpine:3` or `latest`). `base-images.yml` checks it weekly and is
   not a deploy gate; `cf-access-guard`'s `golang:` pin is this repo's to keep current.
-  `docs/base-images.md`.
+  `docs/base-images.md`. The sweep's result is also published as `base-images.json` on
+  the `estate-results` branch for Satlink: public repos only, schema 1, shape and the
+  stability promise in `docs/base-images.md` "Machine-readable output".
 - Pins and every detail above: `docs/image-pins.md`.
 
 ### Secrets and the environment
