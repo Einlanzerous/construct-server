@@ -225,6 +225,31 @@ Only the sweep's scheduled, `main`-push and `main`-dispatch runs publish; a pull
 never does. The publish job refuses a document that is not `scope: "public-only"`, that
 does not parse, whose `schema` is not 1, or that is older than the branch's `generatedAt`.
 
+The publisher, `publish.ts <file>`, is shared with the architecture-map result (SERV-356),
+so it has a per-name policy. The file's **basename is its name** and must be on its
+allow-list; any other name is exit 2. Each name has its own rule:
+
+- `base-images.json`: `scope` must be `public-only`. It needs no destination lookup for its
+  own policy, so this repo's publish gains no new way to fail.
+- `architecture-maps.json`: `scope` must be `estate`, and it is private data, so it is
+  published only to a destination confirmed private. `GET repos/$GITHUB_REPOSITORY` is made
+  with the publish token through `src/destination.ts`; only `private: true` passes, and
+  `false`, a 404, a 5xx, odd output or an unset `GITHUB_REPOSITORY` refuse with exit 2 before
+  anything is pushed. That module is not `repoVisibility` (which reads a 404 as private).
+
+Every publish keeps one orphan commit and carries the **other** allow-listed file the branch
+already holds over unchanged, byte for byte, so two workflows can share the branch without
+erasing each other. A carried file that no longer parses, has `schema` other than 1 or has no
+`generatedAt` is dropped with a notice. A carried **private-only** file needs a destination
+lookup first, and only when the branch holds one (a publish onto this repo's own branch makes
+no lookup): `private` carries it; `public` drops it with a notice, because a private-only file
+must not stay on a public branch; a lookup that cannot answer refuses the whole publish with
+exit 1, nothing pushed and the branch unchanged (it is a failure to learn, a rerun retries, and
+dropping the file would erase good data on a transient 5xx). The newer-`generatedAt` skip is
+per file. A lost push race is retried from a fresh fetch, three tries, then exit 1. The remote
+is `PUBLISH_REMOTE`, else `https://github.com/$GITHUB_REPOSITORY.git`, else exit 2: there is no
+hard-coded repository.
+
 The sweep is weekly, so a document up to 7 days old is normal. **Treat a `generatedAt`
 older than 9 days as unreadable.** A 404 on the file (no branch, no file) is `unreadable`,
 not an empty estate. A red sweep means findings; a red publish job means the file is stale.
