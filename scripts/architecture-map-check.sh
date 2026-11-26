@@ -46,6 +46,38 @@ set -u
 
 IR="docs/architecture.archify.json"
 SLUG="einlanzerous/construct-server"   # lower-case owner/name
+# The estate-wide sweep (SERV-356) runs this same rule over other repos' checkouts. Both knobs are
+# off unless SET, and a set-but-empty value is an error, never the default: the suffix test below
+# is a glob, so an empty slug would match every repository url.
+#   ARCH_MAP_SLUG    owner/name of the checkout being read, in any case.
+#   ARCH_MAP_RESULT  a file that gets one JSON line, {state, references, errors, driftedFiles},
+#                    state one of no_map, in_sync, stale, broken, skipped. It is written on every
+#                    exit this script chooses; no file means the script never got to choose
+#                    (killed, timed out), which the reader must treat as unreadable. A figure that
+#                    was not measured is null, never 0. The exit code does not change.
+if [ "${ARCH_MAP_SLUG+set}" = set ]; then
+  if [ -z "$ARCH_MAP_SLUG" ]; then
+    echo "architecture-map: ARCH_MAP_SLUG is set but empty; unset it to check this repository" >&2
+    exit 2
+  fi
+  SLUG=${ARCH_MAP_SLUG,,}
+fi
+if [ "${ARCH_MAP_RESULT+set}" = set ]; then
+  if [ -z "$ARCH_MAP_RESULT" ]; then
+    echo "architecture-map: ARCH_MAP_RESULT is set but empty; unset it to write no result" >&2
+    exit 2
+  fi
+  # A leftover file from an earlier run must never be read as this run's answer.
+  rm -f -- "$ARCH_MAP_RESULT"
+  res_state="" res_refs=null res_errs=null res_drift=null
+  write_result() {
+    [ -n "$res_state" ] || return 0
+    printf '{"state":"%s","references":%s,"errors":%s,"driftedFiles":%s}\n' \
+      "$res_state" "$res_refs" "$res_errs" "$res_drift" >"$ARCH_MAP_RESULT" 2>/dev/null
+    return 0
+  }
+  trap write_result EXIT
+fi
 # archify's architecture schema caps `sources` at three per component
 # (`maxItems: 3`, vendored archify 2.16.0). The schema runs before anything
 # else, so a fourth source is not a warning: the wiki refuses to render the
@@ -83,16 +115,19 @@ annotate() {
 # No map is a normal state, not a finding. Most repos have none.
 if [ ! -f "$IR" ]; then
   echo "architecture-map: no $IR — nothing to check"
+  res_state=no_map
   exit 0
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
   annotate notice "jq is not on PATH, so the map could not be checked."
+  res_state=skipped
   exit 0
 fi
 
 if ! jq -e . "$IR" >/dev/null 2>&1; then
   annotate error "$IR is not valid JSON."
+  res_state=broken res_errs=1
   exit 1
 fi
 
@@ -100,28 +135,31 @@ url=$(jq -r '.meta.repository.url // empty' "$IR")
 rev=$(jq -r '.meta.repository.revision // empty' "$IR")
 if [ -z "$url" ] || [ -z "$rev" ]; then
   annotate error "meta.repository must carry a url and a revision — without them the SRC chips cannot be verified."
+  res_state=broken res_errs=1
   exit 1
 fi
 if ! [[ $rev =~ ^[a-fA-F0-9]{40}$ ]]; then
   annotate error "meta.repository.revision must be a full 40-character commit SHA, not \"$rev\"."
+  res_state=broken res_errs=1
   exit 1
 fi
 normalised=$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]' | sed -E 's#(\.git/?|/)$##')
 if [[ $normalised != *"$SLUG" ]]; then
   annotate error "meta.repository.url is $url, which is not this repository — the map would describe someone else's code."
+  res_state=broken res_errs=1
   exit 1
 fi
 
 # A property of the tracked file alone, so it is checked before the pin is
 # fetched: a map archify will refuse fails here even when the fetch skips.
-overfull=0
+overfull=0   # a count, so the result can say how many
 while IFS=$'\t' read -r id n; do
   [ -n "$id" ] || continue
   annotate error "component \"$id\" carries $n sources; archify's schema allows at most $MAX_SOURCES_PER_COMPONENT, and a schema failure means the wiki renders no map at all."
-  overfull=1
+  overfull=$((overfull + 1))
 done < <(jq -r --argjson max "$MAX_SOURCES_PER_COMPONENT" \
   '.components[]? | select(((.sources // []) | length) > $max) | [.id, ((.sources // []) | length)] | @tsv' "$IR")
-[ "$overfull" -eq 0 ] || exit 1
+if [ "$overfull" -ne 0 ]; then res_state=broken res_errs=$overfull; exit 1; fi
 
 pin=${rev,,}
 short=${pin:0:7}
@@ -152,6 +190,7 @@ ensure_pinned() {
 if ! ensure_pinned; then
   # Not an error. See the SKIP note in the header.
   annotate notice "the pinned commit $short could not be fetched, so the map could not be checked. A rewritten history removes a commit that was pinned honestly; re-pin the map if that is what happened."
+  res_state=skipped
   exit 0
 fi
 
@@ -185,7 +224,9 @@ shape=$(jq -r '
              ( if ($s.end_line|type)=="number" and ($s.line|type)!="number" then "component \($name) source \($j) has end_line but no line" else empty end )
         end end end )' "$IR" 2>&1) || { annotate error "$IR could not be read for its source shapes: $shape"; exit 1; }
 if [ -n "$shape" ]; then
-  while IFS= read -r finding; do annotate error "$finding. The map will not render."; done <<<"$shape"
+  res_errs=0
+  while IFS= read -r finding; do annotate error "$finding. The map will not render."; res_errs=$((res_errs + 1)); done <<<"$shape"
+  res_state=broken
   exit 1
 fi
 
@@ -198,11 +239,13 @@ fi
 # would choke on either without adding anything to errors[].
 if ! refs=$(jq -r '.components[]? | .id as $c | (.sources // [])[] | [$c, .path, (.line // "" | if type=="number" then floor|tostring else . end), (.end_line // "" | if type=="number" then floor|tostring else . end)] | join("\u001f")' "$IR"); then
   annotate error "$IR has a source jq cannot read (a path or line that is not a string or number?); the map will not render."
+  res_state=broken res_errs=1
   exit 1
 fi
 
 if [ -z "$refs" ]; then
   annotate error "no component carries sources[] — archify refuses a map that pins a revision and cites nothing."
+  res_state=broken res_errs=1
   exit 1
 fi
 
@@ -264,6 +307,13 @@ fi
 
 if [ "${#errors[@]}" -eq 0 ] && [ "${#drift_paths[@]}" -eq 0 ]; then
   echo "architecture-map: in sync with the pinned commit"
+fi
+
+# Broken beats stale, and a broken map has no meaningful drift count: not measured, so null.
+res_refs=$count res_errs=${#errors[@]}
+if [ "${#errors[@]}" -gt 0 ]; then res_state=broken
+elif [ "${#drift_paths[@]}" -gt 0 ]; then res_state=stale res_drift=${#drift_paths[@]}
+else res_state=in_sync res_drift=0
 fi
 
 [ "${#errors[@]}" -eq 0 ]

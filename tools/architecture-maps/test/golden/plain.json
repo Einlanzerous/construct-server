@@ -1,0 +1,50 @@
+{
+  "capturedFrom": "scripts/architecture-map-check.sh at construct-server main db857fe, before SERV-356; GITHUB_ACTIONS deleted",
+  "scenarios": {
+    "no_map": {
+      "rc": 0,
+      "out": "architecture-map: no docs/architecture.archify.json — nothing to check\n",
+      "err": ""
+    },
+    "in_sync": {
+      "rc": 0,
+      "out": "architecture-map: 1 source reference(s) checked against a51ac62\narchitecture-map: in sync with the pinned commit\n",
+      "err": ""
+    },
+    "stale": {
+      "rc": 0,
+      "out": "architecture-map: 1 source reference(s) checked against a51ac62\nwarning: the system map is stale: 1 of 1 cited file(s) have changed since a51ac62 (1 references).\n  - a.txt has changed since the pin — 1 file changed, 1 insertion(+) (cited by svc).\nRe-read the map, update it where the shape actually changed, and re-pin meta.repository.revision to the merge commit.\n",
+      "err": ""
+    },
+    "broken_path_absent": {
+      "rc": 1,
+      "out": "architecture-map: 1 source reference(s) checked against a51ac62\nerror: component \"svc\" cites gone.txt, which is not a file at the pinned commit a51ac62. The map will not render.\n",
+      "err": ""
+    },
+    "broken_line_past_eof": {
+      "rc": 1,
+      "out": "architecture-map: 1 source reference(s) checked against a51ac62\nerror: component \"svc\" cites b.txt:9, but that file has 2 lines at a51ac62.\n",
+      "err": ""
+    },
+    "broken_four_sources": {
+      "rc": 1,
+      "out": "error: component \"svc\" carries 4 sources; archify's schema allows at most 3, and a schema failure means the wiki renders no map at all.\n",
+      "err": ""
+    },
+    "broken_wrong_url": {
+      "rc": 1,
+      "out": "error: meta.repository.url is https://github.com/example-org/someone-else, which is not this repository — the map would describe someone else's code.\n",
+      "err": ""
+    },
+    "broken_not_json": {
+      "rc": 1,
+      "out": "error: docs/architecture.archify.json is not valid JSON.\n",
+      "err": ""
+    },
+    "skipped_pin_absent": {
+      "rc": 0,
+      "out": "notice: the pinned commit 0123456 could not be fetched, so the map could not be checked. A rewritten history removes a commit that was pinned honestly; re-pin the map if that is what happened.\n",
+      "err": ""
+    }
+  }
+}

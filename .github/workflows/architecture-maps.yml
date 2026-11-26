@@ -1,0 +1,48 @@
+name: Architecture Maps
+
+# Tests for the estate architecture-map programs (SERV-356): the check script's ARCH_MAP_SLUG and
+# ARCH_MAP_RESULT behaviours today, the sweep and the shared publisher as later rows land. Tests
+# only. The sweep itself runs from a separate private repo, not here, so this workflow holds no
+# secret and no write permission.
+#
+# The `paths:` list is asserted by tools/architecture-maps/test/workflow.test.ts against the
+# publisher pick recorded there (PUBLISHER_OPTION). tools/base-images/** is in it because the
+# sweep imports the estate list from there and, under option (a), the publisher lives there too.
+# `Makefile` is in it because the targets below are defined there.
+
+on:
+  pull_request:
+    paths:
+      - 'tools/architecture-maps/**'
+      - 'tools/base-images/**'
+      - 'scripts/architecture-map-check.sh'
+      - 'Makefile'
+      - '.github/workflows/architecture-maps.yml'
+  push:
+    branches: ["main"]
+    paths:
+      - 'tools/architecture-maps/**'
+      - 'tools/base-images/**'
+      - 'scripts/architecture-map-check.sh'
+      - 'Makefile'
+      - '.github/workflows/architecture-maps.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Scripts off, and no secret in this job at all: the type checker is the only thing installed.
+      - name: Type-check and test the architecture-map programs
+        run: make architecture-maps-typecheck architecture-maps-test
