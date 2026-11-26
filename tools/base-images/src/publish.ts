@@ -42,8 +42,10 @@
 //   PUBLISH_GH_TOKEN   required; the token git authenticates with (the workflow's GITHUB_TOKEN);
 //                      the destination lookup uses it too, through gh's environment
 //   RUNNER_TEMP        required; the clone lives under it
-//   PUBLISH_REMOTE     default https://github.com/Einlanzerous/construct-server.git
-//                      (the test points it at a local bare repo)
+//   GITHUB_REPOSITORY  set by Actions; the default remote is https://github.com/<it>.git, and the
+//                      destination lookups ask about it
+//   PUBLISH_REMOTE     overrides the remote (the test points it at a local bare repo). With neither
+//                      it and GITHUB_REPOSITORY set, exit 2: there is no hard-coded fallback
 //
 // EXIT  0 published, or skipped as stale   1 the push failed or lost a race, or a carry-over
 //       lookup could not answer   2 refused: bad input, missing token, the destination lock, or
@@ -51,7 +53,7 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { type DestinationState, destinationState } from "./destination.ts";
+import { type DestinationState, destinationSlug, destinationState } from "./destination.ts";
 import { die, Refusal } from "./errors.ts";
 import { onPath, stderr, stdout } from "./io.ts";
 
@@ -238,7 +240,12 @@ function main(argv: string[]): number {
   const runnerTemp = process.env["RUNNER_TEMP"] ?? "";
   if (token === "") die("PUBLISH_GH_TOKEN is not set");
   if (runnerTemp === "") die("RUNNER_TEMP is not set");
-  const remote = process.env["PUBLISH_REMOTE"] || "https://github.com/Einlanzerous/construct-server.git";
+  // The repo this workflow runs in, never a hard-coded one: the same program publishes from
+  // construct-server and from the private repo that holds the architecture-map result, and a
+  // fallback to either would write to the wrong repo.
+  const slug = destinationSlug();
+  const remote = process.env["PUBLISH_REMOTE"] || (slug === null ? "" : `https://github.com/${slug}.git`);
+  if (remote === "") die("neither PUBLISH_REMOTE nor a valid GITHUB_REPOSITORY (owner/name) is set: no destination to publish to");
   if (!onPath("git")) die("required dependency 'git' not found in PATH");
 
   try {

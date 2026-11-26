@@ -340,6 +340,40 @@ describe("publish", () => {
     });
   });
 
+  describe("the remote", () => {
+    test("with PUBLISH_REMOTE and GITHUB_REPOSITORY both unset it exits 2 rather than fall back to a repo", () => {
+      const doc = mkdoc(`${T}/noremote.json`, "2026-11-23T07:00:00Z");
+      const log = `${T}/noremote.log`;
+      const r = run(PUBLISH, [doc], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_GH_TOKEN: TOKEN, SHIM_LOG: log }));
+      assert.equal(r.rc, 2, r.err);
+      assert.ok(r.err.includes("no destination"), r.err);
+      assert.ok(!existsSync(log), "git ran with no destination");
+    });
+    for (const bad of ["", "no-slash", "https://github.com/a/b", "a/b/c"]) {
+      test(`a GITHUB_REPOSITORY of ${JSON.stringify(bad)} is not a destination: exit 2`, () => {
+        const r = run(PUBLISH, [mkdoc(`${T}/badslug.json`, "2026-11-23T07:00:00Z")], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_GH_TOKEN: TOKEN, GITHUB_REPOSITORY: bad }));
+        assert.equal(r.rc, 2, r.err);
+      });
+    }
+    // The default is the repo the workflow runs in: git's own url rewrite sends it to a local
+    // bare repo so the test sees which url the program chose, with no network.
+    test("with only GITHUB_REPOSITORY set the remote is https://github.com/<it>.git", () => {
+      const R = bare(`${T}/default-remote.git`);
+      const cfg = write(`${T}/default-remote.gitconfig`, `[url "${R}"]\n\tinsteadOf = https://github.com/example-owner/default-remote.git\n`);
+      const log = `${T}/default-remote.log`;
+      const r = run(PUBLISH, [mkdoc(`${T}/defrem.json`, "2026-11-23T07:00:00Z")], withMocks({ ...GIT_ENV, GIT_CONFIG_GLOBAL: cfg, RUNNER_TEMP: runnerTemp, PUBLISH_GH_TOKEN: TOKEN, GITHUB_REPOSITORY: "example-owner/default-remote", SHIM_LOG: log }));
+      assert.equal(r.rc, 0, r.err);
+      assert.ok(readFileSync(log, "utf8").includes("https://github.com/example-owner/default-remote.git"));
+      assert.notEqual(branchSha(R), "");
+    });
+    test("PUBLISH_REMOTE wins over GITHUB_REPOSITORY", () => {
+      const R = bare(`${T}/override-remote.git`);
+      const r = publish(R, mkdoc(`${T}/override.json`, "2026-11-23T07:00:00Z"), { GITHUB_REPOSITORY: "example-owner/elsewhere" });
+      assert.equal(r.rc, 0, r.err);
+      assert.notEqual(branchSha(R), "");
+    });
+  });
+
   describe("first publish, commit shape, ordering", () => {
     let R: string;
     before(() => {
