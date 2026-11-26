@@ -55,6 +55,9 @@ SLUG="einlanzerous/construct-server"   # lower-case owner/name
 #                    exit this script chooses; no file means the script never got to choose
 #                    (killed, timed out), which the reader must treat as unreadable. A figure that
 #                    was not measured is null, never 0. The exit code does not change.
+# A leftover file from an earlier run must never be read as this run's answer, including when this
+# run is refused below.
+[ -z "${ARCH_MAP_RESULT:-}" ] || rm -f -- "$ARCH_MAP_RESULT"
 if [ "${ARCH_MAP_SLUG+set}" = set ]; then
   if [ -z "$ARCH_MAP_SLUG" ]; then
     echo "architecture-map: ARCH_MAP_SLUG is set but empty; unset it to check this repository" >&2
@@ -67,8 +70,6 @@ if [ "${ARCH_MAP_RESULT+set}" = set ]; then
     echo "architecture-map: ARCH_MAP_RESULT is set but empty; unset it to write no result" >&2
     exit 2
   fi
-  # A leftover file from an earlier run must never be read as this run's answer.
-  rm -f -- "$ARCH_MAP_RESULT"
   res_state="" res_refs=null res_errs=null res_drift=null
   write_result() {
     [ -n "$res_state" ] || return 0
@@ -144,7 +145,8 @@ if ! [[ $rev =~ ^[a-fA-F0-9]{40}$ ]]; then
   exit 1
 fi
 normalised=$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]' | sed -E 's#(\.git/?|/)$##')
-if [[ $normalised != *"$SLUG" ]]; then
+# Anchored on the separator: a bare suffix would let owner "evil-example-org" pass for "example-org".
+if [[ $normalised != *[/:]"$SLUG" ]]; then
   annotate error "meta.repository.url is $url, which is not this repository — the map would describe someone else's code."
   res_state=broken res_errs=1
   exit 1
@@ -222,7 +224,7 @@ shape=$(jq -r '
                | "component \($name) source \($j) \(.key) is not a positive integer" ),
              ( if ($s.line|type)=="number" and ($s.end_line|type)=="number" and $s.end_line<$s.line then "component \($name) source \($j) range ends before it starts" else empty end ),
              ( if ($s.end_line|type)=="number" and ($s.line|type)!="number" then "component \($name) source \($j) has end_line but no line" else empty end )
-        end end end )' "$IR" 2>&1) || { annotate error "$IR could not be read for its source shapes: $shape"; exit 1; }
+        end end end )' "$IR" 2>&1) || { annotate error "$IR could not be read for its source shapes: $shape"; res_state=broken res_errs=1; exit 1; }
 if [ -n "$shape" ]; then
   res_errs=0
   while IFS= read -r finding; do annotate error "$finding. The map will not render."; res_errs=$((res_errs + 1)); done <<<"$shape"

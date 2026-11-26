@@ -142,6 +142,24 @@ describe("ARCH_MAP_SLUG and ARCH_MAP_RESULT set", () => {
     assert.equal((JSON.parse(readFileSync(out, "utf8")) as Result).state, "broken");
   });
 
+  test("a map the shape query cannot read is broken, with a result, not an absent file", () => {
+    const out = join(root, "unreadable-shape.json");
+    // components is a string: jq cannot iterate it, and the pin must be real to get that far.
+    const dir = repo({ map: { url: `https://github.com/${OTHER_SLUG}`, revision: "pin", components: "x" as never } });
+    const r = runScript(dir, baseEnv(home, { ARCH_MAP_SLUG: OTHER_SLUG, ARCH_MAP_RESULT: out }));
+    assert.equal(r.rc, 1, r.out + r.err);
+    assert.deepEqual(JSON.parse(readFileSync(out, "utf8")), { state: "broken", references: null, errors: 1, driftedFiles: null });
+  });
+
+  test("the slug is matched on a separator: another owner whose name ends in this one's is not this repo", () => {
+    const dir = repo({
+      map: { url: "https://github.com/evil-example-org/widget-service", revision: "pin", components: [{ id: "svc", sources: [{ path: "a.txt" }] }] },
+    });
+    const r = runScript(dir, baseEnv(home, { ARCH_MAP_SLUG: OTHER_SLUG }));
+    assert.equal(r.rc, 1, r.out + r.err);
+    assert.match(r.out, /not this repository/);
+  });
+
   test("ARCH_MAP_RESULT alone keeps the default slug", () => {
     const out = join(root, "default-slug.json");
     const r = runScript(repo(scenarios(DEFAULT_SLUG)["in_sync"]!), baseEnv(home, { ARCH_MAP_RESULT: out }));
@@ -159,15 +177,18 @@ describe("ARCH_MAP_SLUG and ARCH_MAP_RESULT set", () => {
   });
 });
 
+const LEFTOVER = '{"state":"in_sync","references":9,"errors":0,"driftedFiles":0}\n';
+
 describe("set-but-empty is an error, never the default", () => {
   test("ARCH_MAP_SLUG= fails without falling back, even for a map the default slug would pass", () => {
     const dir = repo(scenarios(DEFAULT_SLUG)["in_sync"]!);
     const out = join(root, "empty-slug.json");
+    writeFileSync(out, LEFTOVER);
     const r = runScript(dir, baseEnv(home, { ARCH_MAP_SLUG: "", ARCH_MAP_RESULT: out }));
     assert.equal(r.rc, 2);
     assert.match(r.err, /ARCH_MAP_SLUG is set but empty/);
     assert.equal(r.out, "");
-    assert.ok(!existsSync(out), "no result is written for a refused run");
+    assert.ok(!existsSync(out), "a refused run writes no result and clears an earlier one");
   });
 
   test("ARCH_MAP_RESULT= fails and writes nothing", () => {
