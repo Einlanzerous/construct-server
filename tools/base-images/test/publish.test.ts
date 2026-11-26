@@ -366,6 +366,15 @@ describe("publish", () => {
       assert.ok(readFileSync(log, "utf8").includes("https://github.com/example-owner/default-remote.git"));
       assert.notEqual(branchSha(R), "");
     });
+    for (const bad of ["https://github.com/example-owner/elsewhere.git", "git@github.com:example-owner/elsewhere.git", "relative/remote.git", "file:///tmp/remote.git"]) {
+      test(`a PUBLISH_REMOTE of ${JSON.stringify(bad)} is refused before git runs: exit 2`, () => {
+        const log = `${T}/badremote.log`;
+        const r = run(PUBLISH, [mkdoc(`${T}/badremote.json`, "2026-11-23T07:00:00Z")], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_GH_TOKEN: TOKEN, GITHUB_REPOSITORY: "example-owner/elsewhere", PUBLISH_REMOTE: bad, SHIM_LOG: log }));
+        assert.equal(r.rc, 2, r.err);
+        assert.ok(r.err.includes("PUBLISH_REMOTE must be an absolute path"), r.err);
+        assert.ok(!existsSync(log), "git ran with a refused remote");
+      });
+    }
     test("PUBLISH_REMOTE wins over GITHUB_REPOSITORY", () => {
       const R = bare(`${T}/override-remote.git`);
       const r = publish(R, mkdoc(`${T}/override.json`, "2026-11-23T07:00:00Z"), { GITHUB_REPOSITORY: "example-owner/elsewhere" });

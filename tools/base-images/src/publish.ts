@@ -13,8 +13,9 @@
 // parse, whose schema is not 1, whose scope is not the one its name requires, or that has no
 // parseable generatedAt. architecture-maps.json (scope "estate") is private data and is also
 // refused unless the destination repo, GITHUB_REPOSITORY, is confirmed private by
-// destination.ts: false, a 404, a 5xx or odd output all refuse. For base-images.json the scope check is the second lock on the privacy
-// filter in check.ts: an unfiltered document can never reach the branch by a workflow mistake.
+// destination.ts: false, a 404, a 5xx or odd output all refuse. For base-images.json the scope
+// check is the second lock on the privacy filter in check.ts: an unfiltered document can never
+// reach the branch by a workflow mistake.
 //
 // CARRY-OVER. The commit holds the other allow-listed files that the fetched tip already holds,
 // byte for byte, so base-images.json and architecture-maps.json (two workflows, one branch) do
@@ -44,15 +45,18 @@
 //   RUNNER_TEMP        required; the clone lives under it
 //   GITHUB_REPOSITORY  set by Actions; the default remote is https://github.com/<it>.git, and the
 //                      destination lookups ask about it
-//   PUBLISH_REMOTE     overrides the remote (the test points it at a local bare repo). With neither
-//                      it and GITHUB_REPOSITORY set, exit 2: there is no hard-coded fallback
+//   PUBLISH_REMOTE     test only: an absolute path to a local bare repo that replaces the remote.
+//                      A URL or a relative path is refused (exit 2), because the destination
+//                      lookups ask about GITHUB_REPOSITORY and an override pointing at another
+//                      GitHub repo would push private data where the lock never looked. With
+//                      neither it nor GITHUB_REPOSITORY set, exit 2: there is no hard-coded fallback
 //
 // EXIT  0 published, or skipped as stale   1 the push failed or lost a race, or a carry-over
 //       lookup could not answer   2 refused: bad input, missing token, the destination lock, or
 //       the remote could not be listed
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { type DestinationState, destinationSlug, destinationState } from "./destination.ts";
 import { die, Refusal } from "./errors.ts";
 import { onPath, stderr, stdout } from "./io.ts";
@@ -244,7 +248,13 @@ function main(argv: string[]): number {
   // construct-server and from the private repo that holds the architecture-map result, and a
   // fallback to either would write to the wrong repo.
   const slug = destinationSlug();
-  const remote = process.env["PUBLISH_REMOTE"] || (slug === null ? "" : `https://github.com/${slug}.git`);
+  const override = process.env["PUBLISH_REMOTE"] ?? "";
+  // The lock asks GitHub about GITHUB_REPOSITORY, so the override may only name a local path:
+  // anything git could resolve to another host or repo would push where the lock never looked.
+  if (override !== "" && (!isAbsolute(override) || override.includes("://"))) {
+    die(`PUBLISH_REMOTE must be an absolute path to a local bare repo (it is a test override), not ${JSON.stringify(override)}`);
+  }
+  const remote = override || (slug === null ? "" : `https://github.com/${slug}.git`);
   if (remote === "") die("neither PUBLISH_REMOTE nor a valid GITHUB_REPOSITORY (owner/name) is set: no destination to publish to");
   if (!onPath("git")) die("required dependency 'git' not found in PATH");
 
