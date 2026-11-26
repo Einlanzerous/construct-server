@@ -1,17 +1,18 @@
 #!/usr/bin/env node
-// publish.ts — publish the public-only base-images document to the `estate-results` branch
-// (SERV-294).
+// publish.ts — publish one estate result document to the `estate-results` branch (SERV-294,
+// generalised by SERV-356).
 //
 //   publish.ts <base-images.json>
 //
-// The branch is a world-readable data branch holding exactly one file, base-images.json, in
-// exactly one orphan commit that is force-pushed on every publish: it is the current reading,
-// not a history. Satlink reads it through the contents API (docs/base-images.md).
+// The file's basename is its name, and the name must be on the allow-list below; each name has
+// its own policy (the `scope` its document must carry). The branch is a data branch holding the
+// current reading in exactly one orphan commit that is force-pushed on every publish, not a
+// history. Satlink reads it through the contents API (docs/base-images.md).
 //
-// It REFUSES (exit 2, nothing pushed) a document that does not parse, whose schema is not 1,
-// whose scope is not "public-only", or that has no parseable generatedAt. The scope check is
-// the second lock on the privacy filter in check.ts: an unfiltered document can never reach
-// the branch by a workflow mistake.
+// It REFUSES (exit 2, nothing pushed) a name that is not on the list, a document that does not
+// parse, whose schema is not 1, whose scope is not the one its name requires, or that has no
+// parseable generatedAt. For base-images.json the scope check is the second lock on the privacy
+// filter in check.ts: an unfiltered document can never reach the branch by a workflow mistake.
 //
 // It publishes nothing, and exits 0 with a notice, when the branch already holds a document
 // with a NEWER generatedAt: queued runs can finish out of order, and the older sweep must not
@@ -35,12 +36,23 @@
 //       2 refused: bad input, missing token, or the remote could not be listed
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { die, Refusal } from "./errors.ts";
 import { onPath, stderr, stdout } from "./io.ts";
 
 const BRANCH = "estate-results";
 const REF = `refs/heads/${BRANCH}`;
+
+// The allow-list: the file's BASENAME is its name, and an unknown name is refused, so the
+// publisher cannot be pointed at an arbitrary path on the branch. Each name carries its own
+// policy; adding a producer is adding a row here.
+interface NamePolicy {
+  /** The one `scope` the document must carry. */
+  scope: string;
+}
+const POLICY: Record<string, NamePolicy> = {
+  "base-images.json": { scope: "public-only" },
+};
 
 // jq's fromdateiso8601 took exactly this shape; anything looser is not a timestamp this
 // pipeline wrote.
@@ -63,8 +75,11 @@ function git(args: string[], env: NodeJS.ProcessEnv, quiet = false): { status: n
 }
 
 function main(argv: string[]): number {
-  if (argv.length !== 1) die("usage: publish.ts <base-images.json>");
+  if (argv.length !== 1) die("usage: publish.ts <base-images.json | architecture-maps.json>");
   const docPath = argv[0] as string;
+  const name = basename(docPath);
+  const policy = Object.hasOwn(POLICY, name) ? POLICY[name] : undefined;
+  if (policy === undefined) die(`${name} is not a publishable name (allowed: ${Object.keys(POLICY).join(", ")})`);
   const token = process.env["PUBLISH_GH_TOKEN"] ?? "";
   const runnerTemp = process.env["RUNNER_TEMP"] ?? "";
   if (token === "") die("PUBLISH_GH_TOKEN is not set");
@@ -85,14 +100,14 @@ function main(argv: string[]): number {
   }
   if (typeof doc !== "object" || doc === null || Array.isArray(doc)) die(`${docPath} is not a JSON object`);
   if (doc.schema !== 1) die(`${docPath} has schema ${JSON.stringify(doc.schema)}, not 1: refusing`);
-  if (doc.scope !== "public-only") {
-    die(`${docPath} has scope ${JSON.stringify(doc.scope)}, not "public-only": refusing to publish an unfiltered document`);
+  if (doc.scope !== policy.scope) {
+    die(`${docPath} has scope ${JSON.stringify(doc.scope)}, not ${JSON.stringify(policy.scope)}: refusing to publish it`);
   }
   const generated = typeof doc.generatedAt === "string" ? doc.generatedAt : "";
   const generatedSec = isoSeconds(generated);
   if (generatedSec === null || generatedSec <= 0) die(`${docPath} has no parseable generatedAt`);
 
-  const work = mkdtempSync(join(runnerTemp, "publish-base-images."));
+  const work = mkdtempSync(join(runnerTemp, "publish."));
   try {
     // git's header value is base64 of "x-access-token:<token>", computed in this process, so
     // the token is in no argv. GitHub masks the raw secret but not its base64.
@@ -108,7 +123,7 @@ function main(argv: string[]): number {
       GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${b64}`,
     };
     // An explicit identity: the runner has none, and a stray global one must not leak in.
-    const identity = ["-c", "user.name=base-images", "-c", "user.email=base-images@users.noreply.github.com", "-c", "commit.gpgsign=false"];
+    const identity = ["-c", "user.name=estate-results", "-c", "user.email=estate-results@users.noreply.github.com", "-c", "commit.gpgsign=false"];
 
     const repo = join(work, "repo");
     if (git(["init", "-q", repo], base).status !== 0) die("could not create the working repository");
@@ -123,7 +138,7 @@ function main(argv: string[]): number {
       if (git(["-C", repo, "fetch", "-q", "--depth=1", "origin", REF], authEnv).status !== 0) die(`could not fetch ${REF}`);
       const prevSha = git(["-C", repo, "rev-parse", "FETCH_HEAD"], base).stdout.trim();
       let prevGen = "";
-      const shown = git(["-C", repo, "show", "FETCH_HEAD:base-images.json"], base, true);
+      const shown = git(["-C", repo, "show", `FETCH_HEAD:${name}`], base, true);
       if (shown.status === 0) {
         try {
           const g = (JSON.parse(shown.stdout) as Doc).generatedAt;
@@ -144,9 +159,9 @@ function main(argv: string[]): number {
 
     // One orphan commit holding only the document (ruling position 7).
     if (git(["-C", repo, "checkout", "-q", "--orphan", "publish"], base).status !== 0) die("could not start the orphan commit");
-    copyFileSync(docPath, join(repo, "base-images.json"));
-    if (git(["-C", repo, "add", "base-images.json"], base).status !== 0) die("could not stage the document");
-    if (git([...identity, "-C", repo, "commit", "-q", "-m", `base-images: ${generated}`], base).status !== 0) die("could not commit the document");
+    copyFileSync(docPath, join(repo, name));
+    if (git(["-C", repo, "add", name], base).status !== 0) die("could not stage the document");
+    if (git([...identity, "-C", repo, "commit", "-q", "-m", `${name.replace(/\.json$/, "")}: ${generated}`], base).status !== 0) die("could not commit the document");
 
     const push = git(["-C", repo, "push", "-q", lease, "origin", `HEAD:${REF}`], authEnv).status;
     if (push !== 0) {

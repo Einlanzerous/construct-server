@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { cleanup, MOCK, PUBLISH, run, tempDir, withMocks, write, type Env, type Result } from "./helpers.ts";
 
@@ -28,10 +29,14 @@ describe("publish", () => {
     return p;
   };
   const branchSha = (remote: string): string => git(remote, "rev-parse", "-q", "--verify", "refs/heads/estate-results");
+  // The publisher reads the document's NAME from its basename, so a fixture `<dir>/x.json` lives
+  // at `<dir>/x/base-images.json`. nm() maps one to the other and leaves a path that already
+  // carries a publishable name alone, so a test body keeps naming its fixtures as before.
+  const nm = (p: string): string => (basename(p) === "base-images.json" ? p : `${dirname(p)}/${basename(p, ".json")}/base-images.json`);
   const mkdoc = (file: string, generatedAt: string, scope = "public-only", schema: unknown = 1): string =>
-    write(file, JSON.stringify({ schema, scope, generatedAt, today: "2026-11-23", mode: "estate", exit: 0, summary: { findings: 0 }, repos: [], images: [] }, null, 2) + "\n");
+    write(nm(file), JSON.stringify({ schema, scope, generatedAt, today: "2026-11-23", mode: "estate", exit: 0, summary: { findings: 0 }, repos: [], images: [] }, null, 2) + "\n");
   const publish = (remote: string, doc: string, env: Env = {}): Result =>
-    run(PUBLISH, [doc], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: remote, PUBLISH_GH_TOKEN: TOKEN, ...env }));
+    run(PUBLISH, [nm(doc)], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: remote, PUBLISH_GH_TOKEN: TOKEN, ...env }));
 
   before(() => {
     T = tempDir("bi-publish");
@@ -51,12 +56,12 @@ describe("publish", () => {
       ["unfiltered", () => mkdoc(`${T}/unfiltered.json`, "2026-11-23T07:00:00Z", "unfiltered")],
       ["schema2", () => mkdoc(`${T}/schema2.json`, "2026-11-23T07:00:00Z", "public-only", 2)],
       ["a schema that is the string \"1\"", () => mkdoc(`${T}/schemastr.json`, "2026-11-23T07:00:00Z", "public-only", "1")],
-      ["garbage", () => write(`${T}/garbage.json`, "not json\n")],
-      ["noscope", () => write(`${T}/noscope.json`, JSON.stringify({ schema: 1, generatedAt: "2026-11-23T07:00:00Z" }))],
-      ["nogen", () => write(`${T}/nogen.json`, JSON.stringify({ schema: 1, scope: "public-only" }))],
+      ["garbage", () => write(nm(`${T}/garbage.json`), "not json\n")],
+      ["noscope", () => write(nm(`${T}/noscope.json`), JSON.stringify({ schema: 1, generatedAt: "2026-11-23T07:00:00Z" }))],
+      ["nogen", () => write(nm(`${T}/nogen.json`), JSON.stringify({ schema: 1, scope: "public-only" }))],
       ["a generatedAt that is not a timestamp", () => mkdoc(`${T}/badgen.json`, "yesterday")],
       ["a generatedAt in another shape", () => mkdoc(`${T}/shapegen.json`, "2026-11-23 07:00:00")],
-      ["a JSON array", () => write(`${T}/array.json`, "[]")],
+      ["a JSON array", () => write(nm(`${T}/array.json`), "[]")],
     ];
     for (const [name, make] of bad) {
       test(`refuses ${name}: exit 2, nothing pushed`, () => {
@@ -70,10 +75,10 @@ describe("publish", () => {
     test("refuses no argument and two arguments: exit 2", () => {
       const env = withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: R, PUBLISH_GH_TOKEN: TOKEN });
       assert.equal(run(PUBLISH, [], env).rc, 2);
-      assert.equal(run(PUBLISH, [`${T}/good.json`, `${T}/good.json`], env).rc, 2);
+      assert.equal(run(PUBLISH, [nm(`${T}/good.json`), nm(`${T}/good.json`)], env).rc, 2);
     });
     test("a missing PUBLISH_GH_TOKEN exits 2, nothing pushed", () => {
-      const r = run(PUBLISH, [`${T}/good.json`], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: R }));
+      const r = run(PUBLISH, [nm(`${T}/good.json`)], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: R }));
       assert.equal(r.rc, 2);
       assert.equal(branchSha(R), "");
     });
@@ -81,6 +86,27 @@ describe("publish", () => {
     test("a missing RUNNER_TEMP exits 2", () => assert.equal(publish(R, `${T}/good.json`, { RUNNER_TEMP: undefined }).rc, 2));
     // An unreachable remote is exit 2, not "branch absent, push away".
     test("an unlistable remote is exit 2, not read as absent", () => assert.equal(publish(`${T}/does-not-exist.git`, `${T}/good.json`).rc, 2));
+  });
+
+  describe("the allow-list", () => {
+    let R: string;
+    before(() => {
+      R = bare(`${T}/allow.git`);
+    });
+    // The basename is the name; nothing else on the branch can be written through this program.
+    for (const bad of ["other.json", "base-images.json.bak", "Base-Images.json", "estate.json", "base-images"]) {
+      test(`refuses the name ${bad}: exit 2, nothing pushed`, () => {
+        const p = write(`${T}/names/${bad}/${bad}`, JSON.stringify({ schema: 1, scope: "public-only", generatedAt: "2026-11-23T07:00:00Z" }));
+        const r = run(PUBLISH, [p], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: R, PUBLISH_GH_TOKEN: TOKEN }));
+        assert.equal(r.rc, 2, r.err);
+        assert.ok(r.err.includes("not a publishable name"), r.err);
+        assert.equal(branchSha(R), "");
+      });
+    }
+    test("the control: the same document under the allowed name publishes", () => {
+      assert.equal(publish(R, mkdoc(`${T}/allowed.json`, "2026-11-23T07:00:00Z")).rc, 0);
+      assert.notEqual(branchSha(R), "");
+    });
   });
 
   describe("first publish, commit shape, ordering", () => {
@@ -100,7 +126,7 @@ describe("publish", () => {
       assert.equal(git(R, "rev-list", "--count", sha), "1");
       assert.equal(git(R, "log", "-1", "--format=%P", "estate-results"), "");
       assert.equal(git(R, "ls-tree", "-r", "--name-only", "estate-results"), "base-images.json");
-      assert.equal(git(R, "show", "estate-results:base-images.json") + "\n", readFileSync(`${T}/good.json`, "utf8"), "the branch file is the document, byte for byte");
+      assert.equal(git(R, "show", "estate-results:base-images.json") + "\n", readFileSync(nm(`${T}/good.json`), "utf8"), "the branch file is the document, byte for byte");
       const argv = readFileSync(log, "utf8");
       assert.ok(argv.length > 0, "no argv was recorded");
       const b64 = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
