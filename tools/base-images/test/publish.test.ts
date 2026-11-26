@@ -416,7 +416,9 @@ describe("publish", () => {
       mkdoc(`${T}/good.json`, "2026-11-23T07:00:00Z");
       const r = publish(R2, `${T}/good.json`, { SHIM_RACE_FROM: W, SHIM_RACE_TO: R2 });
       assert.equal(r.rc, 1, r.err);
-      assert.equal(branchSha(R2), winner);
+      // The racer keeps winning every retry, so its tip is its last commit, not its first.
+      assert.equal(branchSha(R2), git(W, "rev-parse", "HEAD"));
+      assert.notEqual(winner, "");
     });
 
     // The same for an existing branch: the lease expects the sha that was fetched, so a
@@ -434,7 +436,51 @@ describe("publish", () => {
       // with a lease on the sha it fetched, which is no longer the branch tip.
       const r = publish(R4, mkdoc(`${T}/later.json`, "2026-11-23T07:00:00Z"), { SHIM_RACE_FROM: W, SHIM_RACE_TO: R4, SHIM_RACE_FORCE: "1" });
       assert.equal(r.rc, 1, r.err);
-      assert.equal(branchSha(R4), winner);
+      assert.equal(branchSha(R4), git(W, "rev-parse", "HEAD"));
+      assert.notEqual(winner, "");
+    });
+
+    // A lost race is retried from a fresh fetch, three tries in all, then exit 1.
+    test("a lost race is retried and then gives up: three attempts, exit 1, the racer's tip stays", () => {
+      const R10 = bare(`${T}/retry.git`);
+      const W = `${T}/winner3`;
+      spawnSync("git", ["init", "-q", W], { env: { ...process.env, ...GIT_ENV } });
+      mkdoc(`${W}/x.json`, "2026-11-22T07:00:00Z");
+      writeFileSync(`${W}/base-images.json`, readFileSync(nm(`${W}/x.json`)));
+      git(W, "add", "base-images.json");
+      spawnSync("git", ["-C", W, "commit", "-q", "-m", "winner"], { env: { ...process.env, ...GIT_ENV } });
+      const log = `${T}/retry.log`;
+      const r = publish(R10, mkdoc(`${T}/retry.json`, "2026-11-23T07:00:00Z"), { SHIM_RACE_FROM: W, SHIM_RACE_TO: R10, SHIM_LOG: log });
+      assert.equal(r.rc, 1, r.err);
+      const argv = readFileSync(log, "utf8").split("\n");
+      assert.equal(argv.filter((l) => l === "push").length, 3, "three attempts, one push each");
+      assert.equal(branchSha(R10), git(W, "rev-parse", "HEAD"));
+    });
+
+    test("a lost race that the retry wins publishes: the second try sees the winner and goes on", () => {
+      const R11 = bare(`${T}/retry-win.git`);
+      const W = `${T}/winner4`;
+      spawnSync("git", ["init", "-q", W], { env: { ...process.env, ...GIT_ENV } });
+      writeFileSync(`${W}/base-images.json`, readFileSync(mkdoc(`${T}/w4.json`, "2026-11-22T07:00:00Z")));
+      git(W, "add", "base-images.json");
+      spawnSync("git", ["-C", W, "commit", "-q", "-m", "winner"], { env: { ...process.env, ...GIT_ENV } });
+      const r = publish(R11, mkdoc(`${T}/retry-win.json`, "2026-11-23T07:00:00Z"), { SHIM_RACE_FROM: W, SHIM_RACE_TO: R11, SHIM_RACE_ONCE: "1" });
+      assert.equal(r.rc, 0, r.err);
+      assert.ok(r.out.includes("retrying"), r.out);
+      assert.equal(JSON.parse(git(R11, "show", "estate-results:base-images.json")).generatedAt, "2026-11-23T07:00:00Z");
+    });
+
+    test("a lost race whose winner is newer is not overwritten on the retry: stale, exit 0", () => {
+      const R12 = bare(`${T}/retry-stale.git`);
+      const W = `${T}/winner5`;
+      spawnSync("git", ["init", "-q", W], { env: { ...process.env, ...GIT_ENV } });
+      writeFileSync(`${W}/base-images.json`, readFileSync(mkdoc(`${T}/w5.json`, "2026-11-30T07:00:00Z")));
+      git(W, "add", "base-images.json");
+      spawnSync("git", ["-C", W, "commit", "-q", "-m", "winner"], { env: { ...process.env, ...GIT_ENV } });
+      const r = publish(R12, mkdoc(`${T}/retry-stale.json`, "2026-11-23T07:00:00Z"), { SHIM_RACE_FROM: W, SHIM_RACE_TO: R12, SHIM_RACE_ONCE: "1" });
+      assert.equal(r.rc, 0, r.err);
+      assert.ok(r.out.includes("stale, not published"), r.out);
+      assert.equal(branchSha(R12), git(W, "rev-parse", "HEAD"));
     });
 
     test("the push is a force-with-lease, never a bare force, on every publish", () => {

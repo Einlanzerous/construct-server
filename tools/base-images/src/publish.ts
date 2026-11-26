@@ -108,49 +108,26 @@ function carriable(text: string): boolean {
   }
 }
 
-function main(argv: string[]): number {
-  if (argv.length !== 1) die("usage: publish.ts <base-images.json | architecture-maps.json>");
-  const docPath = argv[0] as string;
-  const name = basename(docPath);
-  const policy = Object.hasOwn(POLICY, name) ? POLICY[name] : undefined;
-  if (policy === undefined) die(`${name} is not a publishable name (allowed: ${Object.keys(POLICY).join(", ")})`);
-  const token = process.env["PUBLISH_GH_TOKEN"] ?? "";
-  const runnerTemp = process.env["RUNNER_TEMP"] ?? "";
-  if (token === "") die("PUBLISH_GH_TOKEN is not set");
-  if (runnerTemp === "") die("RUNNER_TEMP is not set");
-  const remote = process.env["PUBLISH_REMOTE"] || "https://github.com/Einlanzerous/construct-server.git";
-  if (!onPath("git")) die("required dependency 'git' not found in PATH");
+// What one attempt needs, decided once by main().
+interface Job {
+  docPath: string;
+  name: string;
+  token: string;
+  runnerTemp: string;
+  remote: string;
+  generated: string;
+  generatedSec: number;
+}
 
-  try {
-    if (!statSync(docPath).isFile()) throw new Error("not a file");
-  } catch {
-    die(`no such file: ${docPath}`);
-  }
-  let doc: Doc;
-  try {
-    doc = JSON.parse(readFileSync(docPath, "utf8")) as Doc;
-  } catch {
-    die(`${docPath} is not parseable JSON`);
-  }
-  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) die(`${docPath} is not a JSON object`);
-  if (doc.schema !== 1) die(`${docPath} has schema ${JSON.stringify(doc.schema)}, not 1: refusing`);
-  if (doc.scope !== policy.scope) {
-    die(`${docPath} has scope ${JSON.stringify(doc.scope)}, not ${JSON.stringify(policy.scope)}: refusing to publish it`);
-  }
-  const generated = typeof doc.generatedAt === "string" ? doc.generatedAt : "";
-  const generatedSec = isoSeconds(generated);
-  if (generatedSec === null || generatedSec <= 0) die(`${docPath} has no parseable generatedAt`);
+const LOST = Symbol("lost");
+// A try is capped: a lease that keeps losing means the branch is being rewritten faster than
+// this job can read it, and that is for a person to look at.
+const ATTEMPTS = 3;
 
-  // The destination lock. The scope check cannot protect a document that is unfiltered by
-  // design, so what protects it is where it goes: only a destination GitHub says is private.
-  // It runs before anything touches the remote.
-  if (policy.privateOnly) {
-    const dest = destinationState(token);
-    if (dest !== "private") {
-      die(`${name} is private data and the destination repo (GITHUB_REPOSITORY) is not confirmed private (${dest}): refusing to publish`);
-    }
-  }
-
+// One try: list, fetch, decide (stale skip, carry-over), build the commit, push. Returns an exit
+// code, or LOST when the lease failed because another publisher moved the branch after the fetch.
+function publishOnce(job: Job): number | typeof LOST {
+  const { docPath, name, token, runnerTemp, remote, generated, generatedSec } = job;
   const work = mkdtempSync(join(runnerTemp, "publish."));
   try {
     // git's header value is base64 of "x-access-token:<token>", computed in this process, so
@@ -241,8 +218,8 @@ function main(argv: string[]): number {
 
     const push = git(["-C", repo, "push", "-q", lease, "origin", `HEAD:${REF}`], authEnv).status;
     if (push !== 0) {
-      stderr(`ERROR: push to ${BRANCH} failed (git exit ${push}); another publisher may have won, re-run to retry\n`);
-      return 1;
+      stderr(`push to ${BRANCH} failed (git exit ${push}): another publisher may have moved the branch\n`);
+      return LOST;
     }
     stdout(`published ${generated} to ${BRANCH}\n`);
     return 0;
@@ -250,6 +227,63 @@ function main(argv: string[]): number {
     rmSync(work, { recursive: true, force: true });
   }
 }
+
+function main(argv: string[]): number {
+  if (argv.length !== 1) die("usage: publish.ts <base-images.json | architecture-maps.json>");
+  const docPath = argv[0] as string;
+  const name = basename(docPath);
+  const policy = Object.hasOwn(POLICY, name) ? POLICY[name] : undefined;
+  if (policy === undefined) die(`${name} is not a publishable name (allowed: ${Object.keys(POLICY).join(", ")})`);
+  const token = process.env["PUBLISH_GH_TOKEN"] ?? "";
+  const runnerTemp = process.env["RUNNER_TEMP"] ?? "";
+  if (token === "") die("PUBLISH_GH_TOKEN is not set");
+  if (runnerTemp === "") die("RUNNER_TEMP is not set");
+  const remote = process.env["PUBLISH_REMOTE"] || "https://github.com/Einlanzerous/construct-server.git";
+  if (!onPath("git")) die("required dependency 'git' not found in PATH");
+
+  try {
+    if (!statSync(docPath).isFile()) throw new Error("not a file");
+  } catch {
+    die(`no such file: ${docPath}`);
+  }
+  let doc: Doc;
+  try {
+    doc = JSON.parse(readFileSync(docPath, "utf8")) as Doc;
+  } catch {
+    die(`${docPath} is not parseable JSON`);
+  }
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) die(`${docPath} is not a JSON object`);
+  if (doc.schema !== 1) die(`${docPath} has schema ${JSON.stringify(doc.schema)}, not 1: refusing`);
+  if (doc.scope !== policy.scope) {
+    die(`${docPath} has scope ${JSON.stringify(doc.scope)}, not ${JSON.stringify(policy.scope)}: refusing to publish it`);
+  }
+  const generated = typeof doc.generatedAt === "string" ? doc.generatedAt : "";
+  const generatedSec = isoSeconds(generated);
+  if (generatedSec === null || generatedSec <= 0) die(`${docPath} has no parseable generatedAt`);
+
+  // The destination lock. The scope check cannot protect a document that is unfiltered by
+  // design, so what protects it is where it goes: only a destination GitHub says is private.
+  // It runs before anything touches the remote.
+  if (policy.privateOnly) {
+    const dest = destinationState(token);
+    if (dest !== "private") {
+      die(`${name} is private data and the destination repo (GITHUB_REPOSITORY) is not confirmed private (${dest}): refusing to publish`);
+    }
+  }
+
+  const job: Job = { docPath, name, token, runnerTemp, remote, generated, generatedSec };
+  // A lost race is retried from the top: a fresh fetch redoes the stale skip and the carry-over
+  // against the branch as the winner left it, so it is never overwritten blindly and never
+  // loses the winner's other file.
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const rc = publishOnce(job);
+    if (rc !== LOST) return rc;
+    if (attempt < ATTEMPTS) stdout(`retrying (attempt ${attempt + 1} of ${ATTEMPTS})\n`);
+  }
+  stderr(`ERROR: push to ${BRANCH} lost the race ${ATTEMPTS} times; re-run to retry\n`);
+  return 1;
+}
+
 
 try {
   process.exit(main(process.argv.slice(2)));
