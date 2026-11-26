@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check workflow-size health-check runner-node-path edge-auth-check edge-auth-test versions assert-tokens assert-env-keys env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size base-images-check base-images-test base-images-typecheck health-check runner-node-path edge-auth-check edge-auth-test versions assert-tokens assert-env-keys env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-assert-env-keys dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
@@ -96,19 +96,29 @@ workflow-size:
 # before pushing a Dockerfile change. Exit 2 (not 0) when endoflife.date is unreachable.
 # Run here, outside CI, it prints every repo in full; in CI the log is public, so private repos
 # are counts only (SERV-350) and this is how the operator gets the detail.
+# The program is TypeScript under tools/base-images/ (SERV-357) and needs Node 24 or later on
+# PATH, nothing installed. It is not under scripts/, so it is not synced to the deploy root:
+# run this from a checkout.
 # Usage: make base-images-check                (the estate, as GitHub has it)
 #        make base-images-check dir=~/projects (every Dockerfile under a tree)
 base-images-check:
-	@if [ -n "$(dir)" ]; then ./scripts/check-base-images.sh --dir "$(dir)"; \
-	else ./scripts/check-base-images.sh --estate docker-compose.yml; fi
+	@if [ -n "$(dir)" ]; then node tools/base-images/src/check.ts --dir "$(dir)"; \
+	else node tools/base-images/src/check.ts --estate docker-compose.yml; fi
 
 # Prove the base-image check still FAILS on an EOL tag, a floating tag and an unmapped
 # image, against a fixture policy. A guard that cannot fail is indistinguishable from a
-# clean estate; base-images.yml runs this before the real sweep for the same reason. It
-# also runs the sweep wrapper's and the publish script's failing tests (SERV-294).
+# clean estate; base-images.yml runs this before the real sweep for the same reason. It runs
+# the program's whole suite: the check's cases, the privacy filter and the redaction, the
+# publisher's refusals and lease, the sweep wrapper's exit handling and the workflow's
+# structure (SERV-294, SERV-350, SERV-357).
 base-images-test:
-	@./scripts/check-base-images.sh --self-test
-	@./scripts/test/test-publish-base-images.sh
+	@node tools/base-images/src/check.ts --self-test
+
+# Type-check the base-image program. It has no runtime dependencies; the checker is the only
+# thing installed, with scripts off. Run by base-images.yml before the tests.
+base-images-typecheck:
+	@npm ci --prefix tools/base-images --ignore-scripts --no-audit --no-fund --loglevel=error
+	@npm run --prefix tools/base-images --silent typecheck
 
 # Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
 # Usage: make drift-check            (check every service)
