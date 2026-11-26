@@ -16,9 +16,19 @@
 // destination.ts: false, a 404, a 5xx or odd output all refuse. For base-images.json the scope check is the second lock on the privacy
 // filter in check.ts: an unfiltered document can never reach the branch by a workflow mistake.
 //
+// CARRY-OVER. The commit holds the other allow-listed files that the fetched tip already holds,
+// byte for byte, so base-images.json and architecture-maps.json (two workflows, one branch) do
+// not erase each other. A carried file that is no longer a valid document (parse, schema 1,
+// generatedAt) is dropped with a notice. A private-only file (architecture-maps.json) needs the
+// destination lookup first, and only then: a branch holding none means no lookup at all.
+//   lookup says private   carried unchanged
+//   lookup says public    dropped with a notice: a private-only file must not stay on a public branch
+//   lookup cannot answer  the whole publish is refused, exit 1, nothing pushed (a failure to
+//                         learn, and a rerun retries; dropping would erase good data on a 5xx)
+//
 // It publishes nothing, and exits 0 with a notice, when the branch already holds a document
-// with a NEWER generatedAt: queued runs can finish out of order, and the older sweep must not
-// overwrite the newer one. (Equal is republished.)
+// of the SAME NAME (the check is per file) with a NEWER generatedAt: queued runs can finish out
+// of order, and the older sweep must not overwrite the newer one. (Equal is republished.)
 //
 // First publish: `ls-remote --exit-code` exits 2 for an absent branch, and the push carries
 // --force-with-lease=refs/heads/estate-results: (expect absence), so a racing first publisher
@@ -35,12 +45,13 @@
 //   PUBLISH_REMOTE     default https://github.com/Einlanzerous/construct-server.git
 //                      (the test points it at a local bare repo)
 //
-// EXIT  0 published, or skipped as stale   1 the push failed or lost a race
-//       2 refused: bad input, missing token, or the remote could not be listed
+// EXIT  0 published, or skipped as stale   1 the push failed or lost a race, or a carry-over
+//       lookup could not answer   2 refused: bad input, missing token, the destination lock, or
+//       the remote could not be listed
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { destinationState } from "./destination.ts";
+import { type DestinationState, destinationState } from "./destination.ts";
 import { die, Refusal } from "./errors.ts";
 import { onPath, stderr, stdout } from "./io.ts";
 
@@ -80,9 +91,21 @@ interface Doc {
   generatedAt?: unknown;
 }
 
-function git(args: string[], env: NodeJS.ProcessEnv, quiet = false): { status: number; stdout: string } {
-  const r = spawnSync("git", args, { env, encoding: "utf8", stdio: ["ignore", "pipe", quiet ? "ignore" : "inherit"] });
-  return { status: r.status ?? 128, stdout: r.stdout ?? "" };
+// `buf` is the raw stdout: a carried file is copied byte for byte, never through a string.
+function git(args: string[], env: NodeJS.ProcessEnv, quiet = false): { status: number; stdout: string; buf: Buffer } {
+  const r = spawnSync("git", args, { env, stdio: ["ignore", "pipe", quiet ? "ignore" : "inherit"], maxBuffer: 256 * 1024 * 1024 });
+  const buf = r.stdout ?? Buffer.alloc(0);
+  return { status: r.status ?? 128, stdout: buf.toString("utf8"), buf };
+}
+
+// A file on the branch is worth carrying only if it is still a document this pipeline wrote.
+function carriable(text: string): boolean {
+  try {
+    const d = JSON.parse(text) as Doc;
+    return typeof d === "object" && d !== null && !Array.isArray(d) && d.schema === 1 && typeof d.generatedAt === "string" && isoSeconds(d.generatedAt) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function main(argv: string[]): number {
@@ -154,6 +177,9 @@ function main(argv: string[]): number {
     if (ls !== 0 && ls !== 2) die(`could not list ${REF} on the remote (git exit ${ls}): not treating that as absent`);
     const present = ls === 0;
 
+    // The other allow-listed files already on the branch, to be committed unchanged beside this
+    // one, so one producer's publish does not erase another's.
+    const carried: { name: string; buf: Buffer }[] = [];
     let lease: string;
     if (present) {
       if (git(["-C", repo, "fetch", "-q", "--depth=1", "origin", REF], authEnv).status !== 0) die(`could not fetch ${REF}`);
@@ -174,6 +200,34 @@ function main(argv: string[]): number {
         return 0;
       }
       lease = `--force-with-lease=${REF}:${prevSha}`;
+
+      // Carry-over. A destination lookup happens here only when the tip holds a valid
+      // private-only file that would be carried: a branch with none (a first publish, the
+      // public branch) makes no lookup and cannot fail on one.
+      let dest: DestinationState | undefined;
+      for (const other of Object.keys(POLICY)) {
+        if (other === name) continue;
+        const held = git(["-C", repo, "show", `FETCH_HEAD:${other}`], base, true);
+        if (held.status !== 0) continue;
+        if (!carriable(held.stdout)) {
+          stdout(`notice: ${other} on the branch is not a valid document (parse, schema 1, generatedAt); not carried\n`);
+          continue;
+        }
+        if (POLICY[other]?.privateOnly) {
+          dest ??= destinationState(token);
+          if (dest === "unknown") {
+            // Dropping it would erase a good file on a transient failure; carrying it would
+            // risk a public branch. So neither: nothing is pushed and a rerun tries again.
+            stderr(`ERROR: ${other} is on the branch and the destination repo (GITHUB_REPOSITORY) could not be confirmed private or public; nothing pushed, re-run to retry\n`);
+            return 1;
+          }
+          if (dest === "public") {
+            stdout(`notice: the destination is public, so ${other} is dropped from the branch rather than carried\n`);
+            continue;
+          }
+        }
+        carried.push({ name: other, buf: held.buf });
+      }
     } else {
       lease = `--force-with-lease=${REF}:`;
     }
@@ -181,7 +235,8 @@ function main(argv: string[]): number {
     // One orphan commit holding only the document (ruling position 7).
     if (git(["-C", repo, "checkout", "-q", "--orphan", "publish"], base).status !== 0) die("could not start the orphan commit");
     copyFileSync(docPath, join(repo, name));
-    if (git(["-C", repo, "add", name], base).status !== 0) die("could not stage the document");
+    for (const c of carried) writeFileSync(join(repo, c.name), c.buf);
+    if (git(["-C", repo, "add", name, ...carried.map((c) => c.name)], base).status !== 0) die("could not stage the document");
     if (git([...identity, "-C", repo, "commit", "-q", "-m", `${name.replace(/\.json$/, "")}: ${generated}`], base).status !== 0) die("could not commit the document");
 
     const push = git(["-C", repo, "push", "-q", lease, "origin", `HEAD:${REF}`], authEnv).status;

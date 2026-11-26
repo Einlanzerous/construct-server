@@ -193,6 +193,153 @@ describe("publish", () => {
     });
   });
 
+  // Two producers share the branch: a publish of one file keeps the other, and decides about a
+  // private-only one with a lookup that happens only when there is one to decide about.
+  describe("carry-over", () => {
+    const DEST = "example-owner/carry-fixture";
+    const answer = (v: string | null): void => {
+      mkdirSync(`${T}/cgh/carry-fixture`, { recursive: true });
+      rmSync(`${T}/cgh/carry-fixture/vis.${TOKEN}`, { force: true });
+      if (v !== null) write(`${T}/cgh/carry-fixture/vis.${TOKEN}`, v);
+    };
+    let n = 0;
+    // Bytes chosen so a string round trip would show: CRLF, a non-ASCII character, no final newline.
+    const MAPS = '{"schema":1,"scope":"estate","generatedAt":"2026-11-22T07:00:00Z",\r\n"note":"caf\u00e9 \u2713","repos":[]}';
+    const mapsBytes = Buffer.from(MAPS, "utf8");
+    // A destination branch that already holds architecture-maps.json (and optionally more).
+    const seeded = (extra: Record<string, string | Buffer> = {}, maps: Buffer | null = mapsBytes): { R: string; log: string; glog: string } => {
+      const k = ++n;
+      const R = bare(`${T}/carry${k}.git`);
+      const W = `${T}/carry-src${k}`;
+      spawnSync("git", ["init", "-q", W], { env: { ...process.env, ...GIT_ENV } });
+      const files: Record<string, string | Buffer> = { ...extra };
+      if (maps !== null) files["architecture-maps.json"] = maps;
+      for (const [f, body] of Object.entries(files)) writeFileSync(`${W}/${f}`, body);
+      git(W, "add", ".");
+      spawnSync("git", ["-C", W, "commit", "-q", "-m", "seed"], { env: { ...process.env, ...GIT_ENV } });
+      git(W, "push", "-q", R, "HEAD:refs/heads/estate-results");
+      return { R, log: `${T}/carry${k}-git.log`, glog: `${T}/carry${k}-gh.log` };
+    };
+    const files = (R: string): string => git(R, "ls-tree", "-r", "--name-only", "estate-results");
+    const pub = (s: { R: string; log: string; glog: string }, file: string, env: Env = {}): Result =>
+      run(PUBLISH, [file], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: s.R, PUBLISH_GH_TOKEN: TOKEN, GITHUB_REPOSITORY: DEST, MOCK_GH_DIR: `${T}/cgh`, MOCK_GH_LOG: s.glog, SHIM_LOG: s.log, ...env }));
+    const bi = (name: string, at = "2026-11-23T07:00:00Z"): string => mkdoc(`${T}/carrydoc-${name}.json`, at);
+
+    // The construct-server case: the branch holds no private-only file, so nothing is asked.
+    test("a base-images.json publish onto a branch with no private-only file makes zero lookups and publishes even when a lookup would fail", () => {
+      answer("503");
+      const s = seeded({ "base-images.json": readFileSync(bi("old", "2026-11-16T07:00:00Z"), "utf8") }, null);
+      const r = pub(s, bi("a"));
+      assert.equal(r.rc, 0, r.err);
+      assert.ok(!existsSync(s.glog), "a destination lookup was made");
+      assert.equal(files(s.R), "base-images.json");
+    });
+    test("a first publish (no branch) makes zero lookups", () => {
+      answer("503");
+      const s = { R: bare(`${T}/carry-first.git`), log: `${T}/cf-git.log`, glog: `${T}/cf-gh.log` };
+      assert.equal(pub(s, bi("b")).rc, 0);
+      assert.ok(!existsSync(s.glog));
+    });
+
+    test("lookup true: architecture-maps.json is carried byte for byte beside the new base-images.json", () => {
+      answer("true");
+      const s = seeded();
+      const r = pub(s, bi("c"));
+      assert.equal(r.rc, 0, r.err);
+      assert.equal(files(s.R), "architecture-maps.json\nbase-images.json");
+      const carried = spawnSync("git", ["-C", s.R, "cat-file", "-p", "estate-results:architecture-maps.json"], { env: { ...process.env, ...GIT_ENV } }).stdout;
+      assert.ok(carried.equals(mapsBytes), "the carried file's bytes changed");
+      assert.equal(git(s.R, "rev-list", "--count", "estate-results"), "1", "still one orphan commit");
+      assert.equal(readFileSync(s.glog, "utf8").trim().split("\n").length, 1, "exactly one lookup");
+    });
+
+    test("lookup false: the private-only file is dropped with a notice, the new file publishes", () => {
+      answer("false");
+      const s = seeded();
+      const r = pub(s, bi("d"));
+      assert.equal(r.rc, 0, r.err);
+      assert.equal(files(s.R), "base-images.json");
+      assert.ok(r.out.includes("architecture-maps.json is dropped"), r.out);
+    });
+
+    // The lookup cannot answer: nothing is pushed and the branch is exactly as it was.
+    const unanswerable: [string, string | null, Env][] = [
+      ["404", "404", {}],
+      ["5xx", "503", {}],
+      ["odd output", "odd", {}],
+      ["a missing GITHUB_REPOSITORY", "true", { GITHUB_REPOSITORY: undefined }],
+    ];
+    for (const [name, vis, env] of unanswerable) {
+      test(`a lookup that is ${name} exits 1, pushes nothing, leaves the branch sha and both files as they were`, () => {
+        answer(vis);
+        const s = seeded({ "base-images.json": readFileSync(bi("e", "2026-11-16T07:00:00Z"), "utf8") });
+        const before = branchSha(s.R);
+        const filesBefore = files(s.R);
+        const r = pub(s, bi(`f-${name.replace(/\W+/g, "")}`), env);
+        assert.equal(r.rc, 1, r.err);
+        assert.equal(branchSha(s.R), before);
+        assert.equal(files(s.R), filesBefore);
+        assert.equal(filesBefore, "architecture-maps.json\nbase-images.json");
+        const kept = spawnSync("git", ["-C", s.R, "cat-file", "-p", "estate-results:architecture-maps.json"], { env: { ...process.env, ...GIT_ENV } }).stdout;
+        assert.ok(kept.equals(mapsBytes));
+        assert.ok(!(r.out + r.err).includes(TOKEN));
+      });
+    }
+
+    test("an invalid carried file is dropped with a notice and does not block, and makes no lookup", () => {
+      answer("503");
+      for (const [i, bad] of [Buffer.from("not json"), Buffer.from('{"schema":2,"scope":"estate","generatedAt":"2026-11-22T07:00:00Z"}'), Buffer.from('{"schema":1,"scope":"estate"}')].entries()) {
+        const s = seeded({}, bad);
+        const r = pub(s, bi(`g${i}`));
+        assert.equal(r.rc, 0, r.err);
+        assert.equal(files(s.R), "base-images.json");
+        assert.ok(r.out.includes("not a valid document"), r.out);
+        assert.ok(!existsSync(s.glog), "an invalid file does not need a lookup");
+      }
+    });
+
+    // Per file: another name's newer generatedAt is not this name's staleness.
+    test("the stale skip is per file: a newer architecture-maps.json does not stop an older base-images.json", () => {
+      answer("true");
+      const s = seeded({ "base-images.json": readFileSync(bi("h-old", "2026-11-10T07:00:00Z"), "utf8") });
+      const r = pub(s, bi("h", "2026-11-12T07:00:00Z"));
+      assert.equal(r.rc, 0, r.err);
+      assert.ok(!r.out.includes("stale"));
+      assert.equal(JSON.parse(git(s.R, "show", "estate-results:base-images.json")).generatedAt, "2026-11-12T07:00:00Z");
+    });
+    test("the stale skip is per file: an older base-images.json is skipped even beside a carried file, branch untouched", () => {
+      answer("true");
+      const s = seeded({ "base-images.json": readFileSync(bi("i-new", "2026-11-30T07:00:00Z"), "utf8") });
+      const before = branchSha(s.R);
+      const r = pub(s, bi("i", "2026-11-12T07:00:00Z"));
+      assert.equal(r.rc, 0, r.err);
+      assert.ok(r.out.includes("stale, not published"));
+      assert.equal(branchSha(s.R), before);
+    });
+
+    test("an architecture-maps.json publish carries base-images.json unchanged and makes no lookup beyond the lock", () => {
+      answer("true");
+      const bytes = readFileSync(bi("j-old", "2026-11-16T07:00:00Z"), "utf8");
+      const s = seeded({ "base-images.json": bytes }, null);
+      const maps = write(`${T}/maps-carry/architecture-maps.json`, JSON.stringify({ schema: 1, scope: "estate", generatedAt: "2026-11-23T07:00:00Z", repos: [] }));
+      const r = pub(s, maps);
+      assert.equal(r.rc, 0, r.err);
+      assert.equal(files(s.R), "architecture-maps.json\nbase-images.json");
+      assert.equal(git(s.R, "show", "estate-results:base-images.json") + "\n", bytes);
+      assert.equal(readFileSync(s.glog, "utf8").trim().split("\n").length, 1, "only the lock's call");
+    });
+
+    test("the sentinel token is in no gh or git argv, log or output across a carrying publish", () => {
+      answer("true");
+      const s = seeded();
+      const r = pub(s, bi("k"));
+      assert.equal(r.rc, 0, r.err);
+      const b64 = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
+      for (const f of [s.log, s.glog]) for (const secret of [TOKEN, b64]) assert.ok(!readFileSync(f, "utf8").includes(secret));
+      assert.ok(!(r.out + r.err).includes(TOKEN));
+    });
+  });
+
   describe("first publish, commit shape, ordering", () => {
     let R: string;
     before(() => {
