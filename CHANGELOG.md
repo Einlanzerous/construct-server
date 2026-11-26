@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.45.0](https://github.com/Einlanzerous/construct-server/compare/v4.44.0...v4.45.0) (2026-11-26)
+
+
+### Features
+
+* **base-images:** --json output and a public-only published result (SERV-294) ([#323](https://github.com/Einlanzerous/construct-server/issues/323)) ([53be4a2](https://github.com/Einlanzerous/construct-server/commit/53be4a26c5e01bb7eaa980f84d400605ff3897f0))
+* **cook_book:** MCP gateway audience and heitan backend (COOK-52) ([#312](https://github.com/Einlanzerous/construct-server/issues/312)) ([a9b277a](https://github.com/Einlanzerous/construct-server/commit/a9b277aef6f29c24618600e27cc5df7988f47086))
+* **deploy:** wire Satlink's Argosy and Lyceum service tokens (SERV-347) ([#317](https://github.com/Einlanzerous/construct-server/issues/317)) ([f6fd026](https://github.com/Einlanzerous/construct-server/commit/f6fd0268924f4cb5e08327e6b442463386f448db))
+* **wiki:** answer /healthz in the section 4 JSON shape (SERV-343) ([#318](https://github.com/Einlanzerous/construct-server/issues/318)) ([edaa1c1](https://github.com/Einlanzerous/construct-server/commit/edaa1c19cdc000bb4d574929022e7869d3549f67))
+
+
+### Bug Fixes
+
+* **base-images:** port the sweep, its wrapper and its publisher to TypeScript (SERV-357) ([#325](https://github.com/Einlanzerous/construct-server/issues/325)) ([db857fe](https://github.com/Einlanzerous/construct-server/commit/db857fe2376ecac0efc91d954d67c5901cef45b4))
+* **base-images:** withhold private repo detail from CI logs and the step summary (SERV-350) ([#324](https://github.com/Einlanzerous/construct-server/issues/324)) ([caaa02c](https://github.com/Einlanzerous/construct-server/commit/caaa02c80e6637bad8379e80bf3eb2e46e97cb3b))
+
 ## [4.44.0](https://github.com/Einlanzerous/construct-server/compare/v4.43.0...v4.44.0) (2026-11-16)
 
 
