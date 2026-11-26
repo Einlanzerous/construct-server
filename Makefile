@@ -1,4 +1,4 @@
-.PHONY: network up down recreate force-recreate drift-check workflow-size base-images-check base-images-test base-images-typecheck health-check runner-node-path edge-auth-check edge-auth-test versions assert-tokens assert-env-keys env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
+.PHONY: network up down recreate force-recreate drift-check workflow-size base-images-check base-images-test base-images-typecheck architecture-maps-typecheck architecture-maps-test health-check runner-node-path edge-auth-check edge-auth-test versions assert-tokens assert-env-keys env-ownership-check promote-dispatch-check chronicle-upstream-check deploy-scope probe-delivery probe-status db-up db-shell db-check db-init deploy-root \
         dev-root dev-network dev-bootstrap dev-up dev-down dev-recreate dev-force-recreate dev-pull dev-ps dev-logs \
         dev-db-init dev-db-shell dev-parity dev-verify-isolation dev-health-check dev-versions dev-assert-tokens dev-assert-env-keys dev-env-ownership-check \
         dev-edge-status dev-edge-on dev-edge-down dev-build-guard dev-edge-auth-check \
@@ -119,6 +119,17 @@ base-images-test:
 base-images-typecheck:
 	@npm ci --prefix tools/base-images --ignore-scripts --no-audit --no-fund --loglevel=error
 	@npm run --prefix tools/base-images --silent typecheck
+
+# Type-check the architecture-map package (SERV-356): same shape as base-images-typecheck, the
+# checker the only thing installed, scripts off. Run by architecture-maps.yml.
+architecture-maps-typecheck:
+	@npm ci --prefix tools/architecture-maps --ignore-scripts --no-audit --no-fund --loglevel=error
+	@npm run --prefix tools/architecture-maps --silent typecheck
+
+# The architecture-map package's tests: the real scripts/architecture-map-check.sh over fixture
+# repos (no network), and the workflow's structure. Needs Node 24 or later, git and jq on PATH.
+architecture-maps-test:
+	@npm run --prefix tools/architecture-maps --silent test
 
 # Detect containers running a stale spec vs docker-compose.yml (SERV-8 guardrail).
 # Usage: make drift-check            (check every service)
