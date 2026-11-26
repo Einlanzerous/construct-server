@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { cleanup, MOCK, PUBLISH, run, tempDir, withMocks, write, type Env, type Result } from "./helpers.ts";
@@ -32,7 +32,7 @@ describe("publish", () => {
   // The publisher reads the document's NAME from its basename, so a fixture `<dir>/x.json` lives
   // at `<dir>/x/base-images.json`. nm() maps one to the other and leaves a path that already
   // carries a publishable name alone, so a test body keeps naming its fixtures as before.
-  const nm = (p: string): string => (basename(p) === "base-images.json" ? p : `${dirname(p)}/${basename(p, ".json")}/base-images.json`);
+  const nm = (p: string): string => (["base-images.json", "architecture-maps.json"].includes(basename(p)) ? p : `${dirname(p)}/${basename(p, ".json")}/base-images.json`);
   const mkdoc = (file: string, generatedAt: string, scope = "public-only", schema: unknown = 1): string =>
     write(nm(file), JSON.stringify({ schema, scope, generatedAt, today: "2026-11-23", mode: "estate", exit: 0, summary: { findings: 0 }, repos: [], images: [] }, null, 2) + "\n");
   const publish = (remote: string, doc: string, env: Env = {}): Result =>
@@ -94,7 +94,7 @@ describe("publish", () => {
       R = bare(`${T}/allow.git`);
     });
     // The basename is the name; nothing else on the branch can be written through this program.
-    for (const bad of ["other.json", "base-images.json.bak", "Base-Images.json", "estate.json", "base-images"]) {
+    for (const bad of ["other.json", "base-images.json.bak", "Base-Images.json", "architecture-maps.json.bak", "estate.json", "base-images"]) {
       test(`refuses the name ${bad}: exit 2, nothing pushed`, () => {
         const p = write(`${T}/names/${bad}/${bad}`, JSON.stringify({ schema: 1, scope: "public-only", generatedAt: "2026-11-23T07:00:00Z" }));
         const r = run(PUBLISH, [p], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: R, PUBLISH_GH_TOKEN: TOKEN }));
@@ -106,6 +106,90 @@ describe("publish", () => {
     test("the control: the same document under the allowed name publishes", () => {
       assert.equal(publish(R, mkdoc(`${T}/allowed.json`, "2026-11-23T07:00:00Z")).rc, 0);
       assert.notEqual(branchSha(R), "");
+    });
+  });
+
+  // architecture-maps.json is private data: it goes only to a destination GitHub says is private.
+  describe("the destination lock (architecture-maps.json)", () => {
+    const DEST = "example-owner/destination-fixture";
+    const answer = (v: string | null): void => {
+      mkdirSync(`${T}/gh/destination-fixture`, { recursive: true });
+      rmSync(`${T}/gh/destination-fixture/vis.${TOKEN}`, { force: true });
+      if (v !== null) write(`${T}/gh/destination-fixture/vis.${TOKEN}`, v);
+    };
+    const mkmaps = (name: string, generatedAt: string, scope = "estate"): string =>
+      write(`${T}/maps/${name}/architecture-maps.json`, JSON.stringify({ schema: 1, scope, generatedAt, summary: { repos: 0 }, repos: [] }, null, 2) + "\n");
+    const publishMaps = (remote: string, doc: string, env: Env = {}): Result =>
+      run(PUBLISH, [doc], withMocks({ ...GIT_ENV, RUNNER_TEMP: runnerTemp, PUBLISH_REMOTE: remote, PUBLISH_GH_TOKEN: TOKEN, GITHUB_REPOSITORY: DEST, MOCK_GH_DIR: `${T}/gh`, ...env }));
+    let R: string;
+    before(() => {
+      R = bare(`${T}/lock.git`);
+    });
+
+    // The control: only `true` publishes, so the cases below can tell a refusal from a bug.
+    test("a destination that is private:true publishes, one commit holding architecture-maps.json", () => {
+      answer("true");
+      const doc = mkmaps("ok", "2026-11-23T07:00:00Z");
+      const r = publishMaps(R, doc);
+      assert.equal(r.rc, 0, r.err);
+      assert.equal(git(R, "ls-tree", "-r", "--name-only", "estate-results"), "architecture-maps.json");
+      assert.equal(git(R, "show", "estate-results:architecture-maps.json") + "\n", readFileSync(doc, "utf8"));
+      assert.equal(git(R, "log", "-1", "--format=%s", "estate-results"), "architecture-maps: 2026-11-23T07:00:00Z");
+    });
+
+    const refused: [string, string | null, Env][] = [
+      ["private:false", "false", {}],
+      ["a 404", "404", {}],
+      ["a 5xx", "503", {}],
+      ["odd output", "odd", {}],
+      ["a destination the token cannot see at all", null, {}],
+      ["a missing GITHUB_REPOSITORY", "true", { GITHUB_REPOSITORY: undefined }],
+      ["a blank GITHUB_REPOSITORY", "true", { GITHUB_REPOSITORY: "" }],
+    ];
+    for (const [name, vis, env] of refused) {
+      test(`refuses ${name}: exit 2, before the remote is touched, nothing pushed`, () => {
+        answer(vis);
+        const R6 = bare(`${T}/lock-${name.replace(/\W+/g, "-")}.git`);
+        const log = `${T}/lock-argv-${name.replace(/\W+/g, "-")}.log`;
+        const r = publishMaps(R6, mkmaps("x", "2026-11-23T07:00:00Z"), { SHIM_LOG: log, ...env });
+        assert.equal(r.rc, 2, r.err);
+        assert.ok(r.err.includes("not confirmed private"), r.err);
+        assert.equal(branchSha(R6), "");
+        assert.ok(!existsSync(log), "git ran before the lock refused");
+      });
+    }
+
+    test("refuses an architecture-maps.json that is not scope estate (public-only, unfiltered): exit 2", () => {
+      answer("true");
+      const R7 = bare(`${T}/lock-scope.git`);
+      assert.equal(publishMaps(R7, mkmaps("pub", "2026-11-23T07:00:00Z", "public-only")).rc, 2);
+      assert.equal(publishMaps(R7, mkmaps("unf", "2026-11-23T07:00:00Z", "unfiltered")).rc, 2);
+      assert.equal(branchSha(R7), "");
+    });
+
+    test("base-images.json still publishes to a destination that is public (its own policy needs no lookup)", () => {
+      answer("false");
+      const R8 = bare(`${T}/lock-public.git`);
+      const log = `${T}/lock-gh.log`;
+      const r = publishMaps(R8, mkdoc(`${T}/pubdoc.json`, "2026-11-23T07:00:00Z"), { MOCK_GH_LOG: log });
+      assert.equal(r.rc, 0, r.err);
+      assert.ok(!existsSync(log), "a destination lookup was made for base-images.json");
+    });
+
+    test("the token is in no gh or git argv and not in the output", () => {
+      answer("true");
+      const R9 = bare(`${T}/lock-argv.git`);
+      const glog = `${T}/sentinel-gh.log`;
+      const log = `${T}/sentinel-git.log`;
+      const r = publishMaps(R9, mkmaps("s", "2026-11-23T07:00:00Z"), { MOCK_GH_LOG: glog, SHIM_LOG: log });
+      assert.equal(r.rc, 0, r.err);
+      const b64 = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
+      for (const f of [glog, log]) {
+        const argv = readFileSync(f, "utf8");
+        assert.ok(argv.length > 0);
+        for (const secret of [TOKEN, b64]) assert.ok(!argv.includes(secret), `${secret.slice(0, 12)}… reached an argv in ${f}`);
+      }
+      assert.ok(!(r.out + r.err).includes(TOKEN) && !(r.out + r.err).includes(b64));
     });
   });
 

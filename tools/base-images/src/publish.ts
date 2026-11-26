@@ -2,7 +2,7 @@
 // publish.ts — publish one estate result document to the `estate-results` branch (SERV-294,
 // generalised by SERV-356).
 //
-//   publish.ts <base-images.json>
+//   publish.ts <base-images.json | architecture-maps.json>
 //
 // The file's basename is its name, and the name must be on the allow-list below; each name has
 // its own policy (the `scope` its document must carry). The branch is a data branch holding the
@@ -11,7 +11,9 @@
 //
 // It REFUSES (exit 2, nothing pushed) a name that is not on the list, a document that does not
 // parse, whose schema is not 1, whose scope is not the one its name requires, or that has no
-// parseable generatedAt. For base-images.json the scope check is the second lock on the privacy
+// parseable generatedAt. architecture-maps.json (scope "estate") is private data and is also
+// refused unless the destination repo, GITHUB_REPOSITORY, is confirmed private by
+// destination.ts: false, a 404, a 5xx or odd output all refuse. For base-images.json the scope check is the second lock on the privacy
 // filter in check.ts: an unfiltered document can never reach the branch by a workflow mistake.
 //
 // It publishes nothing, and exits 0 with a notice, when the branch already holds a document
@@ -27,7 +29,8 @@
 // remote (an http extraheader), never an argv element and never a URL.
 //
 // ENV
-//   PUBLISH_GH_TOKEN   required; the token git authenticates with (the workflow's GITHUB_TOKEN)
+//   PUBLISH_GH_TOKEN   required; the token git authenticates with (the workflow's GITHUB_TOKEN);
+//                      the destination lookup uses it too, through gh's environment
 //   RUNNER_TEMP        required; the clone lives under it
 //   PUBLISH_REMOTE     default https://github.com/Einlanzerous/construct-server.git
 //                      (the test points it at a local bare repo)
@@ -37,6 +40,7 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { destinationState } from "./destination.ts";
 import { die, Refusal } from "./errors.ts";
 import { onPath, stderr, stdout } from "./io.ts";
 
@@ -49,9 +53,16 @@ const REF = `refs/heads/${BRANCH}`;
 interface NamePolicy {
   /** The one `scope` the document must carry. */
   scope: string;
+  /**
+   * The document is private data: it is published only after the destination (the repo this
+   * workflow runs in) is confirmed `private: true`. A public, unreadable or unknown
+   * destination is a refusal, never a push.
+   */
+  privateOnly: boolean;
 }
 const POLICY: Record<string, NamePolicy> = {
-  "base-images.json": { scope: "public-only" },
+  "base-images.json": { scope: "public-only", privateOnly: false },
+  "architecture-maps.json": { scope: "estate", privateOnly: true },
 };
 
 // jq's fromdateiso8601 took exactly this shape; anything looser is not a timestamp this
@@ -106,6 +117,16 @@ function main(argv: string[]): number {
   const generated = typeof doc.generatedAt === "string" ? doc.generatedAt : "";
   const generatedSec = isoSeconds(generated);
   if (generatedSec === null || generatedSec <= 0) die(`${docPath} has no parseable generatedAt`);
+
+  // The destination lock. The scope check cannot protect a document that is unfiltered by
+  // design, so what protects it is where it goes: only a destination GitHub says is private.
+  // It runs before anything touches the remote.
+  if (policy.privateOnly) {
+    const dest = destinationState(token);
+    if (dest !== "private") {
+      die(`${name} is private data and the destination repo (GITHUB_REPOSITORY) is not confirmed private (${dest}): refusing to publish`);
+    }
+  }
 
   const work = mkdtempSync(join(runnerTemp, "publish."));
   try {
