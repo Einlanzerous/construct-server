@@ -5,6 +5,9 @@
 # SHIM_RACE_TO (a remote) set, a `push` first lets a competing publisher create the branch,
 # which is the race the first-publish lease exists for. SHIM_RACE_FORCE=1 makes that competing
 # push a force push, so it can also move a branch that already exists (the later-publish lease).
+# The racer keeps winning: when the branch already sits at the racer's HEAD (it won an earlier
+# push), it first adds a new commit, so every retry loses again. SHIM_RACE_ONCE=1 makes it race on
+# the first push only, so a retry can win.
 self="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 real=""
 IFS=: read -ra dirs <<<"$PATH"
@@ -19,6 +22,14 @@ fi
 if [ -n "${SHIM_RACE_FROM:-}" ] && [ -n "${SHIM_RACE_TO:-}" ]; then
   for a in "$@"; do
     if [ "$a" = push ]; then
+      if [ "${SHIM_RACE_ONCE:-}" = 1 ]; then
+        [ -e "$SHIM_RACE_FROM/.git/shim-raced" ] && break
+        : >"$SHIM_RACE_FROM/.git/shim-raced"
+      fi
+      tip="$("$real" -C "$SHIM_RACE_TO" rev-parse -q --verify refs/heads/estate-results 2>/dev/null)"
+      if [ -n "$tip" ] && [ "$tip" = "$("$real" -C "$SHIM_RACE_FROM" rev-parse HEAD)" ]; then
+        "$real" -C "$SHIM_RACE_FROM" commit -q --allow-empty -m "racer again"
+      fi
       force=()
       [ "${SHIM_RACE_FORCE:-}" = 1 ] && force=(--force)
       "$real" -C "$SHIM_RACE_FROM" push -q "${force[@]}" "$SHIM_RACE_TO" HEAD:refs/heads/estate-results
