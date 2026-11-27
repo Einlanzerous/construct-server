@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# A PATH shim over the real git for sweep.test.ts. It stands in for github.com: a `clone` of
+# https://github.com/<owner>/<repo>.git is served from the fixture repository $MOCK_GIT_REMOTES/<repo>
+# (cloned over file://, so it is a real depth-1 clone), and everything else is the real git.
+# The sweep hands git an allow-listed environment, so the settings below reach this shim through a
+# per-test wrapper that exports them (sweep.test.ts), not through the sweep's own environment.
+#
+#   <repo>.hang       present: the clone never answers (the caller's deadline must kill it)
+#   <repo>.noisy      present: the clone prints a workflow command on stdout and stderr, as a hostile
+#                     remote's message could
+#   <repo>.private    present: the clone fails unless the caller sent the credential
+#   MOCK_GIT_FETCH_AUTH=1   a `fetch` fails unless the caller sent the credential, as a private
+#                           remote would; this is what makes a depth-1 clone's pin unreachable
+#   MOCK_GIT_HANG_FETCH=1   a `fetch` never answers
+#   MOCK_GIT_REAL     the real git, when the test's own wrapper directory is on PATH too
+#   SHIM_LOG          every call is appended: a header with the GITHUB_ACTIONS the caller had and
+#                     whether it sent the credential, then one argument per line, so a test can
+#                     prove a token is in no argv and the child env lacks GITHUB_ACTIONS
+self="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+real="${MOCK_GIT_REAL:-}"
+IFS=: read -ra dirs <<<"$PATH"
+for dir in "${dirs[@]}"; do
+  [ -z "$real" ] || break
+  [ "$(cd -- "$dir" 2>/dev/null && pwd)" = "$self" ] && continue
+  [ -x "$dir/git" ] && { real="$dir/git"; break; }
+done
+[ -n "$real" ] || { echo "mock git: no real git on PATH" >&2; exit 127; }
+auth=no
+[ "${GIT_CONFIG_KEY_1:-}" = "http.https://github.com/.extraheader" ] && [ -n "${GIT_CONFIG_VALUE_1:-}" ] && auth=yes
+if [ -n "${SHIM_LOG:-}" ]; then
+  { printf -- '--- git GITHUB_ACTIONS=%s credential=%s hooks=%s\n' "${GITHUB_ACTIONS-unset}" "$auth" "${GIT_CONFIG_KEY_0-}=${GIT_CONFIG_VALUE_0-}"; printf '%s\n' "$@"; } >>"$SHIM_LOG"
+fi
+sub=""
+for a in "$@"; do
+  case "$a" in -*) ;; *) sub="$a"; break ;; esac
+done
+case "$sub" in
+  clone)
+    args=("$@")
+    n=${#args[@]}
+    url="${args[$((n - 2))]}"; dest="${args[$((n - 1))]}"
+    name="$(basename "$url" .git)"
+    remotes="${MOCK_GIT_REMOTES:?mock git: MOCK_GIT_REMOTES is not set}"
+    [ ! -e "$remotes/$name.hang" ] || exec sleep 30
+    if [ -e "$remotes/$name.noisy" ]; then echo "::error::from the clone"; echo "::error::from the clone" >&2; fi
+    [ -d "$remotes/$name" ] || { echo "fatal: repository not found" >&2; exit 128; }
+    if [ -e "$remotes/$name.private" ] && [ "$auth" = no ]; then echo "fatal: could not read Username" >&2; exit 128; fi
+    exec "$real" clone --quiet --depth 1 "file://$remotes/$name" "$dest";;
+  fetch)
+    [ "${MOCK_GIT_HANG_FETCH:-}" != 1 ] || exec sleep 30
+    if [ "${MOCK_GIT_FETCH_AUTH:-}" = 1 ] && [ "$auth" = no ]; then echo "fatal: could not read Username" >&2; exit 128; fi;;
+esac
+exec "$real" "$@"
