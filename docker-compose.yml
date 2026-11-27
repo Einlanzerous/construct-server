@@ -2788,17 +2788,18 @@ services:
       - SEXTANT_LOG_LEVEL=info
       - SEXTANT_LOG_FORMAT=json
     # THE ONE env_file IN THIS STACK, and a new pattern here (SXT-1 Ruling 5), so
-    # the reasoning is written out. The three figures about one person — the comp
-    # floor, the onsite premium, the manager comp gate — are what sextant scores
-    # against. They are in no repo, no image and NOT in PROD_ENV_FILE: the host
+    # the reasoning is written out. The figures about one person — the comp floor,
+    # the onsite premium, the manager comp gate — and the ratios sextant applies
+    # to them (sextant's `envFigures` list) are what it scores against. They are in no repo, no image and NOT in PROD_ENV_FILE: the host
     # CLI reads this file (`set -a; . ~/.config/sextant/sextant.env; set +a`) and
     # so does this block, which is what makes the profile hash the two compute
     # equal by construction rather than by two vault entries kept in step by hand.
     # Signet manages the file (project `sextant`, a file target on this path),
-    # mode 600, owned by the user the deploy runs as. It carries EXACTLY those
-    # three keys: `environment:` above takes precedence over env_file, so a stray
-    # SEXTANT_SNAPSHOT_AT in it would be silently ignored, and a fourth key is a
-    # defect (deploy.yml checks the key set, names only).
+    # mode 600, owned by the user the deploy runs as. It carries EXACTLY the
+    # envFigures keys: `environment:` above takes precedence over env_file, so a
+    # stray SEXTANT_SNAPSHOT_AT in it would be silently ignored, and any other key
+    # is a defect (deploy.yml checks the key set, names only, and its list moves
+    # with envFigures; SERV-368).
     #
     # The figures have NO default anywhere — not here, not in the image, not in
     # the code: sextant refuses to boot naming the variable (never a value) and
