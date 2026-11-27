@@ -2790,7 +2790,8 @@ services:
     # THE ONE env_file IN THIS STACK, and a new pattern here (SXT-1 Ruling 5), so
     # the reasoning is written out. The figures about one person — the comp floor,
     # the onsite premium, the manager comp gate — and the ratios sextant applies
-    # to them (sextant's `envFigures` list) are what it scores against. They are in no repo, no image and NOT in PROD_ENV_FILE: the host
+    # to them (sextant's `envFigures` list) are what it scores against. They
+    # are in no repo, no image and NOT in PROD_ENV_FILE: the host
     # CLI reads this file (`set -a; . ~/.config/sextant/sextant.env; set +a`) and
     # so does this block, which is what makes the profile hash the two compute
     # equal by construction rather than by two vault entries kept in step by hand.
