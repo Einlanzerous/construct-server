@@ -250,6 +250,9 @@ per file. A lost push race is retried from a fresh fetch, three tries, then exit
 is `PUBLISH_REMOTE`, else `https://github.com/$GITHUB_REPOSITORY.git`, else exit 2: there is no
 hard-coded repository.
 
+The other name, `architecture-maps.json`, is produced by a workflow that runs in a private repo, not this
+one; its layout, states and staleness window are in `docs/estate-results.md`.
+
 The sweep is weekly, so a document up to 7 days old is normal. **Treat a `generatedAt`
 older than 9 days as unreadable.** A 404 on the file (no branch, no file) is `unreadable`,
 not an empty estate. A red sweep means findings; a red publish job means the file is stale.
