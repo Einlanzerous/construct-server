@@ -1,0 +1,121 @@
+name: Architecture Maps
+
+# The estate architecture-map sweep (SERV-356). THIS FILE IS A TEMPLATE: construct-server keeps
+# the source of truth and the private repo that runs it carries a copy (SERV-366), because the
+# programs and their tests live in construct-server and cannot run in the destination. It is not
+# a workflow of construct-server's: it sits under tools/, which GitHub does not read.
+#
+# What it does: clone every first-party repo with a read-only token, run
+# scripts/architecture-map-check.sh over each, and push one document, private repo names and all,
+# to the `estate-results` branch of the repo it runs in. The document is private data, so the
+# sweep refuses to run, and the publisher refuses to push, unless that repo is confirmed private.
+# Layout and the file: docs/estate-results.md.
+#
+# WHY NO pull_request. A pull request's own copy of a workflow runs with the repo's secrets, and
+# the programs' tests run in construct-server. Both jobs are also guarded on refs/heads/main,
+# because anyone who can write to this repo can workflow_dispatch a branch.
+#
+# THE PIN. construct-server is checked out at one full SHA, so the code that holds the read token
+# is the code that was reviewed, and a change to construct-server's main reaches this repo only by
+# a pull request here that bumps the SHA (SERV-356 ruling 0). The estate list is derived from that
+# checkout's docker-compose.yml, so a new service reaches the sweep with the same bump. There is
+# no step that fetches anything from construct-server's main at run time.
+#
+# THE TOKEN. ESTATE_READ_TOKEN (read-only: Contents and Metadata) is in the sweep job's one step
+# and nowhere else; the publish job is handed GITHUB_TOKEN alone. The sweep's own GITHUB_TOKEN is
+# only for the privacy self-check.
+#
+# THE COLOUR. The sweep exits 1 when a repo is unreadable and still sets `published`, so a red run
+# still publishes its document: the plain `needs` default of success() is deliberately not used,
+# and a broken map is data, not a failure. No document, or a refusal, is exit 2 and publishes
+# nothing; the file then goes stale and the reader treats it as unreadable.
+
+on:
+  schedule:
+    # Daily 06:30 UTC. The reader treats a document older than 3 days as unreadable.
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      published: ${{ steps.sweep.outputs.published }}
+    steps:
+      # The programs only. Public, so no token, and nothing is persisted.
+      - uses: actions/checkout@v4
+        with:
+          repository: Einlanzerous/construct-server
+          ref: 49937cf3d235beb040062e2f1579bf02c0bfa99a
+          path: construct-server
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # The program has no runtime dependency, so there is nothing to install. It writes the
+      # document and the clones under $RUNNER_TEMP, forwards none of the clones' output, and
+      # sets `published` whenever a document exists, exit 0 or 1.
+      - name: Sweep every first-party repo
+        id: sweep
+        env:
+          ESTATE_READ_TOKEN: ${{ secrets.ESTATE_READ_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node construct-server/tools/architecture-maps/src/sweep.ts
+
+      # `!cancelled()`, not the default success(), or a sweep that exits 1 would skip this and
+      # the document would go stale in exactly the runs that found something. The artifact
+      # holds private repo names; this repo is private and the artifact lives a day.
+      - name: Upload the document
+        if: ${{ !cancelled() && steps.sweep.outputs.published == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-maps-json
+          path: ${{ runner.temp }}/out/architecture-maps.json
+          retention-days: 1
+          if-no-files-found: error
+
+  # The only job that can write, and only to one branch. A queued run waits for the one before it
+  # rather than cancelling it, and the publisher itself refuses a document older than the branch's.
+  publish:
+    needs: sweep
+    if: ${{ !cancelled() && needs.sweep.outputs.published == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: architecture-maps-publish
+      cancel-in-progress: false
+    steps:
+      # Same pin as the sweep job. The checkout is only for the scripts; the push credential comes
+      # solely from PUBLISH_GH_TOKEN, handed to git through its environment.
+      - uses: actions/checkout@v4
+        with:
+          repository: Einlanzerous/construct-server
+          ref: 49937cf3d235beb040062e2f1579bf02c0bfa99a
+          path: construct-server
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Download the document
+        uses: actions/download-artifact@v4
+        with:
+          name: architecture-maps-json
+          path: ${{ runner.temp }}/in
+
+      - name: Publish to estate-results
+        env:
+          PUBLISH_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node construct-server/tools/base-images/src/publish.ts "$RUNNER_TEMP/in/architecture-maps.json"
