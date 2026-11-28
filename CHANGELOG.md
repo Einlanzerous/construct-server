@@ -1,5 +1,24 @@
 # Changelog
 
+## [4.46.0](https://github.com/Einlanzerous/construct-server/compare/v4.45.0...v4.46.0) (2026-11-28)
+
+
+### Features
+
+* **architecture-maps:** ARCH_MAP_SLUG and ARCH_MAP_RESULT, the package skeleton and its test workflow (SERV-356) ([#326](https://github.com/Einlanzerous/construct-server/issues/326)) ([1fefbbf](https://github.com/Einlanzerous/construct-server/commit/1fefbbf3d200573ab6a60dc1fb187b9ee45d88ab))
+* **architecture-maps:** the drogue workflow template, estate-results docs and test (SERV-365) ([#331](https://github.com/Einlanzerous/construct-server/issues/331)) ([e74c6df](https://github.com/Einlanzerous/construct-server/commit/e74c6df06cab60aa5c76752867c8ada18a290280))
+* **architecture-maps:** the estate sweep behind the private destination lock (SERV-364) ([#330](https://github.com/Einlanzerous/construct-server/issues/330)) ([49937cf](https://github.com/Einlanzerous/construct-server/commit/49937cf3d235beb040062e2f1579bf02c0bfa99a))
+* **asr:** add Eidolon's ASR client token to the env manifest (SERV-372) ([#332](https://github.com/Einlanzerous/construct-server/issues/332)) ([5a193fd](https://github.com/Einlanzerous/construct-server/commit/5a193fd2de71181c915018d54fdf9d96ea1d484a))
+* **base-images:** shared publisher with per-name policy and destination lock (SERV-363) ([#328](https://github.com/Einlanzerous/construct-server/issues/328)) ([f669d28](https://github.com/Einlanzerous/construct-server/commit/f669d28ffa23a25a7da903f19a6f2c5deddb4580))
+* **eidolon:** move speech-to-text to the estate ASR and drop the whisper sidecar (SERV-372) ([#333](https://github.com/Einlanzerous/construct-server/issues/333)) ([8c4de1a](https://github.com/Einlanzerous/construct-server/commit/8c4de1a57a632679e4e29004b9d17fcab7d5206c))
+
+
+### Bug Fixes
+
+* **catenary:** a 2 GiB memory ceiling and GOMEMLIMIT=1600MiB (SERV-375) ([#338](https://github.com/Einlanzerous/construct-server/issues/338)) ([a75bb33](https://github.com/Einlanzerous/construct-server/commit/a75bb3340115988346477787ff7768876ac0b725))
+* **deploy:** the sextant env-file guard follows envFigures, six keys (SERV-368) ([#329](https://github.com/Einlanzerous/construct-server/issues/329)) ([bf67fb3](https://github.com/Einlanzerous/construct-server/commit/bf67fb384fd19973ef2d42b3bf33fc8b6717b094))
+* **eidolon:** set the home time zone for the eidolon service (EIDO-75) ([#335](https://github.com/Einlanzerous/construct-server/issues/335)) ([cdb5674](https://github.com/Einlanzerous/construct-server/commit/cdb5674b4a2e574e718114b39d0f72a1dec8d53a))
+
 ## [4.45.0](https://github.com/Einlanzerous/construct-server/compare/v4.44.0...v4.45.0) (2026-11-26)
 
 
