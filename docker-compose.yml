@@ -2272,7 +2272,13 @@ services:
     # four fetches whose images CANT-385 caps at about 94 MiB each. 2g holds about three
     # maximum-size decodes at once; past that an OOM kill restarts catenary (every client
     # reconnects) rather than pressing on Postgres, Ollama and the ASR service.
+    #
+    # memswap_limit equal to mem_limit means NO swap. Without it Docker allows swap equal
+    # to the limit (genzo and heitan run with mem x2), so catenary would page out to the
+    # host's shared swap past 2g instead of being killed, which is the pressure this
+    # ceiling exists to stop. A paged-out chat server is also a slow one for everyone.
     mem_limit: 2g
+    memswap_limit: 2g
     # /healthz, NEVER /readyz. /healthz takes no dependencies; /readyz pings Postgres,
     # and restarting the container is the wrong remedy for a database blip — worse here
     # than elsewhere, because every restart severs every open WebSocket at once and the
