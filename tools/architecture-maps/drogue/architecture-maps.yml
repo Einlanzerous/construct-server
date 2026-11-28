@@ -12,8 +12,11 @@ name: Architecture Maps
 # Layout and the file: docs/estate-results.md.
 #
 # WHY NO pull_request. A pull request's own copy of a workflow runs with the repo's secrets, and
-# the programs' tests run in construct-server. Both jobs are also guarded on refs/heads/main,
-# because anyone who can write to this repo can workflow_dispatch a branch.
+# the programs' tests run in construct-server. Both jobs are also guarded on refs/heads/main so
+# a dispatch of another branch does nothing. That guard only stops accidents: it lives in this
+# file, so anyone who can push a branch can push a copy without it, and ESTATE_READ_TOKEN is a
+# repo secret every branch's run can read. The boundary is the operator's ruleset on main and
+# who holds write access.
 #
 # THE PIN. construct-server is checked out at one full SHA, so the code that holds the read token
 # is the code that was reviewed, and a change to construct-server's main reaches this repo only by
@@ -29,6 +32,13 @@ name: Architecture Maps
 # still publishes its document: the plain `needs` default of success() is deliberately not used,
 # and a broken map is data, not a failure. No document, or a refusal, is exit 2 and publishes
 # nothing; the file then goes stale and the reader treats it as unreadable.
+#
+# THE RUNNER. Both jobs run on drogue-runner, a repo-level self-hosted runner on the estate host
+# (SERV-371, reversing SERV-356 ruling 6): the account's GitHub-hosted minutes are spent, and the
+# first run here never started. So the read token and the clones of private repos live on that
+# host for the length of a job, under $RUNNER_TEMP, which the runner empties after each job. The
+# sweep hands git an isolated HOME and GIT_CONFIG_GLOBAL=/dev/null, so the host's own git config
+# never applies.
 
 on:
   schedule:
@@ -44,7 +54,7 @@ permissions:
 jobs:
   sweep:
     if: ${{ github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 30
     outputs:
       published: ${{ steps.sweep.outputs.published }}
@@ -53,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: Einlanzerous/construct-server
-          ref: 49937cf3d235beb040062e2f1579bf02c0bfa99a
+          ref: e74c6df06cab60aa5c76752867c8ada18a290280
           path: construct-server
           persist-credentials: false
 
@@ -83,12 +93,13 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # The only job that can write, and only to one branch. A queued run waits for the one before it
-  # rather than cancelling it, and the publisher itself refuses a document older than the branch's.
+  # The only job that can write, and only to one branch. An in-flight publish is never cancelled;
+  # GitHub keeps only the newest pending run in the group, so a superseded one is dropped, and the
+  # publisher itself refuses a document older than the branch's.
   publish:
     needs: sweep
     if: ${{ !cancelled() && needs.sweep.outputs.published == 'true' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
     permissions:
       contents: write
@@ -101,7 +112,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: Einlanzerous/construct-server
-          ref: 49937cf3d235beb040062e2f1579bf02c0bfa99a
+          ref: e74c6df06cab60aa5c76752867c8ada18a290280
           path: construct-server
           persist-credentials: false
 
