@@ -2250,6 +2250,10 @@ services:
       # "no uploads", which Catenary supports.
       - CATENARY_MEDIA_DIR=${CATENARY_MEDIA_URL_KEYS:+/data/media}
       - CATENARY_MEDIA_URL_KEYS=${CATENARY_MEDIA_URL_KEYS}
+      # Go's soft heap limit, set to about 80% of mem_limit below. Go does not derive it
+      # from the cgroup, so without it the GC does not speed up as the ceiling nears and
+      # the kernel kills the process instead. SERV-338 Ruling 2.
+      - GOMEMLIMIT=1600MiB
     volumes:
       - catenary_media:/data/media
     expose:
@@ -2261,6 +2265,14 @@ services:
         condition: service_started
       catenary-media-init:
         condition: service_completed_successfully
+    # The container's ceiling, the house way (mem_limit, as ollama, heitan and genzo; no
+    # service here uses deploy.resources for memory). SERV-338 Ruling 2: one image decode
+    # at the upload bound is about 560 MiB (catenary internal/media/ingest.go, MaxPixels),
+    # member uploads have no concurrency bound of their own, and link previews add up to
+    # four fetches whose images CANT-385 caps at about 94 MiB each. 2g holds about three
+    # maximum-size decodes at once; past that an OOM kill restarts catenary (every client
+    # reconnects) rather than pressing on Postgres, Ollama and the ASR service.
+    mem_limit: 2g
     # /healthz, NEVER /readyz. /healthz takes no dependencies; /readyz pings Postgres,
     # and restarting the container is the wrong remedy for a database blip — worse here
     # than elsewhere, because every restart severs every open WebSocket at once and the
